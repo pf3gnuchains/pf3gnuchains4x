@@ -1,5 +1,9 @@
 #objdump: -dr
 #name: TLS
+# This test is only valid on ELF based ports.
+#not-target: *-*-*coff *-*-pe *-*-wince *-*-*aout* *-*-netbsd *-*-riscix*
+# VxWorks needs a special variant of this file.
+#skip: *-*-vxworks*
 
 # Test generation of TLS relocations
 

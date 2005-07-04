@@ -1,5 +1,9 @@
 #objdump: -sr
 #name: Unwind table generation
+# This test is only valid on ELF based ports.
+#not-target: *-*-*coff *-*-pe *-*-wince *-*-*aout* *-*-netbsd *-*-riscix*
+# VxWorks needs a special variant of this file.
+#skip: *-*-vxworks*
 
 .*:     file format.*
 
