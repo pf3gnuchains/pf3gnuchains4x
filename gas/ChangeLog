@@ -1,3 +1,70 @@
+2008-12-04  Ben Elliston  <bje@au.ibm.com>
+
+	* config/tc-ppc.c (parse_cpu): Remove booke64 support. Update
+	usage strings.
+	(ppc_setup_opcodes): Likewise, remove booke64 support.
+	* doc/c-ppc.texi (PowerPC-Opts): Remove -mbooke32 and -mbooke64.
+	* doc/as.texinfo (Overview): Likewise.
+
+2008-12-04  Nick Clifton  <nickc@redhat.com>
+
+	* doc/as.texinfo (Type): Reword description of STT_IFUNC type.
+
+2008-12-03  Nick Clifton  <nickc@redhat.com>
+
+	* config/obj-elf.c (obj_elf_type): Add support for STT_IFUNC type.
+	* doc/as.texinfo: Document new feature.
+	* NEWS: Mention new feature.
+
+2008-11-29  Kai Tietz  <kai.tietz@onevision.com>
+
+	* config/tc-i386.c (i386_target_format): For coff flavour in TE_PEP
+	use "pe-i386" for 32-bit.
+
+2008-11-28  Jakub Jelinek  <jakub@redhat.com>
+
+	* Makefile.am (ehopt.o): Add struc-symbol.h.
+	* Makefile.in: Regenerated.
+	* ehopt.c: Include struc-symbol.h.
+	(check_eh_frame): For very small O_constant DW_CFA_advance_loc4
+	create correct DW_CFA_advance_loc.  Handle O_subtract only
+	for code alignment factor 1, otherwise handle O_divide or
+	O_right_shift of O_subtract and O_constant.
+	(eh_frame_estimate_size_before_relax): Always divide by ca.
+	(eh_frame_convert_frag): Likewise.
+
+2008-11-28  John David Anglin  <dave.anglin@nrc-cnrc.gc.ca>
+
+	* dw2gencfi.c (output_cfi_insn): Scale DW_CFA_advance_loc1,
+	DW_CFA_advance_loc2 and DW_CFA_advance_loc4 outputs.
+
+2008-11-28  Joshua Kinard  <kumba@gentoo.org>
+
+	* config/tc-mips.c (hilo_interlocks): Handle CPU_R14000, CPU_R16000.
+	(mips_cpu_info_table): Add r14000, r16000.
+	* doc/c-mips.texi: Add entries for 14000, 16000.
+
+2008-11-27  M R Swami Reddy <MR.Swami.Reddy@nsc.com>
+
+	* config/tc-cr16.h (GLOBAL_OFFSET_TABLE_NAME): Defined
+	* config/tc-cr16.c (md_pseudo_table): Add "4byte" directive to
+	md_pseudo_table and accept @c prefix, same as long directive.
+	(cr16_cons_fix_new): Initialize rtype to BFD_RELOC_UNUSED.
+	(tc_gen_reloc): Declare a variable of type bfd_reloc_code_real_type
+	and set it for GOT related relocations.
+	(md_undefined_symbol): Defined
+	(process_label_constant): Added checks for GOT/got and cGOT/cGOT
+	prefixes with constant label and set the appropriate relocation type.
+	* doc/c-cr16.texi (cr16-operand specifiers): Add got/GOT and cgot/cGOT. 
+
+2008-11-26  DJ Delorie  <dj@redhat.com>
+
+	* config/tc-m32c.c (md_pseudo_table): Add support for .loc et al.
+
+2008-11-25  DJ Delorie  <dj@redhat.com>
+
+	* config/tc-m32c.c (md_convert_frag): Fix ADJNZ reloc math.
+
 2008-11-21  Sterling Augustine  <sterling@tensilica.com>
 
 	* config/tc-xtensa.c (check_t1_t2_reads_and_writes): Call

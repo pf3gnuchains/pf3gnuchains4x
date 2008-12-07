@@ -2010,41 +2010,36 @@ _bfd_elf_link_assign_sym_version (struct elf_link_hash_entry *h, void *data)
   if (h->verinfo.vertree == NULL && sinfo->verdefs != NULL)
     {
       struct bfd_elf_version_tree *t;
-      struct bfd_elf_version_tree *local_ver;
+      struct bfd_elf_version_tree *local_ver, *global_ver, *exist_ver;
       struct bfd_elf_version_expr *d;
 
       /* See if can find what version this symbol is in.  If the
 	 symbol is supposed to be local, then don't actually register
 	 it.  */
       local_ver = NULL;
+      global_ver = NULL;
+      exist_ver = NULL;
       for (t = sinfo->verdefs; t != NULL; t = t->next)
 	{
 	  if (t->globals.list != NULL)
 	    {
-	      bfd_boolean matched;
-
-	      matched = FALSE;
 	      d = NULL;
 	      while ((d = (*t->match) (&t->globals, d,
 				       h->root.root.string)) != NULL)
-		if (d->symver)
-		  matched = TRUE;
-		else
-		  {
-		    /* There is a version without definition.  Make
-		       the symbol the default definition for this
-		       version.  */
-		    h->verinfo.vertree = t;
-		    local_ver = NULL;
-		    d->script = 1;
+		{
+		  global_ver = t;
+		  local_ver = NULL;
+		  if (d->symver)
+		    exist_ver = t;
+		  d->script = 1;
+		  /* If the match is a wildcard pattern, keep looking for
+		     a more explicit, perhaps even local, match.  */
+		  if (d->literal)
 		    break;
-		  }
+		}
+
 	      if (d != NULL)
 		break;
-	      else if (matched)
-		/* There is no undefined version for this symbol. Hide the
-		   default one.  */
-		(*bed->elf_backend_hide_symbol) (info, h, TRUE);
 	    }
 
 	  if (t->locals.list != NULL)
@@ -2054,11 +2049,14 @@ _bfd_elf_link_assign_sym_version (struct elf_link_hash_entry *h, void *data)
 				       h->root.root.string)) != NULL)
 		{
 		  local_ver = t;
-		  /* If the match is "*", keep looking for a more
-		     explicit, perhaps even global, match.
-		     XXX: Shouldn't this be !d->wildcard instead?  */
-		  if (d->pattern[0] != '*' || d->pattern[1] != '\0')
-		    break;
+		  /* If the match is a wildcard pattern, keep looking for
+		     a more explicit, perhaps even global, match.  */
+		  if (d->literal)
+		    {
+		      /* An exact match overrides a global wildcard.  */
+		      global_ver = NULL;
+		      break;
+		    }
 		}
 
 	      if (d != NULL)
@@ -2066,14 +2064,22 @@ _bfd_elf_link_assign_sym_version (struct elf_link_hash_entry *h, void *data)
 	    }
 	}
 
-      if (local_ver != NULL)
+      if (global_ver != NULL)
+	{
+	  h->verinfo.vertree = global_ver;
+	  /* If we already have a versioned symbol that matches the
+	     node for this symbol, then we don't want to create a
+	     duplicate from the unversioned symbol.  Instead hide the
+	     unversioned symbol.  */
+	  if (exist_ver == global_ver)
+	    (*bed->elf_backend_hide_symbol) (info, h, TRUE);
+	}
+      else if (local_ver != NULL)
 	{
 	  h->verinfo.vertree = local_ver;
-	  if (h->dynindx != -1
-	      && ! info->export_dynamic)
-	    {
-	      (*bed->elf_backend_hide_symbol) (info, h, TRUE);
-	    }
+	  if (!info->export_dynamic
+	      || exist_ver == local_ver)
+	    (*bed->elf_backend_hide_symbol) (info, h, TRUE);
 	}
     }
 
@@ -2646,6 +2652,13 @@ _bfd_elf_adjust_dynamic_symbol (struct elf_link_hash_entry *h, void *data)
 
   dynobj = elf_hash_table (eif->info)->dynobj;
   bed = get_elf_backend_data (dynobj);
+
+  if (h->type == STT_IFUNC
+      && (bed->elf_osabi == ELFOSABI_LINUX
+	  /* GNU/Linux is still using the default value 0.  */
+	  || bed->elf_osabi == ELFOSABI_NONE))
+    h->needs_plt = 1;
+
   if (! (*bed->elf_backend_adjust_dynamic_symbol) (eif->info, h))
     {
       eif->failed = TRUE;
@@ -5566,14 +5579,14 @@ bfd_elf_size_dynamic_sections (bfd *output_bfd,
       /* Make all global versions with definition.  */
       for (t = verdefs; t != NULL; t = t->next)
 	for (d = t->globals.list; d != NULL; d = d->next)
-	  if (!d->symver && d->symbol)
+	  if (!d->symver && d->literal)
 	    {
 	      const char *verstr, *name;
 	      size_t namelen, verlen, newlen;
 	      char *newname, *p;
 	      struct elf_link_hash_entry *newh;
 
-	      name = d->symbol;
+	      name = d->pattern;
 	      namelen = strlen (name);
 	      verstr = t->name;
 	      verlen = strlen (verstr);
@@ -5631,7 +5644,7 @@ bfd_elf_size_dynamic_sections (bfd *output_bfd,
 	  all_defined = TRUE;
 	  for (t = verdefs; t != NULL; t = t->next)
 	    for (d = t->globals.list; d != NULL; d = d->next)
-	      if (!d->symver && !d->script)
+	      if (d->literal && !d->symver && !d->script)
 		{
 		  (*_bfd_error_handler)
 		    (_("%s: undefined version: %s"),
@@ -12268,4 +12281,197 @@ _bfd_elf_default_got_elt_size (bfd *abfd,
 {
   const struct elf_backend_data *bed = get_elf_backend_data (abfd);
   return bed->s->arch_size / 8;
+}
+
+/* Routines to support the creation of dynamic relocs.  */
+
+/* Return true if NAME is a name of a relocation
+   section associated with section S.  */
+
+static bfd_boolean
+is_reloc_section (bfd_boolean rela, const char * name, asection * s)
+{
+  if (rela)
+    return CONST_STRNEQ (name, ".rela")
+      && strcmp (bfd_get_section_name (NULL, s), name + 5) == 0;
+
+  return CONST_STRNEQ (name, ".rel")
+    && strcmp (bfd_get_section_name (NULL, s), name + 4) == 0;
+}
+
+/* Returns the name of the dynamic reloc section associated with SEC.  */
+
+static const char *
+get_dynamic_reloc_section_name (bfd *       abfd,
+				asection *  sec,
+				bfd_boolean is_rela)
+{
+  const char * name;
+  unsigned int strndx = elf_elfheader (abfd)->e_shstrndx;
+  unsigned int shnam = elf_section_data (sec)->rel_hdr.sh_name;
+
+  name = bfd_elf_string_from_elf_section (abfd, strndx, shnam);
+  if (name == NULL)
+    return NULL;
+
+  if (! is_reloc_section (is_rela, name, sec))
+    {
+      static bfd_boolean complained = FALSE;
+
+      if (! complained)
+	{
+	  (*_bfd_error_handler)
+	    (_("%B: bad relocation section name `%s\'"),  abfd, name);
+	  complained = TRUE;
+	}
+      name = NULL;
+    }
+
+  return name;
+}
+
+/* Returns the dynamic reloc section associated with SEC.
+   If necessary compute the name of the dynamic reloc section based
+   on SEC's name (looked up in ABFD's string table) and the setting
+   of IS_RELA.  */
+
+asection *
+_bfd_elf_get_dynamic_reloc_section (bfd *       abfd,
+				    asection *  sec,
+				    bfd_boolean is_rela)
+{
+  asection * reloc_sec = elf_section_data (sec)->sreloc;
+
+  if (reloc_sec == NULL)
+    {
+      const char * name = get_dynamic_reloc_section_name (abfd, sec, is_rela);
+
+      if (name != NULL)
+	{
+	  reloc_sec = bfd_get_section_by_name (abfd, name);
+
+	  if (reloc_sec != NULL)
+	    elf_section_data (sec)->sreloc = reloc_sec;
+	}
+    }
+
+  return reloc_sec;
+}
+
+/* Returns the dynamic reloc section associated with SEC.  If the
+   section does not exist it is created and attached to the DYNOBJ
+   bfd and stored in the SRELOC field of SEC's elf_section_data
+   structure.
+   
+   ALIGNMENT is the alignment for the newly created section and
+   IS_RELA defines whether the name should be .rela.<SEC's name>
+   or .rel.<SEC's name>.  The section name is looked up in the
+   string table associated with ABFD.  */
+
+asection *
+_bfd_elf_make_dynamic_reloc_section (asection *         sec,
+				     bfd *		dynobj,
+				     unsigned int	alignment,
+				     bfd *              abfd,
+				     bfd_boolean        is_rela)
+{
+  asection * reloc_sec = elf_section_data (sec)->sreloc;
+
+  if (reloc_sec == NULL)
+    {
+      const char * name = get_dynamic_reloc_section_name (abfd, sec, is_rela);
+
+      if (name == NULL)
+	return NULL;
+
+      reloc_sec = bfd_get_section_by_name (dynobj, name);
+
+      if (reloc_sec == NULL)
+	{
+	  flagword flags;
+
+	  flags = (SEC_HAS_CONTENTS | SEC_READONLY | SEC_IN_MEMORY | SEC_LINKER_CREATED);
+	  if ((sec->flags & SEC_ALLOC) != 0)
+	    flags |= SEC_ALLOC | SEC_LOAD;
+
+	  reloc_sec = bfd_make_section_with_flags (dynobj, name, flags);
+	  if (reloc_sec != NULL)
+	    {
+	      if (! bfd_set_section_alignment (dynobj, reloc_sec, alignment))
+		reloc_sec = NULL;
+	    }
+	}
+
+      elf_section_data (sec)->sreloc = reloc_sec;
+    }
+
+  return reloc_sec;
+}
+
+#define IFUNC_INFIX ".ifunc"
+
+/* Returns the name of the ifunc-using-dynamic-reloc section associated with SEC.  */
+
+static const char *
+get_ifunc_reloc_section_name (bfd *       abfd,
+			      asection *  sec)
+{
+  const char *  dot;
+  char *        name;
+  const char *  base_name;
+  unsigned int  strndx = elf_elfheader (abfd)->e_shstrndx;
+  unsigned int  shnam = elf_section_data (sec)->rel_hdr.sh_name;
+
+  base_name = bfd_elf_string_from_elf_section (abfd, strndx, shnam);
+  if (base_name == NULL)
+    return NULL;
+
+  dot = strchr (base_name + 1, '.');
+  name = bfd_alloc (abfd, strlen (base_name) + strlen (IFUNC_INFIX) + 1);
+  sprintf (name, "%.*s%s%s", (int)(dot - base_name), base_name, IFUNC_INFIX, dot);
+
+  return name;
+}
+
+/* Like _bfd_elf_make_dynamic_reloc_section but it creates a
+   section for holding relocs against symbols with the STT_IFUNC
+   type.  The section is attached to the OWNER bfd but it is created
+   with a name based on SEC from ABFD.  */
+
+asection *
+_bfd_elf_make_ifunc_reloc_section (bfd *         abfd,
+				   asection *    sec,
+				   bfd *         owner,
+				   unsigned int  align)
+{
+  asection * reloc_sec = elf_section_data (sec)->indirect_relocs;
+
+  if (reloc_sec == NULL)
+    {
+      const char * name = get_ifunc_reloc_section_name (abfd, sec);
+
+      if (name == NULL)
+	return NULL;
+
+      reloc_sec = bfd_get_section_by_name (owner, name);
+
+      if (reloc_sec == NULL)
+	{
+	  flagword flags;
+
+	  flags = (SEC_HAS_CONTENTS | SEC_READONLY | SEC_IN_MEMORY | SEC_LINKER_CREATED);
+	  if ((sec->flags & SEC_ALLOC) != 0)
+	    flags |= SEC_ALLOC | SEC_LOAD;
+
+	  reloc_sec = bfd_make_section_with_flags (owner, name, flags);
+	  
+	  if (reloc_sec != NULL
+	      && ! bfd_set_section_alignment (owner, reloc_sec, align))
+	    reloc_sec = NULL;
+	}
+
+      elf_section_data (sec)->indirect_relocs = reloc_sec;
+    }
+
+  return reloc_sec;
 }

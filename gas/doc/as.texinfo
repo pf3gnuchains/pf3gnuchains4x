@@ -409,8 +409,7 @@ gcc(1), ld(1), and the Info entries for @file{binutils} and @file{ld}.
 
 @emph{Target PowerPC options:}
    [@b{-mpwrx}|@b{-mpwr2}|@b{-mpwr}|@b{-m601}|@b{-mppc}|@b{-mppc32}|@b{-m603}|@b{-m604}|
-    @b{-m403}|@b{-m405}|@b{-mppc64}|@b{-m620}|@b{-mppc64bridge}|@b{-mbooke}|
-    @b{-mbooke32}|@b{-mbooke64}]
+    @b{-m403}|@b{-m405}|@b{-mppc64}|@b{-m620}|@b{-mppc64bridge}|@b{-mbooke}]
    [@b{-mcom}|@b{-many}|@b{-maltivec}|@b{-mvsx}] [@b{-memb}]
    [@b{-mregnames}|@b{-mno-regnames}]
    [@b{-mrelocatable}|@b{-mrelocatable-lib}]
@@ -6267,7 +6266,7 @@ The syntaxes supported are:
   .type <name> STT_<TYPE_IN_UPPER_CASE>
   .type <name>,#<type>
   .type <name>,@@<type>
-  .type <name>,%>type>
+  .type <name>,%<type>
   .type <name>,"<type>"
 @end smallexample
 
@@ -6289,6 +6288,19 @@ Mark the symbol as being a thead-local data object.
 @item STT_COMMON
 @itemx common
 Mark the symbol as being a common data object.
+
+@item STT_NOTYPE
+@itemx notype
+Does not mark the symbol in any way.  It is supported just for completeness.
+
+@item STT_IFUNC
+@itemx indirect_function
+Mark the symbol as an indirect function.  This has the same semantics as
+STT_FUNC except when the symbol is referenced by a relocation.  In this case
+the symbol's value is not used in the relocation but instead the symbol is
+invoked as a function taking no arguments and the return value is used in the
+relocation.  This also means that processing of the relocation must be delayed
+until run-time.  (This is only supported on some targets).
 @end table
 
 Note: Some targets support extra types in addition to those listed above.
