@@ -1677,19 +1677,80 @@ low_pressure_loop_node_p (ira_loop_tree_node_t node)
   return true;
 }
 
-/* Return TRUE if NODE represents a loop with should be removed from
-   regional allocation.  We remove a loop with low register pressure
-   inside another loop with register pressure.  In this case a
-   separate allocation of the loop hardly helps (for irregular
-   register file architecture it could help by choosing a better hard
-   register in the loop but we prefer faster allocation even in this
-   case).  */
-static bool
-loop_node_to_be_removed_p (ira_loop_tree_node_t node)
+/* Sort loops for marking them for removal.  We put already marked
+   loops first, then less frequent loops next, and then outer loops
+   next.  */
+static int
+loop_compare_func (const void *v1p, const void *v2p)
 {
-  return (node->parent != NULL && low_pressure_loop_node_p (node->parent)
-	  && low_pressure_loop_node_p (node));
+  int diff;
+  ira_loop_tree_node_t l1 = *(const ira_loop_tree_node_t *) v1p;
+  ira_loop_tree_node_t l2 = *(const ira_loop_tree_node_t *) v2p;
+
+  ira_assert (l1->parent != NULL && l2->parent != NULL);
+  if (l1->to_remove_p && ! l2->to_remove_p)
+    return -1;
+  if (! l1->to_remove_p && l2->to_remove_p)
+    return 1;
+  if ((diff = l1->loop->header->frequency - l2->loop->header->frequency) != 0)
+    return diff;
+  if ((diff = (int) loop_depth (l1->loop) - (int) loop_depth (l2->loop)) != 0)
+    return diff;
+  /* Make sorting stable.  */
+  return l1->loop->num - l2->loop->num;
 }
+
+
+/* Mark loops which should be removed from regional allocation.  We
+   remove a loop with low register pressure inside another loop with
+   register pressure.  In this case a separate allocation of the loop
+   hardly helps (for irregular register file architecture it could
+   help by choosing a better hard register in the loop but we prefer
+   faster allocation even in this case).  We also remove cheap loops
+   if there are more than IRA_MAX_LOOPS_NUM of them.  */
+static void
+mark_loops_for_removal (void)
+{
+  int i, n;
+  ira_loop_tree_node_t *sorted_loops;
+  loop_p loop;
+
+  sorted_loops
+    = (ira_loop_tree_node_t *) ira_allocate (sizeof (ira_loop_tree_node_t)
+					     * VEC_length (loop_p,
+							   ira_loops.larray));
+  for (n = i = 0; VEC_iterate (loop_p, ira_loops.larray, i, loop); i++)
+    if (ira_loop_nodes[i].regno_allocno_map != NULL)
+      {
+	if (ira_loop_nodes[i].parent == NULL)
+	  {
+	    /* Don't remove the root.  */
+	    ira_loop_nodes[i].to_remove_p = false;
+	    continue;
+	  }
+	sorted_loops[n++] = &ira_loop_nodes[i];
+	ira_loop_nodes[i].to_remove_p
+	  = (low_pressure_loop_node_p (ira_loop_nodes[i].parent)
+	     && low_pressure_loop_node_p (&ira_loop_nodes[i]));
+      }
+  qsort (sorted_loops, n, sizeof (ira_loop_tree_node_t), loop_compare_func);
+  for (i = 0; n - i + 1 > IRA_MAX_LOOPS_NUM; i++)
+    {
+      sorted_loops[i]->to_remove_p = true;
+      if (internal_flag_ira_verbose > 1 && ira_dump_file != NULL)
+	fprintf
+	  (ira_dump_file,
+	   "  Mark loop %d (header %d, freq %d, depth %d) for removal (%s)\n",
+	   sorted_loops[i]->loop->num, sorted_loops[i]->loop->header->index,
+	   sorted_loops[i]->loop->header->frequency,
+	   loop_depth (sorted_loops[i]->loop),
+	   low_pressure_loop_node_p (sorted_loops[i]->parent)
+	   && low_pressure_loop_node_p (sorted_loops[i])
+	   ? "low pressure" : "cheap loop");
+    }
+  ira_free (sorted_loops);
+}
+
 
 /* Definition of vector of loop tree nodes.  */
 DEF_VEC_P(ira_loop_tree_node_t);
@@ -1710,7 +1771,7 @@ remove_uneccesary_loop_nodes_from_loop_tree (ira_loop_tree_node_t node)
   bool remove_p;
   ira_loop_tree_node_t subnode;
 
-  remove_p = loop_node_to_be_removed_p (node);
+  remove_p = node->to_remove_p;
   if (! remove_p)
     VEC_safe_push (ira_loop_tree_node_t, heap, children_vec, node);
   start = VEC_length (ira_loop_tree_node_t, children_vec);
@@ -1739,100 +1800,172 @@ remove_uneccesary_loop_nodes_from_loop_tree (ira_loop_tree_node_t node)
     }
 }
 
+/* Return TRUE if NODE is inside PARENT.  */
+static bool
+loop_is_inside_p (ira_loop_tree_node_t node, ira_loop_tree_node_t parent)
+{
+  for (node = node->parent; node != NULL; node = node->parent)
+    if (node == parent)
+      return true;
+  return false;
+}
+
+/* Sort allocnos according to their order in regno allocno list.  */
+static int
+regno_allocno_order_compare_func (const void *v1p, const void *v2p)
+{
+  ira_allocno_t a1 = *(const ira_allocno_t *) v1p;
+  ira_allocno_t a2 = *(const ira_allocno_t *) v2p;
+  ira_loop_tree_node_t n1 = ALLOCNO_LOOP_TREE_NODE (a1);
+  ira_loop_tree_node_t n2 = ALLOCNO_LOOP_TREE_NODE (a2);
+
+  if (loop_is_inside_p (n1, n2))
+    return -1;
+  else if (loop_is_inside_p (n2, n1))
+    return 1;
+  /* If allocnos are equally good, sort by allocno numbers, so that
+     the results of qsort leave nothing to chance.  We put allocnos
+     with higher number first in the list because it is the original
+     order for allocnos from loops on the same levels.  */
+  return ALLOCNO_NUM (a2) - ALLOCNO_NUM (a1);
+}
+
+/* This array is used to sort allocnos to restore allocno order in
+   the regno allocno list.  */
+static ira_allocno_t *regno_allocnos;
+
+/* Restore allocno order for REGNO in the regno allocno list.  */
+static void
+ira_rebuild_regno_allocno_list (int regno)
+{
+  int i, n;
+  ira_allocno_t a;
+
+  for (n = 0, a = ira_regno_allocno_map[regno];
+       a != NULL;
+       a = ALLOCNO_NEXT_REGNO_ALLOCNO (a))
+    regno_allocnos[n++] = a;
+  ira_assert (n > 0);
+  qsort (regno_allocnos, n, sizeof (ira_allocno_t), 
+	 regno_allocno_order_compare_func);
+  for (i = 1; i < n; i++)
+    ALLOCNO_NEXT_REGNO_ALLOCNO (regno_allocnos[i - 1]) = regno_allocnos[i];
+  ALLOCNO_NEXT_REGNO_ALLOCNO (regno_allocnos[n - 1]) = NULL;
+  ira_regno_allocno_map[regno] = regno_allocnos[0];
+  if (internal_flag_ira_verbose > 1 && ira_dump_file != NULL)
+    fprintf (ira_dump_file, " Rebuilding regno allocno list for %d\n", regno);
+}
+
 /* Remove allocnos from loops removed from the allocation
    consideration.  */
 static void
 remove_unnecessary_allocnos (void)
 {
   int regno;
-  bool merged_p;
+  bool merged_p, rebuild_p;
   enum reg_class cover_class;
   ira_allocno_t a, prev_a, next_a, parent_a;
   ira_loop_tree_node_t a_node, parent;
   allocno_live_range_t r;
 
   merged_p = false;
+  regno_allocnos = NULL;
   for (regno = max_reg_num () - 1; regno >= FIRST_PSEUDO_REGISTER; regno--)
-    for (prev_a = NULL, a = ira_regno_allocno_map[regno];
-	 a != NULL;
-	 a = next_a)
-      {
-	next_a = ALLOCNO_NEXT_REGNO_ALLOCNO (a);
-	a_node = ALLOCNO_LOOP_TREE_NODE (a);
-	if (! loop_node_to_be_removed_p (a_node))
-	  prev_a = a;
-	else
-	  {
-	    for (parent = a_node->parent;
-		 (parent_a = parent->regno_allocno_map[regno]) == NULL
-		   && loop_node_to_be_removed_p (parent);
-		 parent = parent->parent)
-	      ;
-	    if (parent_a == NULL)
-	      {
+    {
+      rebuild_p = false;
+      for (prev_a = NULL, a = ira_regno_allocno_map[regno];
+	   a != NULL;
+	   a = next_a)
+	{
+	  next_a = ALLOCNO_NEXT_REGNO_ALLOCNO (a);
+	  a_node = ALLOCNO_LOOP_TREE_NODE (a);
+	  if (! a_node->to_remove_p)
+	    prev_a = a;
+	  else
+	    {
+	      for (parent = a_node->parent;
+		   (parent_a = parent->regno_allocno_map[regno]) == NULL
+		     && parent->to_remove_p;
+		   parent = parent->parent)
+		;
+	      if (parent_a == NULL)
+		{
 		/* There are no allocnos with the same regno in upper
 		   region -- just move the allocno to the upper
 		   region.  */
-		prev_a = a;
-		ALLOCNO_LOOP_TREE_NODE (a) = parent;
-		parent->regno_allocno_map[regno] = a;
-		bitmap_set_bit (parent->all_allocnos, ALLOCNO_NUM (a));
-	      }
-	    else
-	      {
-		/* Remove the allocno and update info of allocno in
-		   the upper region.  */
-		if (prev_a == NULL)
-		  ira_regno_allocno_map[regno] = next_a;
-		else
-		  ALLOCNO_NEXT_REGNO_ALLOCNO (prev_a) = next_a;
-		r = ALLOCNO_LIVE_RANGES (a);
-		change_allocno_in_range_list (r, parent_a);
-		ALLOCNO_LIVE_RANGES (parent_a)
-		  = ira_merge_allocno_live_ranges
+		  prev_a = a;
+		  ALLOCNO_LOOP_TREE_NODE (a) = parent;
+		  parent->regno_allocno_map[regno] = a;
+		  bitmap_set_bit (parent->all_allocnos, ALLOCNO_NUM (a));
+		  rebuild_p = true;
+		}
+	      else
+		{
+		  /* Remove the allocno and update info of allocno in
+		     the upper region.  */
+		  if (prev_a == NULL)
+		    ira_regno_allocno_map[regno] = next_a;
+		  else
+		    ALLOCNO_NEXT_REGNO_ALLOCNO (prev_a) = next_a;
+		  r = ALLOCNO_LIVE_RANGES (a);
+		  change_allocno_in_range_list (r, parent_a);
+		  ALLOCNO_LIVE_RANGES (parent_a)
+		    = ira_merge_allocno_live_ranges
 		    (r, ALLOCNO_LIVE_RANGES (parent_a));
-		merged_p = true;
-		ALLOCNO_LIVE_RANGES (a) = NULL;
-		IOR_HARD_REG_SET (ALLOCNO_CONFLICT_HARD_REGS (parent_a),
-				  ALLOCNO_CONFLICT_HARD_REGS (a));
+		  merged_p = true;
+		  ALLOCNO_LIVE_RANGES (a) = NULL;
+		  IOR_HARD_REG_SET (ALLOCNO_CONFLICT_HARD_REGS (parent_a),
+				    ALLOCNO_CONFLICT_HARD_REGS (a));
 #ifdef STACK_REGS
-		if (ALLOCNO_NO_STACK_REG_P (a))
-		  ALLOCNO_NO_STACK_REG_P (parent_a) = true;
+		  if (ALLOCNO_NO_STACK_REG_P (a))
+		    ALLOCNO_NO_STACK_REG_P (parent_a) = true;
 #endif
-		ALLOCNO_NREFS (parent_a) += ALLOCNO_NREFS (a);
-		ALLOCNO_FREQ (parent_a) += ALLOCNO_FREQ (a);
-		ALLOCNO_CALL_FREQ (parent_a) += ALLOCNO_CALL_FREQ (a);
-		IOR_HARD_REG_SET
-		  (ALLOCNO_TOTAL_CONFLICT_HARD_REGS (parent_a),
-		   ALLOCNO_TOTAL_CONFLICT_HARD_REGS (a));
-		ALLOCNO_CALLS_CROSSED_NUM (parent_a)
-		  += ALLOCNO_CALLS_CROSSED_NUM (a);
-		ALLOCNO_EXCESS_PRESSURE_POINTS_NUM (parent_a)
-		  += ALLOCNO_EXCESS_PRESSURE_POINTS_NUM (a);
-		if (! ALLOCNO_BAD_SPILL_P (a))
-		  ALLOCNO_BAD_SPILL_P (parent_a) = false;
+		  ALLOCNO_NREFS (parent_a) += ALLOCNO_NREFS (a);
+		  ALLOCNO_FREQ (parent_a) += ALLOCNO_FREQ (a);
+		  ALLOCNO_CALL_FREQ (parent_a) += ALLOCNO_CALL_FREQ (a);
+		  IOR_HARD_REG_SET
+		    (ALLOCNO_TOTAL_CONFLICT_HARD_REGS (parent_a),
+		     ALLOCNO_TOTAL_CONFLICT_HARD_REGS (a));
+		  ALLOCNO_CALLS_CROSSED_NUM (parent_a)
+		    += ALLOCNO_CALLS_CROSSED_NUM (a);
+		  ALLOCNO_EXCESS_PRESSURE_POINTS_NUM (parent_a)
+		    += ALLOCNO_EXCESS_PRESSURE_POINTS_NUM (a);
+		  if (! ALLOCNO_BAD_SPILL_P (a))
+		    ALLOCNO_BAD_SPILL_P (parent_a) = false;
 #ifdef STACK_REGS
-		if (ALLOCNO_TOTAL_NO_STACK_REG_P (a))
-		  ALLOCNO_TOTAL_NO_STACK_REG_P (parent_a) = true;
+		  if (ALLOCNO_TOTAL_NO_STACK_REG_P (a))
+		    ALLOCNO_TOTAL_NO_STACK_REG_P (parent_a) = true;
 #endif
-		cover_class = ALLOCNO_COVER_CLASS (a);
-		ira_assert (cover_class == ALLOCNO_COVER_CLASS (parent_a));
-		ira_allocate_and_accumulate_costs
-		  (&ALLOCNO_HARD_REG_COSTS (parent_a), cover_class,
-		   ALLOCNO_HARD_REG_COSTS (a));
-		ira_allocate_and_accumulate_costs
-		  (&ALLOCNO_CONFLICT_HARD_REG_COSTS (parent_a),
-		   cover_class,
-		   ALLOCNO_CONFLICT_HARD_REG_COSTS (a));
-		ALLOCNO_COVER_CLASS_COST (parent_a)
-		  += ALLOCNO_COVER_CLASS_COST (a);
-		ALLOCNO_MEMORY_COST (parent_a) += ALLOCNO_MEMORY_COST (a);
-		finish_allocno (a);
-	      }
-	  }
-      }
+		  cover_class = ALLOCNO_COVER_CLASS (a);
+		  ira_assert (cover_class == ALLOCNO_COVER_CLASS (parent_a));
+		  ira_allocate_and_accumulate_costs
+		    (&ALLOCNO_HARD_REG_COSTS (parent_a), cover_class,
+		     ALLOCNO_HARD_REG_COSTS (a));
+		  ira_allocate_and_accumulate_costs
+		    (&ALLOCNO_CONFLICT_HARD_REG_COSTS (parent_a),
+		     cover_class,
+		     ALLOCNO_CONFLICT_HARD_REG_COSTS (a));
+		  ALLOCNO_COVER_CLASS_COST (parent_a)
+		    += ALLOCNO_COVER_CLASS_COST (a);
+		  ALLOCNO_MEMORY_COST (parent_a) += ALLOCNO_MEMORY_COST (a);
+		  finish_allocno (a);
+		}
+	    }
+	}
+      if (rebuild_p)
+	/* We need to restore the order in regno allocno list.  */
+	{
+	  if (regno_allocnos == NULL)
+	    regno_allocnos
+	      = (ira_allocno_t *) ira_allocate (sizeof (ira_allocno_t)
+						* ira_allocnos_num);
+	  ira_rebuild_regno_allocno_list (regno);
+	}
+    }
   if (merged_p)
     ira_rebuild_start_finish_chains ();
+  if (regno_allocnos != NULL)
+    ira_free (regno_allocnos);
 }
 
 /* Remove loops from consideration.  We remove loops for which a
@@ -1843,6 +1976,7 @@ remove_unnecessary_allocnos (void)
 static void
 remove_unnecessary_regions (void)
 {
+  mark_loops_for_removal ();
   children_vec
     = VEC_alloc (ira_loop_tree_node_t, heap,
 		 last_basic_block + VEC_length (loop_p, ira_loops.larray));

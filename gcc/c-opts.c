@@ -1008,9 +1008,6 @@ c_common_post_options (const char **pfilename)
 
   sanitize_cpp_opts ();
 
-  if (!iprefix) {
-    iprefix= getenv("PIZZA_ROOT_PREFIX");
-  }
   register_include_chains (parse_in, sysroot, iprefix, imultilib,
 			   std_inc, std_cxx_inc && c_dialect_cxx (), verbose);
 
