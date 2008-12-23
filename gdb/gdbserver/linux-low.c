@@ -121,6 +121,7 @@ static void stop_all_processes (void);
 static int linux_wait_for_event (struct thread_info *child);
 static int check_removed_breakpoint (struct process_info *event_child);
 static void *add_process (unsigned long pid);
+static int my_waitpid (int pid, int *status, int flags);
 
 struct pending_signals
 {
@@ -161,9 +162,7 @@ handle_extended_wait (struct process_info *event_child, int wstat)
 	  /* The new child has a pending SIGSTOP.  We can't affect it until it
 	     hits the SIGSTOP, but we're already attached.  */
 
-	  do {
-	    ret = waitpid (new_pid, &status, __WALL);
-	  } while (ret == -1 && errno == EINTR);
+	  ret = my_waitpid (new_pid, &status, __WALL);
 
 	  if (ret == -1)
 	    perror_with_name ("waiting for new child");
@@ -643,11 +642,13 @@ retry:
   if (debug_threads
       && WIFSTOPPED (*wstatp))
     {
+      struct thread_info *saved_inferior = current_inferior;
       current_inferior = (struct thread_info *)
 	find_inferior_id (&all_threads, (*childp)->lwpid);
       /* For testing only; i386_stop_pc prints out a diagnostic.  */
       if (the_low_target.get_pc != NULL)
 	get_stop_pc ();
+      current_inferior = saved_inferior;
     }
 }
 

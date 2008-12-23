@@ -87,7 +87,7 @@ _DEFUN(crlf_r, (ptr, fp, buf, count, eof),
        size_t count _AND
        int eof)
 {
-  int newcount = 0, r;
+  int r;
   char *s, *d, *e;
 
   if (count == 0)
@@ -147,6 +147,7 @@ _DEFUN(_fread_r, (ptr, buf, size, count, fp),
   CHECK_INIT(ptr, fp);
 
   _flockfile (fp);
+  ORIENT (fp, -1);
   if (fp->_r < 0)
     fp->_r = 0;
   total = resid;

@@ -1,3 +1,35 @@
+2008-12-12  Ian Lance Taylor  <iant@google.com>
+
+	* target-reloc.h (Default_scan_relocatable_relocs): Only discard
+	r_type == 0 for a local symbol with r_sym == 0.
+	(scan_relocatable_relocs): Pass r_sym to
+	local_non_section_strategy.
+	* reloc.cc (Emit_relocs_strategy::local_non_section_strategy): Add
+	r_sym parameter.
+
+	* configure.ac: Update test for TLS descriptors: they are
+	supported as of glibc 2.9.
+	* configure: Rebuild.
+
+2008-12-11  Ian Lance Taylor  <iant@google.com>
+
+	PR 7091
+	* target-reloc.h (Default_scan_relocatable_relocs): For each
+	function, map r_type == 0 to RELOC_DISCARD.
+
+2008-12-10  Cary Coutant  <ccoutant@google.com>
+
+	* layout.cc (Layout::add_comdat): Allow COMDAT group from a replacement
+	object to override a kept COMDAT group from a plugin object.
+
+2008-12-09  Ian Lance Taylor  <iant@google.com>
+
+	PR 7088
+	* yyscript.y (file_cmd): Handle INPUT.
+
+	* testsuite/initpri1.c: Change all declarations to be full
+	prototypes by adding void, to avoid compiler warnings.
+
 2008-12-05  Rafael Avila de Espindola  <espindola@google.com>
 
 	* options.cc (General_options::parse_plugin_opt): New.

@@ -1,3 +1,166 @@
+2008-12-12  Craig Howland <howland@LGSInnovations.com>
+
+	* libc/include/wchar.h:  Added wcstok() declaration.
+	* libc/string/wcstok.c: New file, implementing wcstok.
+	* libc/string/Makefile.am: Add wcstok support.
+	* libc/string/wcstrings.tex: Ditto.
+	* libc/string/Makefile.in: Regenerated.
+
+2008-12-12  Ralf Corsepius  <ralf.corsepius@rtems.org>
+
+	* libc/stdio/fputws.c: Fix documentation.
+	* libc/stdio/getwchar.c: Ditto.
+	* libc/stdio/putwchar.c: Ditto.
+
+2008-12-12  Ralf Corsepius  <ralf.corsepius@rtems.org>
+
+	* libc/include/sys/features.h: Set RTEMS's _POSIX_MONOTONIC_CLOCK to
+	200112L (SUSv3 compliance).
+	Comment out RTEMS's _POSIX_SHARED_MEMORY_OBJECTS (Unsupported).
+
+2008-12-12  Ralf Corsepius  <ralf.corsepius@rtems.org>
+
+	* libc/sys/rtems/crt0.c: Add stubs for getdents(), nanosleep(), 
+	_execve(), _exit().
+
+2008-12-12  Ralf Corsepius  <ralf.corsepius@rtems.org>
+
+	* configure.host: Let *rtems* default to c99-formats.
+
+2008-12-12  Craig Howland  <howland@LGSInnovations.com>
+
+	* libc/stdio/freopen.c:  Add <string.h> for memset prototype.
+	* libc/stdio/fseek.c:  Ditto.
+	* libc/stdio/fwide.c:  Add <wchar.h> for fwide prototype.
+
+2008-12-11 Jeff Johnston  <jjohnstn@redhat.com>
+
+	* libc/include/sys/time.h (gettimeofday): Change prototype so
+	2nd parameter is void *, matching SUSV2.
+	* libc/syscalls/sysgettod.c (gettimeofday): Ditto.
+
+2008-12-11 Jukka Pietarinen <jukka.pietarinen@mrf.fi>
+
+	* configure.host: Add lm32
+	* libc/include/machine/ieeefp.h: Add __lm32__
+	* libc/include/machine/setjmp.h: Add __lm32__
+	* libc/machine/configure.in: Add lm32
+	* libc/machine/configure: Regenerated.
+	* libc/machine/lm32/aclocal.m4: New file.
+	* libc/machine/lm32/configure.in: Ditto.
+	* libc/machine/lm32/configure: Ditto.
+	* libc/machine/lm32/Makefile.am: Ditto.
+	* libc/machine/lm32/Makefile.in: Ditto.
+	* libc/machine/lm32/setjmp.s: Ditto.
+
+2008-12-11  Craig Howland  <howland@LGSInnovations.com>
+
+	* libc/include/sys/lock.h:  Add void cast to avoid "statement has no
+	effect" warnings from gcc.
+	* libc/include/sys/stdio.h:  Ditto.
+	* libc/include/sys/time.h:  Correct gettimeofday() prototype.
+	* libc/stdlib/__exp10.c:  Add #include "std.h" for function prototype.
+	* libc/stdlib/__ten_mu.c:  Ditto.
+	* libc/stdlib/std.h:  Correct __exp10's ANSI prototype.
+	* libc/stdlib/ldtoa.c:  Change eiisinf definition to ANSI form.  (Are
+	already others in file without _ansi method, so did not bother.)
+	* libc/stdlib/system.c:  Use _ansi forms for function prototypes and
+	definitions.
+	* libc/time/mktime.c:  Ditto.
+	* libc/misc/__dprintf.c:  Ditto.
+	* libc/include/stdio.h:  Add function prototypes for _fgetc_r,
+	_fgetpos_r, _fsetpos_r, _freopen_r, _rewind_r, freopen64, _freopen64_r,
+	_funopen_r, and _fopencookie_r.
+	* libc/include/reent.h:  Add function prototype for _stat64_r, align
+	_execve_r prototype with POSIX definition for execve.
+	* libc/reent/execr.c:  Align function prototype with POSIX definition.
+	* libc/stdio/asniprintf.c:  Add #include "local.h".
+	* libc/stdio/vasniprintf.c:  Ditto.
+	* libc/stdio/fread.c:  Remove unused variable newcount.
+	* libc/stdio/local.h:  Add function prototype for __sccl.
+	* libc/stdio/open_memstream.c:  Remove unused variable flags.
+	* libc/stdio/vfscanf.c:  Proper prototyping for ccfn, remove prototype
+	for __sccl since now in local.h.
+	* libc/string/memcpy.c:  Add #include <string.h> (for real and for
+	traditional synopsis), remove extraneous stddef.h and limits.h.
+	* libc/syscalls/sysclose.c:  Add #include <unistd.h>.
+	* libc/syscalls/sysfork.c:  Ditto.
+	* libc/syscalls/sysgetpid.c:  Ditto.
+	* libc/syscalls/sysexecve.c:  Add #include <unistd.h>, align function
+	prototype with POSIX definition.
+	* libc/syscalls/sysfstat.c:  Add #include <sys/stat.h>.
+	* libc/syscalls/sysgettod.c:  Correct sys/times.h to sys/time.h.
+	* libc/syscalls/syskill.c:  Add #include <signal.h>.
+	* libc/syscalls/syslink.c:  Add #include <unistd.h>, fix prototype.
+	* libc/syscalls/sysunlink.c:  Ditto.
+	* libc/syscalls/sysstat.c:  Add #include <sys/stat.h>, fix prototype.
+	* libc/syscalls/syswait.c:  Add #include <sys/wait.h>, fix prototype.
+
+2008-12-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	Implement basic wide char stdio functionality, based on FreeBSD.
+	* libc/include/stdio.h (__SORD): Define.
+	(__SWID): Define.
+	* libc/include/wchar.h: Add declarations for new wide char functions.
+	(getwc): Define as macro.
+	(getwchar): Ditto.
+	(putwc): Ditto.
+	(putwchar): Ditto.
+	* libc/include/sys/reent.h (struct __sFILE): Add _mbstate member.
+	(struct __sFILE64): Ditto.
+	* libc/stdio/Makefile.am (ELIX_4_SOURCES): Add fgetwc.c, fgetws.c,
+	fputwc.c, fputws.c, fwide.c, getwc.c, getwchar.c, putwc.c, putwchar.c
+	and ungetwc.c.
+	(CHEWOUT_FILES): Add fgetwc.def, fgetws.def, fputwc.def, fputws.def,
+	fwide.def, getwc.def, getwchar.def, putwc.def, putwchar.def and
+	ungetwc.def.
+	Add header dependency rules for the new files.
+	* libc/stdio/Makefile.in: Regenerate.
+	* libc/stdio/fgetwc.c: New file, implementing fgetwc and _fgetwc_r.
+	* libc/stdio/fgetws.c: New file, implementing fgetws and _fgetws_r.
+	* libc/stdio/findfp.c (std): Initialize FILE's _mbstate member.
+	(__sfmoreglue): Ditto.
+	* libc/stdio/fputs.c (_fputs_r): Set stream orientation.
+	* libc/stdio/fputwc.c: New file, implementing fputwc and _fputwc_r.
+	* libc/stdio/fputws.c: New file, implementing fputws and _fputws_r.
+	* libc/stdio/fread.c (_fread_r): Set stream orientation.
+	* libc/stdio/freopen.c (_freopen_r): Reset stream orientation.  Reset
+	_mbstate.
+	* libc/stdio/fseek.c (_fseek_r): Reset _mbstate.
+	* libc/stdio/fwide.c: New file, implementing fwide and _fwide_r.
+	* libc/stdio/fwrite.c (_fwrite_r): Set stream orientation.
+	* libc/stdio/getwc.c: New file, implementing getwc and _getwc_r.
+	* libc/stdio/getwchar.c: New file, implementing getwchar and
+	_getwchar_r.
+	* libc/stdio/local.h (ORIENT): New macro.
+	* libc/stdio/puts.c (_puts_r): Set stream orientation.
+	* libc/stdio/putwc.c: New file, implementing putwc and _putwc_r.
+	* libc/stdio/putwchar.c: New file, implementing putwchar and
+	_putwchar_r.
+	* libc/stdio/refill.c (__srefill_r): Set stream orientation.
+	* libc/stdio/stdio.tex: Add documentation for new functions.
+	* libc/stdio/ungetc.c (_ungetc_r): Set stream orientation.
+	* libc/stdio/ungetwc.c: New file, implementing ungetwc and _ungetwc_r.
+	* libc/stdio/vfscanf.c (__SVFSCANF_R): Set stream orientation.
+	* libc/stdio/wbuf.c (__swbuf_r): Ditto.
+
+2008-12-10  Joseph Myers  <joseph@codesourcery.com>
+
+	* libc/include/stdint.h (INT32_MIN, INT32_MAX, UINT32_MAX,
+	INT_LEAST32_MIN, INT_LEAST32_MAX, UINT_LEAST32_MAX): Define to
+	constants with "long" types where appropriate.
+	(INT_FAST8_MIN, INT_FAST8_MAX, UINT_FAST8_MAX, INT_FAST16_MIN,
+	INT_FAST16_MAX, UINT_FAST16_MAX, INT_FAST32_MIN, INT_FAST32_MAX,
+	UINT_FAST32_MAX, INT_FAST64_MIN, INT_FAST64_MAX, UINT_FAST64_MAX):
+	Correct to match logic for defining corresponding types.
+	(INTMAX_MAX, INTMAX_MIN, UINTMAX_MAX): Define.
+	(SIZE_MAX): Define using __SIZE_MAX__ if available.
+	(PTRDIFF_MAX): Define using __PTRDIFF_MAX__ if available.
+	(PTRDIFF_MIN): Define in terms of PTRDIFF_MAX.
+	(WCHAR_MAX, WCHAR_MIN, WINT_MAX, WINT_MIN): Define.
+	(UINT8_C, UINT16_C): Define to give signed values if corresponding
+	types would promote to int.
+
 2008-12-04  Corinna Vinschen  <corinna@vinschen.de>
 
 	* libc/include/sys/features.h (_POSIX_V6_ILP32_OFF32): Always define.

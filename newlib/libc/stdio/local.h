@@ -33,6 +33,7 @@
 #endif
 
 
+extern u_char *_EXFUN(__sccl, (char *, u_char *fmt));
 extern int    _EXFUN(__svfscanf_r,(struct _reent *,FILE *, _CONST char *,va_list));
 extern int    _EXFUN(__ssvfscanf_r,(struct _reent *,FILE *, _CONST char *,va_list));
 extern int    _EXFUN(__svfiscanf_r,(struct _reent *,FILE *, _CONST char *,va_list));
@@ -122,6 +123,24 @@ extern _READ_WRITE_RETURN_TYPE _EXFUN(__swrite64,(struct _reent *, void *,
 #define	HASLB(fp) ((fp)->_lb._base != NULL)
 #define	FREELB(ptr, fp) { _free_r(ptr,(char *)(fp)->_lb._base); \
       (fp)->_lb._base = NULL; }
+
+/*
+ * Set the orientation for a stream. If o > 0, the stream has wide-
+ * orientation. If o < 0, the stream has byte-orientation.
+ */
+#define ORIENT(fp,ori)					\
+  do								\
+    {								\
+      if (!((fp)->_flags & __SORD))	\
+	{							\
+	  (fp)->_flags |= __SORD;				\
+	  if (ori > 0)						\
+	    (fp)->_flags2 |= __SWID;				\
+	  else							\
+	    (fp)->_flags2 &= ~__SWID;				\
+	}							\
+    }								\
+  while (0)
 
 /* WARNING: _dcvt is defined in the stdlib directory, not here!  */
 
