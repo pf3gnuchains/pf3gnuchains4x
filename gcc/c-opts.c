@@ -19,6 +19,10 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
+/*
+ * This code was added PIZZA_ROOT_PREFIX hack
+ * by Masaki Muranka (monaka@monami-software.com)
+ */
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
@@ -1007,6 +1011,10 @@ c_common_post_options (const char **pfilename)
   handle_deferred_opts ();
 
   sanitize_cpp_opts ();
+
+  if (!iprefix) { 
+    iprefix = getenv("PIZZA_ROOT_PREFIX");
+  }
 
   register_include_chains (parse_in, sysroot, iprefix, imultilib,
 			   std_inc, std_cxx_inc && c_dialect_cxx (), verbose);
