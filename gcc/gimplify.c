@@ -3582,8 +3582,13 @@ gimplify_init_constructor (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p,
 	   be dropped to memory, and then memcpy'd out.  Don't do this
 	   for sparse arrays, though, as it's more efficient to follow
 	   the standard CONSTRUCTOR behavior of memset followed by
-	   individual element initialization.  */
-	if (valid_const_initializer && !cleared)
+	   individual element initialization.  Also don't do this for small
+	   all-zero initializers (which aren't big enough to merit
+	   clearing), and don't try to make bitwise copies of
+	   TREE_ADDRESSABLE types.  */
+	if (valid_const_initializer
+	    && !(cleared || num_nonzero_elements == 0)
+	    && !TREE_ADDRESSABLE (type))
 	  {
 	    HOST_WIDE_INT size = int_size_in_bytes (type);
 	    unsigned int align;
@@ -3605,7 +3610,9 @@ gimplify_init_constructor (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p,
 	    else
 	      align = TYPE_ALIGN (type);
 
-	    if (size > 0 && !can_move_by_pieces (size, align))
+	    if (size > 0
+		&& num_nonzero_elements > 1
+		&& !can_move_by_pieces (size, align))
 	      {
 		tree new_tree;
 

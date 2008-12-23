@@ -2557,11 +2557,11 @@ extract_range_from_binary_expr (value_range_t *vr,
 	  ior_max.high = vr0_max.high | vr1_max.high;
 	  if (ior_max.high != 0)
 	    {
-	      ior_max.low = ~0u;
+	      ior_max.low = ~(unsigned HOST_WIDE_INT)0u;
 	      ior_max.high |= ((HOST_WIDE_INT) 1
 			       << floor_log2 (ior_max.high)) - 1;
 	    }
-	  else
+	  else if (ior_max.low != 0)
 	    ior_max.low |= ((unsigned HOST_WIDE_INT) 1u
 			    << floor_log2 (ior_max.low)) - 1;
 
@@ -6511,6 +6511,12 @@ simplify_truth_ops_using_ranges (gimple_stmt_iterator *gsi, gimple stmt)
   need_conversion =
     !useless_type_conversion_p (TREE_TYPE (gimple_assign_lhs (stmt)),
 			        TREE_TYPE (op0));
+
+  /* Make sure to not sign-extend -1 as a boolean value.  */
+  if (need_conversion
+      && !TYPE_UNSIGNED (TREE_TYPE (op0))
+      && TYPE_PRECISION (TREE_TYPE (op0)) == 1)
+    return false;
 
   switch (rhs_code)
     {

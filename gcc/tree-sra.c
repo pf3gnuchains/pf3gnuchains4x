@@ -2354,14 +2354,17 @@ sra_build_bf_assignment (tree dst, tree src)
       tmp = var;
       if (!is_gimple_variable (tmp))
 	tmp = unshare_expr (var);
+      else
+	TREE_NO_WARNING (var) = true;
 
       tmp2 = make_rename_temp (utype, "SR");
 
       if (INTEGRAL_TYPE_P (TREE_TYPE (var)))
-	stmt = gimple_build_assign (tmp2, fold_convert (utype, tmp));
+	tmp = fold_convert (utype, tmp);
       else
-	stmt = gimple_build_assign (tmp2, fold_build1 (VIEW_CONVERT_EXPR,
-						       utype, tmp));
+	tmp = fold_build1 (VIEW_CONVERT_EXPR, utype, tmp);
+
+      stmt = gimple_build_assign (tmp2, tmp);
       gimple_seq_add_stmt (&seq, stmt);
     }
   else
@@ -3223,12 +3226,20 @@ scalarize_use (struct sra_elt *elt, tree *expr_p, gimple_stmt_iterator *gsi,
       if (!elt->use_block_copy)
 	{
 	  tree type = TREE_TYPE (bfexpr);
-	  tree var, vpos;
+	  tree var = make_rename_temp (type, "SR"), tmp, vpos;
+	  gimple st = NULL;
+
+	  gimple_assign_set_rhs1 (stmt, var);
+	  update = true;
 
 	  if (!TYPE_UNSIGNED (type))
-	    type = unsigned_type_for (type);
-
-	  var = make_rename_temp (type, "SR");
+	    {
+	      type = unsigned_type_for (type);
+	      tmp = make_rename_temp (type, "SR");
+	      st = gimple_build_assign (var,
+					fold_convert (TREE_TYPE (var), tmp));
+	      var = tmp;
+	    }
 
 	  gimple_seq_add_stmt (&seq,
                                gimple_build_assign
@@ -3245,8 +3256,8 @@ scalarize_use (struct sra_elt *elt, tree *expr_p, gimple_stmt_iterator *gsi,
 	  sra_explode_bitfield_assignment
 	    (var, vpos, true, &seq, blen, bpos, elt);
 
-	  gimple_assign_set_rhs1 (stmt, var);
-	  update = true;
+	  if (st)
+	    gimple_seq_add_stmt (&seq, st);
 	}
       else
 	sra_sync_for_bitfield_assignment
