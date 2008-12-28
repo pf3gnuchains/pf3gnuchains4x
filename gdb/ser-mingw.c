@@ -492,6 +492,8 @@ stop_select_thread (struct ser_console_state *state)
   state->thread_state = STS_STOPPED;
 }
 
+static DWORD WINAPI console_select_thread (void *arg) ATTR_NORETURN;
+
 static DWORD WINAPI
 console_select_thread (void *arg)
 {
@@ -593,6 +595,8 @@ fd_is_file (int fd)
     return 0;
 }
 
+static DWORD WINAPI pipe_select_thread (void *arg) ATTR_NORETURN;
+
 static DWORD WINAPI
 pipe_select_thread (void *arg)
 {
@@ -634,6 +638,8 @@ pipe_select_thread (void *arg)
       SetEvent (state->have_stopped);
     }
 }
+
+static DWORD WINAPI file_select_thread (void *arg) ATTR_NORETURN;
 
 static DWORD WINAPI
 file_select_thread (void *arg)
@@ -993,6 +999,8 @@ struct net_windows_state
   
   HANDLE sock_event;
 };
+
+static DWORD WINAPI net_windows_select_thread (void *arg) ATTR_NORETURN;
 
 static DWORD WINAPI
 net_windows_select_thread (void *arg)

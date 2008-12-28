@@ -1,3 +1,18 @@
+2008-12-27  Jakub Jelinek  <jakub@redhat.com>
+
+	PR middle-end/38633
+	* gcc.dg/gomp/pr38633.c: New test.
+	* g++.dg/gomp/pr38633.C: New test.
+
+	PR c++/38639
+	* g++.dg/gomp/pr38639.C: New test.
+
+2008-12-23  Andrew Pinski  <pinskia@gmail.com>
+
+	PR middle-end/38590
+	* gcc.c-torture/compile/pr38590-1.c: New testcase.
+	* gcc.c-torture/compile/pr38590-2.c: New testcase.
+
 2008-12-18  Jakub Jelinek  <jakub@redhat.com>
 
 	PR middle-end/31150
@@ -7176,7 +7191,7 @@
 2008-06-19  Andy Hutchinson  <hutchinsonandy@aim.com>
 
 	* lib/target-supports.exp 
-	(check_effective_target_keeps_null_pointer_checks) : New function.
+	(check_effective_target_keeps_null_pointer_checks): New function.
 	* gcc.dg/tree-ssa/20030730-1.c: Use keeps_null_pointer_checks to 
 	determine correct test response.
 	* gcc.dg/tree-ssa/20030730-2.c: Ditto.

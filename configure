@@ -2242,6 +2242,9 @@ case "${target}" in
 	;;
     esac
     ;;
+#  m32c-*-*)
+#    skipdirs="target-libiberty"
+#    ;;
   *-*-kaos*)
     # Remove unsupported stuff on all kaOS configurations.
     skipdirs="target-libiberty ${libgcj} target-libstdc++-v3 target-librx"
