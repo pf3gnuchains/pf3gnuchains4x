@@ -5953,6 +5953,7 @@ cp_parser_token_starts_cast_expression (cp_token *token)
     case CPP_XOR:
     case CPP_OR:
     case CPP_OR_OR:
+    case CPP_EOF:
       return false;
 
       /* '[' may start a primary-expression in obj-c++.  */
@@ -21159,7 +21160,7 @@ cp_parser_omp_for_loop (cp_parser *parser, tree clauses, tree *par_clauses)
 						    &is_direct_init,
 						    &is_non_constant_init);
 
-		      if (auto_node && !type_dependent_expression_p (init))
+		      if (auto_node && describable_type (init))
 			{
 			  TREE_TYPE (decl)
 			    = do_auto_deduction (TREE_TYPE (decl), init,
