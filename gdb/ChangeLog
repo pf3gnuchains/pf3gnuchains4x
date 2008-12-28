@@ -1,3 +1,94 @@
+2008-12-22  Tom Tromey  <tromey@redhat.com>
+
+	* stack.c (print_block_frame_locals): Print spaces, not tabs.
+	Update for call to print_variable_and_value.
+	(print_frame_arg_vars): Update.
+	* value.h (print_variable_and_value): Rename from
+	print_variable_value.  Add 'name' and 'indent' parameters.
+	* printcmd.c (print_variable_and_value): Rename from
+	print_variable_value.  Add 'name' and 'indent' parameters.  Use
+	common_val_print.
+	* f-valprint.c (info_common_command): Update.
+
+2008-12-22  Tom Tromey  <tromey@redhat.com>
+
+	* python/python-value.c (valpy_length): Remove #if.
+
+2008-12-22  Paul Pluzhnikov  <ppluzhnikov@google.com>
+
+	* python/python-internal.h (PyEval_ReleaseLock): New define.
+	
+2008-12-22  Tom Tromey  <tromey@redhat.com>
+
+	* c-exp.y (ident_tokens): New global.
+	(struct token) <cxx_only>: New field.
+	(tokentab3): Update.
+	(tokentab2): Update.
+	(yylex): Use ident_tokens.
+
+2008-12-22  Adam Denton  <adenton@yahoo.com>
+
+	PR gdb/8307:
+	* environ.c (free_environ): Free e->vector.
+
+2008-12-22  Jan Kratochvil  <jan.kratochvil@redhat.com>
+
+	Fix memory double-free.
+	* completer.c (line_completion_function): Clear LIST after called xfree.
+
+2008-12-22  Joel Brobecker  <brobecker@adacore.com>
+
+	* breakpoint.c (update_watchpoint): Adjust and extend the description
+	of this function.  Fix one error message accordingly.
+
+2008-12-21  Jan Kratochvil  <jan.kratochvil@redhat.com>
+
+	Fix hw watchpoints created before the inferior was started.
+	* breakpoint.c (update_watchpoint): Convert the bp_watchpoint and
+	bp_hardware_watchpoint types according to the current runtime state.
+
+2008-12-18  Pedro Alves  <pedro@codesourcery.com>
+
+	* linux-nat.c (linux_child_follow_fork): If following the child,
+	and not detaching the parent, also add the child fork to the fork
+	list.
+	* linux-fork.c (linux_fork_context): Remove dead error call.
+	Assert that the incoming newfp argument is not null.  Do not add a
+	new fork for inferior_ptid.  Assert that there is one already.
+
+2008-12-16  Tristan Gingold  <gingold@adacore.com>
+
+	* inflow.c: Remove old_sigio, handle_sigio, old_fcntl_flags,
+	set_sigio_trap, clear_sigio_trap definitions.
+	* inferior.h: Remove set_sigio_trap and clear_sigio_trap declarations.
+	* inf-ptrace.c (inf_ptrace_wait): Remove call to set_sigio_trap
+	and clear_sigio_trap.
+	* inf-ttrace.c (inf_ttrace_wait): Ditto.
+	* linux-nat.c (linux_nat_wait): Ditto.
+	* spu-linux-nat.c (spu_child_wait): Ditto.
+	* rs6000-nat.c (rs6000_wait): Ditto.
+	* target.c: Remove target_activity_function and target_activity_fd.
+	* target.h: Remove target_activity_function and target_activity_fd
+	declarations.
+
+2008-12-15  Paul Pluzhnikov  <ppluzhnikov@google.com>
+
+	* dbxread.c (read_ofile_symtab): Sign-extend 32-bit N_LSYM and
+	N_PSYM STABS values for 64-bit GDB.
+
+2008-12-15  Tristan Gingold  <gingold@adacore.com>
+
+	* dwarf2expr.c (execute_stack_op): Handle DW_OP_swap.
+
+2008-12-15  Jerome Guitton  <guitton@adacore.com>
+
+	* ada-lang.c (ada_value_slice_ptr): Rename to...
+	(ada_value_slice_from_ptr): ... this. Return a lazy value instead
+	of a reference.	Update comment.
+	(ada_value_struct_elt): Ditto if arg is a pointer or a reference.
+	Update comment as well.
+	(ada_evaluate_subexp): Update use of ada_value_slice_ptr.
+
 2008-12-12  Kevin Buettner  <kevinb@redhat.com>
 
 	* gnu-v3-abi.c (vtable_ptrdiff_type): New function.

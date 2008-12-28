@@ -1,3 +1,50 @@
+2008-12-23  Hans-Peter Nilsson  <hp@axis.com>
+
+	* lib/ld-lib.exp (run_dump_test): New option ld_after_inputfiles.
+	* ld-cris/libdso-1c.d, ld-cris/expdref2.s, ld-cris/libdso-15b.d,
+	ld-cris/expdyn1w.s, ld-cris/libdso-1d.d, ld-cris/tls-ie-78.d: New
+	tests.
+
+2008-12-23  Nick Clifton  <nickc@redhat.com>
+
+	* ld-i386/i386.exp: Do not run ifunc test.
+	* ld-i386/ifunc.s: Delete.
+	* ld-i386/ifunc.d: Delete.
+	* ld-x86-64/x86-64.exp: Do not run ifunc test.
+	* ld-x86-64/ifunc.s: Delete.
+	* ld-x86-64/ifunc.d: Delete.
+
+2008-12-20  Hans-Peter Nilsson  <hp@axis.com>
+
+	* ld-cris/tls-err-77.d, ld-cris/tls-gc-79.d, ld-cris/tls-ie-8e.s,
+	ld-cris/tls-ie-8e1.d: New tests.
+
+2008-12-18  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* ld-i386/tlsld1.dd: Remove trailing white spaces after nop.
+
+2008-12-17  Hans-Peter Nilsson  <hp@axis.com>
+
+	* ld-cris/expalltst3, ld-cris/expdyn2.s, ld-cris/libdso-15.d: New
+	tests.
+
+2008-12-15  Richard Earnshaw  <rearnsha@arm.com>
+
+	* ld-arm/vfp11-fix-scalar.d: Disassembly of VFP instructions now uses
+	unified syntax.
+	* ld-arm/vfp11-fix-vector.d: Likewise.
+	
+2008-12-15  Hans-Peter Nilsson  <hp@axis.com>
+
+	* ld-cris/libdso-13b.d: New test.
+
+	* ld-cris/hidedsofns2468, ld-cris/libdso-12b.d,
+	ld-cris/libdso-12c.d, ld-cris/libdso-1b.d, ld-cris/dso-1b.s: New
+	tests.
+
+	* ld-cris/got7.s: Correct .size expression.
+	* ld-cris/tls-e-20a.d: Adjust accordingly.
+
 2008-12-04  Nick Clifton  <nickc@redhat.com>
 
 	* ld-x86-64/ifunc.d: New test (of STT_IFUNC for x86_64).

@@ -116,7 +116,13 @@ Plugin::load()
   int tv_size = this->args_.size() + tv_fixed_size;
   ld_plugin_tv *tv = new ld_plugin_tv[tv_size];
 
+  // Put LDPT_MESSAGE at the front of the list so the plugin can use it
+  // while processing subsequent entries.
   int i = 0;
+  tv[i].tv_tag = LDPT_MESSAGE;
+  tv[i].tv_u.tv_message = message;
+
+  ++i;
   tv[i].tv_tag = LDPT_API_VERSION;
   tv[i].tv_u.tv_val = LD_PLUGIN_API_VERSION;
 
@@ -163,10 +169,6 @@ Plugin::load()
   ++i;
   tv[i].tv_tag = LDPT_ADD_INPUT_FILE;
   tv[i].tv_u.tv_add_input_file = add_input_file;
-
-  ++i;
-  tv[i].tv_tag = LDPT_MESSAGE;
-  tv[i].tv_u.tv_message = message;
 
   ++i;
   tv[i].tv_tag = LDPT_NULL;
@@ -265,14 +267,13 @@ Plugin_manager::claim_file(Input_file* input_file, off_t offset,
     {
       if ((*this->current_)->claim_file(&this->plugin_input_file_))
         {
-          if (this->objects_.size() <= handle)
-            {
-              gold_error(_("%s: plugin claimed the file "
-                           "but did not provide any symbols"),
-                         this->plugin_input_file_.name);
-              return NULL;
-            }
-          return this->objects_[handle];
+          if (this->objects_.size() > handle)
+            return this->objects_[handle];
+
+          // If the plugin claimed the file but did not call the
+          // add_symbols callback, we need to create the Pluginobj now.
+          Pluginobj* obj = this->make_plugin_object(handle);
+          return obj;
         }
     }
 
@@ -305,11 +306,18 @@ Plugin_manager::all_symbols_read(Workqueue* workqueue,
   *last_blocker = this->this_blocker_;
 }
 
-// Call the cleanup handlers.
+// Layout deferred sections and call the cleanup handlers.
 
 void
-Plugin_manager::cleanup()
+Plugin_manager::finish()
 {
+  Deferred_layout_list::iterator obj;
+
+  for (obj = this->deferred_layout_objects_.begin();
+       obj != this->deferred_layout_objects_.end();
+       ++obj)
+    (*obj)->layout_deferred_sections(this->layout_);
+
   for (this->current_ = this->plugins_.begin();
        this->current_ != this->plugins_.end();
        ++this->current_)
@@ -369,7 +377,7 @@ Pluginobj::Pluginobj(const std::string& name, Input_file* input_file,
 ld_plugin_status
 Pluginobj::get_symbol_resolution_info(int nsyms, ld_plugin_symbol* syms) const
 {
-  if (this->nsyms_ == 0)
+  if (nsyms > this->nsyms_)
     return LDPS_NO_SYMS;
   for (int i = 0; i < nsyms; i++)
     {
@@ -712,17 +720,18 @@ Add_plugin_symbols::run(Workqueue*)
   this->obj_->add_symbols(this->symtab_, this->layout_);
 }
 
-// Class Plugin_cleanup.  This task calls the plugin cleanup hooks once all
-// replacement files have been added.
+// Class Plugin_finish.  This task runs after all replacement files have
+// been added.  It calls Layout::layout for any deferred sections and
+// calls each plugin's cleanup handler.
 
-class Plugin_cleanup : public Task
+class Plugin_finish : public Task
 {
  public:
-  Plugin_cleanup(Task_token* this_blocker, Task_token* next_blocker)
+  Plugin_finish(Task_token* this_blocker, Task_token* next_blocker)
     : this_blocker_(this_blocker), next_blocker_(next_blocker)
   { }
 
-  ~Plugin_cleanup()
+  ~Plugin_finish()
   {
     if (this->this_blocker_ != NULL)
       delete this->this_blocker_;
@@ -742,11 +751,11 @@ class Plugin_cleanup : public Task
 
   void
   run(Workqueue*)
-  { parameters->options().plugins()->cleanup(); }
+  { parameters->options().plugins()->finish(); }
 
   std::string
   get_name() const
-  { return "Plugin_cleanup"; }
+  { return "Plugin_finish"; }
 
  private:
   Task_token* this_blocker_;
@@ -777,18 +786,10 @@ Plugin_hook::locks(Task_locker*)
 {
 }
 
-// Run a Plugin_hook task.
-
-void
-Plugin_hook::run(Workqueue* workqueue)
-{
-  this->do_plugin_hook(workqueue);
-}
-
 // Run the "all symbols read" plugin hook.
 
 void
-Plugin_hook::do_plugin_hook(Workqueue* workqueue)
+Plugin_hook::run(Workqueue* workqueue)
 {
   gold_assert(this->options_.has_plugins());
   this->options_.plugins()->all_symbols_read(workqueue,
@@ -798,8 +799,8 @@ Plugin_hook::do_plugin_hook(Workqueue* workqueue)
                                              this->dirpath_,
                                              this->mapfile_,
                                              &this->this_blocker_);
-  workqueue->queue_soon(new Plugin_cleanup(this->this_blocker_,
-					   this->next_blocker_));
+  workqueue->queue_soon(new Plugin_finish(this->this_blocker_,
+					  this->next_blocker_));
 }
 
 // The C interface routines called by the plugins.

@@ -1,3 +1,47 @@
+2008-12-23  Anatoly Sokolov  <aesok@post.ru>
+
+        * config/tc-avr.c (mcu_types): Add attiny87, attiny327, atmega4hvd,
+        atmega8hvd, atmega16hvb, atmega32hvb, atmega64c1, atmega16m1, 
+        atmega64m1, atmega32u6, atmega128rfa1,  at90pwm81, at90scr100, 
+        m3000f, m3000s and m3001b devices.
+        * doc/c-avr.texi: Likewise.
+
+2008-12-23  Nick Clifton  <nickc@redhat.com>
+
+	* NEWS :Remove mention of STT_IFUNC support.
+	* config/obj-elf.c (obj_elf_type): Remove STT_IFUNC support.
+	* doc/as.texinfo: Remove mention of STT_IFUNC support.
+
+2008-12-21  Hans-Peter Nilsson  <hp@axis.com>
+
+	* config/tc-cris.c (s_cris_dtpoff): New function.
+	(md_pseudo_table): Add "dtpoffd".
+
+2008-12-20  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* config/tc-i386.c (parse_insn): Optimize ".s" handling.
+
+2008-12-20  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* config/tc-i386.c (_i386_insn): Add swap_operand.
+	(parse_insn): Handle ".s".
+	(match_template): Handle swap_operand.
+
+	* doc/c-i386.texi: Document .s suffix.
+
+2008-12-20  Hans-Peter Nilsson  <hp@axis.com>
+
+	* config/tc-cris.c (cris_process_instruction): Handle
+	BFD_RELOC_CRIS_32_IE, in the test whether the relocation fits.
+	(get_3op_or_dip_prefix_op): Handle TLS/PIC decoration for the
+	"double indirect" addressing mode.
+	(cris_get_reloc_suffix): Add entry for :IE for BFD_RELOC_CRIS_32_IE.
+	(cris_number_to_imm, tc_gen_reloc): Handle BFD_RELOC_CRIS_32_IE.
+
+2008-12-18  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+
+	* configure: Regenerate.
+
 2008-12-08  H.J. Lu  <hongjiu.lu@intel.com>
 
 	* config/tc-i386.c (build_modrm_byte): Remove an extra blank

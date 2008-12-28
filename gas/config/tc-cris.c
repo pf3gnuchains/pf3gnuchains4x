@@ -148,6 +148,7 @@ static void s_syntax (int);
 static void s_cris_file (int);
 static void s_cris_loc (int);
 static void s_cris_arch (int);
+static void s_cris_dtpoff (int);
 
 /* Get ":GOT", ":GOTOFF", ":PLT" etc. suffixes.  */
 static void cris_get_reloc_suffix (char **, bfd_reloc_code_real_type *,
@@ -198,6 +199,7 @@ static enum cris_archs cris_arch = XCONCAT2 (arch_,DEFAULT_CRIS_ARCH);
 const pseudo_typeS md_pseudo_table[] =
 {
   {"dword", cons, 4},
+  {"dtpoffd", s_cris_dtpoff, 4},
   {"syntax", s_syntax, 0},
   {"file", s_cris_file, 0},
   {"loc", s_cris_loc, 0},
@@ -2208,6 +2210,7 @@ cris_process_instruction (char *insn_text, struct cris_instruction *out_insnp,
 		as_bad (out_insnp->reloc == BFD_RELOC_CRIS_32_GD
 			|| out_insnp->reloc == BFD_RELOC_CRIS_32_TPREL
 			|| out_insnp->reloc == BFD_RELOC_CRIS_16_TPREL
+			|| out_insnp->reloc == BFD_RELOC_CRIS_32_IE
 			? _("TLS relocation size does not match operand size")
 			: _("PIC relocation size does not match operand size"));
 	    }
@@ -3045,6 +3048,10 @@ get_3op_or_dip_prefix_op (char **cPP, struct cris_prefix *prefixp)
       prefixp->kind = PREFIX_DIP;
       prefixp->opcode = DIP_OPCODE | (AUTOINCR_BIT << 8) | REG_PC;
       prefixp->reloc = BFD_RELOC_32;
+
+      /* For :GD and :IE, it makes sense to have TLS specifiers here.  */
+      if ((pic || tls) && **cPP == RELOC_SUFFIX_CHAR)
+	cris_get_reloc_suffix (cPP, &prefixp->reloc, &prefixp->expr);
     }
   else
     /* Neither '[' nor register nor expression.  We lose.  */
@@ -3489,6 +3496,7 @@ cris_get_reloc_suffix (char **cPP, bfd_reloc_code_real_type *relocp,
       TLSMAP ("GD", BFD_RELOC_CRIS_32_GD),
       PICTLSMAP ("DTPREL16", BFD_RELOC_CRIS_16_DTPREL),
       PICTLSMAP ("DTPREL", BFD_RELOC_CRIS_32_DTPREL),
+      TLSMAP ("IE", BFD_RELOC_CRIS_32_IE),
       PICTLSMAP ("TPOFFGOT16", BFD_RELOC_CRIS_16_GOT_TPREL),
       PICTLSMAP ("TPOFFGOT", BFD_RELOC_CRIS_32_GOT_TPREL),
       TLSMAP ("TPOFF16", BFD_RELOC_CRIS_16_TPREL),
@@ -3630,6 +3638,7 @@ cris_number_to_imm (char *bufp, long val, int n, fixS *fixP, segT seg)
     case BFD_RELOC_CRIS_32_GOT_GD:
     case BFD_RELOC_CRIS_16_GOT_GD:
     case BFD_RELOC_CRIS_32_GD:
+    case BFD_RELOC_CRIS_32_IE:
     case BFD_RELOC_CRIS_32_DTPREL:
     case BFD_RELOC_CRIS_16_DTPREL:
     case BFD_RELOC_CRIS_32_GOT_TPREL:
@@ -3911,6 +3920,7 @@ tc_gen_reloc (asection *section ATTRIBUTE_UNUSED, fixS *fixP)
     case BFD_RELOC_CRIS_32_GOT_GD:
     case BFD_RELOC_CRIS_16_GOT_GD:
     case BFD_RELOC_CRIS_32_GD:
+    case BFD_RELOC_CRIS_32_IE:
     case BFD_RELOC_CRIS_32_DTPREL:
     case BFD_RELOC_CRIS_16_DTPREL:
     case BFD_RELOC_CRIS_32_GOT_TPREL:
@@ -4204,6 +4214,30 @@ s_cris_loc (int dummy)
   else
     dwarf2_directive_loc (dummy);
 }
+
+/* Worker for .dtpoffd: generate a R_CRIS_32_DTPREL reloc, as for
+   expr:DTPREL but for use in debug info.  */
+
+static void
+s_cris_dtpoff (int bytes)
+{
+  expressionS ex;
+  char *p;
+
+  if (bytes != 4)
+    as_fatal (_("internal inconsistency problem: %s called for %d bytes"),
+	      __FUNCTION__, bytes);
+
+  expression (&ex);
+
+  p = frag_more (bytes);
+  md_number_to_chars (p, 0, bytes);
+  fix_new_exp (frag_now, p - frag_now->fr_literal, bytes, &ex, FALSE,
+	       BFD_RELOC_CRIS_32_DTPREL);
+
+  demand_empty_rest_of_line ();
+}
+
 
 /* Translate a <arch> string (as common to --march=<arch> and .arch <arch>)
    into an enum.  If the string *STR is recognized, *STR is updated to point

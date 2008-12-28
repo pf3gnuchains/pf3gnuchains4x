@@ -1,3 +1,18 @@
+2008-12-23  Kai Tietz  <kai.tietz@onevision.com>
+
+	* rcparse.y (rcdata_data): Allow empty comma elements.
+
+2008-12-23  Nick Clifton  <nickc@redhat.com>
+
+	* objdump.c (dump_reloc_set): Remove STT_IFUNC support.
+	* readelf.c (dump_relocations): Likewise.
+	(get_symbol_type): Likewise.
+	* doc/binutils.texi: Likewise.
+
+2008-12-18  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+
+	* configure: Regenerate.
+
 2008-12-09  Tom Tromey  <tromey@redhat.com>
 
 	* srconv.c (wr_hd): Add parens to placate gcc 4.4.

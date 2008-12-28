@@ -1,3 +1,29 @@
+2008-12-19  Jeff Johnston  <jjohnstn@redhat.com>
+
+	* NEWS: Update with 1.17.0 info.
+	* README: Ditto.
+	* acinclude.m4: Change version number to 1.17.0.
+	* aclocal.m4: Regenerated.
+	* configure: Ditto.
+	* doc/aclocal.m4: Ditto.
+	* doc/configure: Ditto.
+	* libc/*/aclocal.m4: Ditto.
+	* libc/*/configure: Ditto.
+	* libc/libc.texinfo: Ditto.
+	* libm/*/aclocal.m4: Ditto.
+	* libm/*/configure: Ditto.
+	* libm/libm.texinfo: Ditto.
+	* libc/sys/linux/shared.ld: Add VERS_1.17
+
+2008-12-17  Jon Beniston <jon@beniston.com>
+
+	* configure.host: Set syscall_dir for lm32 target.
+
+2008-12-15  Jeff Johnston  <jjohnstn@redhat.com>
+
+	* libc/stdio/stdio.tex: Remove putwc and getwc references as they
+	are included as part of fputwc and fgetwc, respectively.
+
 2008-12-12  Craig Howland <howland@LGSInnovations.com>
 
 	* libc/include/wchar.h:  Added wcstok() declaration.
