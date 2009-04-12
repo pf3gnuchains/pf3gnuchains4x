@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 use Getopt::Long;
-use File::Temp qw'tempdir';
+use File::Temp;
 use File::Basename;
 use File::Spec;
 use strict;
@@ -8,46 +8,49 @@ use strict;
 sub dllname($;$);
 
 my $static;
-my $exclude;
+my $inverse;
+my @exclude;
 
-GetOptions('static!'=>\$static, 'v|exclude!'=>\$exclude);
+my ($ar, $as, $nm, $objcopy);
+GetOptions('exclude=s'=>\@exclude, 'static!'=>\$static, 'v!'=>\$inverse,
+	   'ar=s'=>\$ar, 'as=s'=>\$as,'nm=s'=>\$nm, 'objcopy=s'=>\$objcopy);
 
-my $nm = shift;
-my $ar = shift;
-my $libdll = File::Spec->rel2abs(shift @ARGV);
-my $lib =  File::Spec->rel2abs(pop @ARGV);
+$_ = File::Spec->rel2abs($_) for @ARGV;
 
-open my $nm_fd, '-|', $nm, '-Ap', '--defined-only', @ARGV, $libdll or
+my $libdll = shift;
+my $lib =  pop;
+
+open my $nm_fd, '-|', $nm, '-Apg', '--defined-only', @ARGV, $libdll or
   die "$0: execution of $nm for object files failed - $!\n";
 
 my %match_syms = ();
 my $symfiles = ();
 my $lastfn;
 my %extract = ();
+my $exclude_regex = @exclude ? join('|', @exclude) : '\\UnLiKeLy//';
+$exclude_regex = qr/$exclude_regex/;
 while (<$nm_fd>) {
     study;
-    m%^\Q$libdll\E:([^:]*):\d+ i \.idata\$([56])% and do {
-	next;
-    };
-    m%^\Q$libdll\E:[^:]*:\d+ I (__head_.*)$% and do {
-	next;
-    };
-    next unless m%^([^:]*):([^:]*(?=:))?.* [DTI] (.*)%o;
-    if ($1 ne $libdll) {
-	 $match_syms{$3} = 1;
-     } elsif ($match_syms{$3} ? !$exclude : $exclude) {
-	 $extract{$2} = 1;
+    my ($file, $member, $symbol) = m%^([^:]*):([^:]*(?=:))?.* T (.*)%o;
+    next if !defined($symbol) || $symbol =~ $exclude_regex;
+    if ($file ne $libdll) {
+	 $match_syms{$symbol} = 1;
+     } elsif ($match_syms{$symbol} ? !$inverse : $inverse) {
+	 $extract{$member} = 1;
      }
 }
 close $nm_fd;
 
 %extract or die "$0: couldn't find symbols for $lib\n";
 
-my $dir = tempdir(CLEANUP => 1);
+my $dir = File::Temp->newdir();
 
 chdir $dir;
 # print join(' ', '+', $ar, 'x', sort keys %extract), "\n";
 my $res = system $ar, 'x', $libdll, sort keys %extract;
 die "$0: $ar extraction exited with non-zero status\n" if $res;
 unlink $lib;
-exec $ar, 'crus', $lib, sort keys %extract;
+$res = system $ar, 'crus', $lib, sort keys %extract;
+unlink keys %extract;
+die "$0: ar creation of $lib exited with non-zero status\n" if $res;
+exit 0;
