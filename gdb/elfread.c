@@ -1,7 +1,7 @@
 /* Read ELF (Executable and Linking Format) object files for GDB.
 
    Copyright (C) 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000,
-   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008
+   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    Written by Fred Fish at Cygnus Support.
@@ -427,10 +427,11 @@ elf_symtab_read (struct objfile *objfile, int type,
 			  int max_index;
 			  size_t size;
 
-			  max_index 
-			    = max (SECT_OFF_BSS (objfile),
-				   max (SECT_OFF_DATA (objfile),
-					SECT_OFF_RODATA (objfile)));
+			  max_index = SECT_OFF_BSS (objfile);
+			  if (objfile->sect_index_data > max_index)
+			    max_index = objfile->sect_index_data;
+			  if (objfile->sect_index_rodata > max_index)
+			    max_index = objfile->sect_index_rodata;
 
 			  /* max_index is the largest index we'll
 			     use into this array, so we must

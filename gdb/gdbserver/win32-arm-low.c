@@ -1,4 +1,4 @@
-/* Copyright (C) 2007, 2008 Free Software Foundation, Inc.
+/* Copyright (C) 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -122,4 +122,9 @@ struct win32_target_ops the_low_target = {
   NULL, /* single_step */
   (const unsigned char *) &arm_wince_breakpoint,
   arm_wince_breakpoint_len,
+  /* Watchpoint related functions.  See target.h for comments.  */
+  NULL, /* insert_point */
+  NULL, /* remove_point */
+  NULL, /* stopped_by_watchpoint */
+  NULL  /* stopped_data_address */
 };

@@ -44,6 +44,7 @@ case ${cpu} in
   ia64)			cpu_type=ia64 ;;
   ip2k)			cpu_type=ip2k endian=big ;; 
   iq2000)		cpu_type=iq2000 endian=big ;; 
+  lm32)		        cpu_type=lm32 ;;
   m32c)			cpu_type=m32c endian=big ;;
   m32r)			cpu_type=m32r endian=big ;;
   m32rle)		cpu_type=m32r endian=little ;;
@@ -120,7 +121,8 @@ case ${generic_target} in
   arm-*-*n*bsd*)			fmt=aout em=nbsd ;;
   arm-*-nto*)				fmt=elf ;;
   arm-epoc-pe | thumb-epoc-pe)		fmt=coff em=epoc-pe ;;
-  arm-wince-pe | arm-*-wince)		fmt=coff em=wince-pe ;;
+  arm-wince-pe | arm-*-wince | arm*-*-mingw32ce* | arm*-*-cegcc*)
+					fmt=coff em=wince-pe ;;
   arm-*-pe | thumb-*-pe)		fmt=coff em=pe ;;
   arm-*-riscix*)			fmt=aout em=riscix ;;
 
@@ -146,6 +148,8 @@ case ${generic_target} in
   fr30-*-*)				fmt=elf ;;
   frv-*-*linux*)			fmt=elf em=linux;;
   frv-*-*)				fmt=elf ;;
+
+  moxie-*-*)                             fmt=elf ;;
 
   hppa-*-linux*)
     case ${cpu} in
@@ -229,12 +233,14 @@ case ${generic_target} in
   i386-*-*nt*)				fmt=coff em=pe ;;
   i386-*-chaos)				fmt=elf ;;
   i386-*-rdos*)				fmt=elf ;;
+  i386-*-darwin*)			fmt=macho ;;
 
   i860-*-*)				fmt=elf endian=little ;;
 
   i960-*-elf*)				fmt=elf ;;
 
   ia64-*-elf*)				fmt=elf ;;
+  ia64-*-*vms*)				fmt=elf em=vms ;;
   ia64-*-aix*)				fmt=elf em=ia64aix ;;
   ia64-*-linux-*)			fmt=elf em=linux ;;
   ia64-*-hpux*)				fmt=elf em=hpux ;;
@@ -243,6 +249,8 @@ case ${generic_target} in
   ip2k-*-*)				fmt=elf ;;
 
   iq2000-*-elf)         		fmt=elf ;;
+
+  lm32-*-*)				fmt=elf ;;
 
   m32c-*-elf | m32c-*-rtems*)		fmt=elf ;;
 
@@ -316,7 +324,7 @@ case ${generic_target} in
   ppc-*-pe | ppc-*-cygwin*)		fmt=coff em=pe ;;
   ppc-*-winnt*)				fmt=coff em=pe ;;
   ppc-*-aix5.[01])			fmt=coff em=aix5 ;;
-  ppc-*-aix5.*)				fmt=coff em=aix5 ;;
+  ppc-*-aix[5-9].*)			fmt=coff em=aix5 ;;
   ppc-*-aix*)				fmt=coff ;;
   ppc-*-beos*)				fmt=coff ;;
   ppc-*-*n*bsd* | ppc-*-elf*)		fmt=elf ;;

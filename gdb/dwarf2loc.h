@@ -1,6 +1,6 @@
 /* DWARF 2 location expression support for GDB.
 
-   Copyright (C) 2003, 2005, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2003, 2005, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -20,7 +20,7 @@
 #if !defined (DWARF2LOC_H)
 #define DWARF2LOC_H
 
-struct symbol_ops;
+struct symbol_computed_ops;
 struct objfile;
 struct dwarf2_per_cu_data;
 
@@ -69,7 +69,7 @@ struct dwarf2_loclist_baton
   struct dwarf2_per_cu_data *per_cu;
 };
 
-extern const struct symbol_ops dwarf2_locexpr_funcs;
-extern const struct symbol_ops dwarf2_loclist_funcs;
+extern const struct symbol_computed_ops dwarf2_locexpr_funcs;
+extern const struct symbol_computed_ops dwarf2_loclist_funcs;
 
 #endif /* dwarf2loc.h */

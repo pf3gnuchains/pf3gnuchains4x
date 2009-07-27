@@ -29,8 +29,9 @@ struct fix;
 
 #define TARGET_BYTES_BIG_ENDIAN	0
 
-#define TARGET_ARCH		bfd_arch_i386
+#define TARGET_ARCH		(i386_arch ())
 #define TARGET_MACH		(i386_mach ())
+extern enum bfd_architecture i386_arch (void);
 extern unsigned long i386_mach (void);
 
 #ifdef TE_FreeBSD
@@ -70,14 +71,16 @@ extern unsigned long i386_mach (void);
 #define ELF_TARGET_FORMAT64	"elf64-x86-64"
 #endif
 
+#ifndef ELF_TARGET_L1OM_FORMAT
+#define ELF_TARGET_L1OM_FORMAT	"elf64-l1om"
+#endif
+
 #if ((defined (OBJ_MAYBE_COFF) && defined (OBJ_MAYBE_AOUT)) \
-     || defined (OBJ_ELF) || defined (OBJ_MAYBE_ELF))
+     || defined (OBJ_ELF) || defined (OBJ_MAYBE_ELF) \
+     || defined (TE_PE) || defined (TE_PEP) || defined (OBJ_MACH_O))
 extern const char *i386_target_format (void);
 #define TARGET_FORMAT i386_target_format ()
 #else
-#ifdef OBJ_ELF
-#define TARGET_FORMAT		ELF_TARGET_FORMAT
-#endif
 #ifdef OBJ_AOUT
 #define TARGET_FORMAT		AOUT_TARGET_FORMAT
 #endif
@@ -90,6 +93,10 @@ extern void i386_elf_emit_arch_note (void);
 
 #define SUB_SEGMENT_ALIGN(SEG, FRCHAIN) 0
 
+/* '$' may be used as immediate prefix.  */
+#undef LOCAL_LABELS_DOLLAR
+#define LOCAL_LABELS_DOLLAR 0
+#undef LOCAL_LABELS_FB
 #define LOCAL_LABELS_FB 1
 
 extern const char extra_symbol_chars[];
@@ -136,6 +143,12 @@ extern int tc_i386_fix_adjustable (struct fix *);
   (OUTPUT_FLAVOR == bfd_target_elf_flavour)
 #endif
 
+/* BSF_GNU_INDIRECT_FUNCTION symbols always need relocatoon.  */
+#define TC_FORCE_RELOCATION(FIX)			\
+  ((symbol_get_bfdsym ((FIX)->fx_addsy)->flags		\
+    & BSF_GNU_INDIRECT_FUNCTION)			\
+   || generic_force_reloc (FIX))
+
 /* This expression evaluates to true if the relocation is for a local
    object for which we still want to do the relocation at runtime.
    False if we are willing to perform this relocation while building
@@ -152,6 +165,12 @@ extern int tc_i386_fix_adjustable (struct fix *);
 
 extern int i386_parse_name (char *, expressionS *, char *);
 #define md_parse_name(s, e, m, c) i386_parse_name (s, e, c)
+
+extern operatorT i386_operator (const char *name, unsigned int operands, char *);
+#define md_operator i386_operator
+
+extern int i386_need_index_operator (void);
+#define md_need_index_operator i386_need_index_operator
 
 #define md_register_arithmetic 0
 
@@ -198,6 +217,7 @@ enum processor_type
   PROCESSOR_NOCONA,
   PROCESSOR_CORE,
   PROCESSOR_CORE2,
+  PROCESSOR_COREI7,
   PROCESSOR_K6,
   PROCESSOR_ATHLON,
   PROCESSOR_K8,
@@ -262,8 +282,8 @@ extern void i386_solaris_fix_up_eh_frame (segT);
 #endif
 
 /* Support for SHF_X86_64_LARGE */
-extern int x86_64_section_word (char *, size_t);
-extern int x86_64_section_letter (int, char **);
+extern bfd_vma x86_64_section_word (char *, size_t);
+extern bfd_vma x86_64_section_letter (int, char **);
 #define md_elf_section_letter(LETTER, PTR_MSG)	x86_64_section_letter (LETTER, PTR_MSG)
 #define md_elf_section_word(STR, LEN)		x86_64_section_word (STR, LEN)
 
@@ -275,5 +295,8 @@ extern int x86_64_section_letter (int, char **);
 void tc_pe_dwarf2_emit_offset (symbolS *, unsigned int);
 
 #endif /* TE_PE */
+
+/* X_add_symbol:X_op_symbol (Intel mode only) */
+#define O_full_ptr O_md2
 
 #endif /* TC_I386 */

@@ -23,6 +23,7 @@ TEST_OBJDUMP = $(top_builddir)/../binutils/objdump
 TEST_CXXFILT = $(top_builddir)/../binutils/cxxfilt
 TEST_STRIP = $(top_builddir)/../binutils/strip-new
 TEST_AR = $(top_builddir)/../binutils/ar
+TEST_NM = $(top_builddir)/../binutils/nm-new
 
 if PLUGINS
 LIBDL = -ldl
@@ -101,6 +102,18 @@ flagstest_debug.o: constructor_test.cc
 	$(CXXCOMPILE) -O0 -g -c -o $@ $<
 flagstest_ndebug.o: constructor_test.cc
 	$(CXXCOMPILE) -O0 -c -o $@ $<
+
+
+check_SCRIPTS += gc_comdat_test.sh
+check_DATA += gc_comdat_test.stdout
+gc_comdat_test_1.o: gc_comdat_test_1.cc 
+	$(CXXCOMPILE) -O0 -c -ffunction-sections -g -o $@ $<
+gc_comdat_test_2.o: gc_comdat_test_2.cc 
+	$(CXXCOMPILE) -O0 -c -ffunction-sections -g -o $@ $<
+gc_comdat_test: gc_comdat_test_1.o gc_comdat_test_2.o gcctestdir/ld
+	$(CXXLINK) -Bgcctestdir/ -Wl,--gc-sections gc_comdat_test_1.o gc_comdat_test_2.o
+gc_comdat_test.stdout: gc_comdat_test
+	$(TEST_NM) -C gc_comdat_test > gc_comdat_test.stdout
 
 
 check_PROGRAMS += basic_test
@@ -225,6 +238,11 @@ two_file_relocatable_test_LDFLAGS = -Bgcctestdir/ -Wl,-R,.
 two_file_relocatable_test_LDADD = two_file_relocatable.o
 two_file_relocatable.o: gcctestdir/ld two_file_test_1.o two_file_test_1b.o two_file_test_2.o
 	gcctestdir/ld -r -o $@ two_file_test_1.o two_file_test_1b.o two_file_test_2.o
+
+check_SCRIPTS += two_file_shared.sh
+check_DATA += two_file_shared.dbg
+two_file_shared.dbg: two_file_shared.so
+	$(TEST_READELF) -w $< >$@ 2>/dev/null
 
 # The nonpic tests will fail on platforms which can not put non-PIC
 # code into shared libraries, so we just don't run them in that case.
@@ -742,6 +760,11 @@ ver_test_3.o: ver_test_3.cc
 ver_test_4.o: ver_test_4.cc
 	$(CXXCOMPILE) -c -fpic -o $@ $<
 
+check_SCRIPTS += ver_test_1.sh
+check_DATA += ver_test_1.syms
+ver_test_1.syms: ver_test_1.so
+	$(TEST_READELF) -s $< >$@ 2>/dev/null
+
 check_PROGRAMS += ver_test_2
 ver_test_2_SOURCES = ver_test_main_2.cc
 ver_test_2_DEPENDENCIES = gcctestdir/ld ver_test_4.so ver_test_2.so
@@ -808,6 +831,14 @@ ver_test_10.syms: ver_test_10.so
 	$(TEST_READELF) -s $< >$@ 2>/dev/null
 ver_test_10.so: gcctestdir/ld ver_test_2.o ver_test_10.script
 	$(CXXLINK) -Bgcctestdir/ -shared -Wl,--version-script,$(srcdir)/ver_test_10.script ver_test_2.o
+
+check_PROGRAMS += ver_test_11
+ver_test_11_SOURCES = ver_test_main_2.cc
+ver_test_11_DEPENDENCIES = gcctestdir/ld ver_test_11.a
+ver_test_11_LDFLAGS = -Bgcctestdir/ -Wl,-R,.
+ver_test_11_LDADD = ver_test_11.a
+ver_test_11.a: ver_test_1.o ver_test_2.o ver_test_4.o
+	$(TEST_AR) rc $@ $^
 
 check_PROGRAMS += protected_1
 protected_1_SOURCES = \
@@ -903,6 +934,14 @@ script_test_4: basic_test.o gcctestdir/ld $(srcdir)/script_test_4.t
 script_test_4.stdout: script_test_4
 	$(TEST_READELF) -SlW script_test_4 > script_test_4.stdout
 
+check_SCRIPTS += script_test_5.sh
+check_DATA += script_test_5.stdout
+MOSTLYCLEANFILES += script_test_5.stdout
+script_test_5: script_test_5.o gcctestdir/ld $(srcdir)/script_test_5.t
+	$(CXXLINK) -Bgcctestdir/ script_test_5.o -T $(srcdir)/script_test_5.t
+script_test_5.stdout: script_test_5
+	$(TEST_READELF) -SW script_test_5 > script_test_5.stdout
+
 # Test --dynamic-list, --dynamic-list-data, --dynamic-list-cpp-new,
 # and --dynamic-list-cpp-typeinfo
 
@@ -972,6 +1011,27 @@ plugin_test_2: two_file_test_main.o two_file_test_1.syms two_file_test_1b.syms t
 plugin_test_2.err: plugin_test_2
 	@touch plugin_test_2.err
 
+check_PROGRAMS += plugin_test_3
+check_SCRIPTS += plugin_test_3.sh
+check_DATA += plugin_test_3.err
+MOSTLYCLEANFILES += plugin_test_3.err
+plugin_test_3: two_file_test_main.o two_file_test_1.syms two_file_test_1b.syms two_file_test_2.syms empty.syms gcctestdir/ld plugin_test.so
+	$(CXXLINK) -Bgcctestdir/ -Wl,--export-dynamic -Wl,--no-demangle,--plugin,"./plugin_test.so",--plugin-opt,"_Z4f13iv" two_file_test_main.o two_file_test_1.syms two_file_test_1b.syms two_file_test_2.syms empty.syms 2>plugin_test_3.err
+plugin_test_3.err: plugin_test_3
+	@touch plugin_test_3.err
+
+check_PROGRAMS += plugin_test_4
+check_SCRIPTS += plugin_test_4.sh
+check_DATA += plugin_test_4.err
+MOSTLYCLEANFILES += plugin_test_4.err
+plugin_test_4: two_file_test_main.o plugin_test_4.a gcctestdir/ld plugin_test.so
+	$(CXXLINK) -Bgcctestdir/ -Wl,--no-demangle,--plugin,"./plugin_test.so",--plugin-opt,"_Z4f13iv" two_file_test_main.o -Wl,--whole-archive,plugin_test_4.a,--no-whole-archive 2>plugin_test_4.err
+plugin_test_4.err: plugin_test_4
+	@touch plugin_test_4.err
+
+plugin_test_4.a: two_file_test_1.syms two_file_test_1b.syms two_file_test_2.syms
+	$(TEST_AR) cr $@ $^
+
 plugin_test.so: plugin_test.o
 	$(LINK) -Bgcctestdir/ -shared plugin_test.o
 plugin_test.o: plugin_test.c
@@ -990,6 +1050,55 @@ empty.syms:
 	@echo "Symbol table" >>empty.syms
 
 endif PLUGINS
+
+check_PROGRAMS += exclude_libs_test
+check_SCRIPTS += exclude_libs_test.sh
+check_DATA += exclude_libs_test.syms
+MOSTLYCLEANFILES += exclude_libs_test.syms libexclude_libs_test_1.a \
+        libexclude_libs_test_2.a alt/libexclude_libs_test_3.a
+exclude_libs_test_SOURCES = exclude_libs_test.c
+exclude_libs_test_DEPENDENCIES = gcctestdir/ld libexclude_libs_test_1.a \
+	libexclude_libs_test_2.a alt/libexclude_libs_test_3.a
+exclude_libs_test_LDFLAGS = -Bgcctestdir/ -L. -Lalt \
+	-Wl,--exclude-libs,dummy:libexclude_libs_test_1 \
+	-Wl,--exclude-libs,libexclude_libs_test_3
+exclude_libs_test_LDADD = -lexclude_libs_test_1 -lexclude_libs_test_2 \
+	alt/libexclude_libs_test_3.a
+exclude_libs_test.syms: exclude_libs_test
+	$(TEST_READELF) -sW $< >$@ 2>/dev/null
+libexclude_libs_test_1.a: exclude_libs_test_1.o
+	$(TEST_AR) rc $@ $^
+libexclude_libs_test_2.a: exclude_libs_test_2.o
+	$(TEST_AR) rc $@ $^
+alt/libexclude_libs_test_3.a: exclude_libs_test_3.o
+	test -d alt || mkdir -p alt
+	$(TEST_AR) rc $@ $^
+
+check_PROGRAMS += local_labels_test
+local_labels_test.o: ver_test_6.c
+	$(COMPILE) -g -c -Wa,-L -o $@ $<
+local_labels_test: local_labels_test.o
+	$(LINK) -Bgcctestdir/ local_labels_test.o
+
+check_PROGRAMS += discard_locals_test
+check_SCRIPTS += discard_locals_test.sh
+check_DATA += discard_locals_test.syms
+MOSTLYCLEANFILES += discard_locals_test.syms
+discard_locals_test_SOURCES = discard_locals_test.c
+discard_locals_test_LDFLAGS = -Bgcctestdir/ -Wl,--discard-locals
+discard_locals_test.syms: discard_locals_test
+	$(TEST_READELF) -sW $< >$@ 2>/dev/null
+# '-Wa,-L' is required to preserve the local label used for testing.
+discard_locals_test.o: discard_locals_test.c
+	$(COMPILE) -c -Wa,-L -o $@ $<
+
+if MCMODEL_MEDIUM
+check_PROGRAMS += large
+large_SOURCES = large.c
+large_CFLAGS = -mcmodel=medium
+large_DEPENDENCIES = gcctestdir/ld
+large_LDFLAGS = -Bgcctestdir/
+endif MCMODEL_MEDIUM
 
 endif GCC
 endif NATIVE_LINKER

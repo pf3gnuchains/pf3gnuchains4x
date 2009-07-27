@@ -1,6 +1,6 @@
 /* tc-arc.c -- Assembler for the ARC
    Copyright 1994, 1995, 1997, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007  Free Software Foundation, Inc.
+   2006, 2007, 2009  Free Software Foundation, Inc.
    Contributed by Doug Evans (dje@cygnus.com).
 
    This file is part of GAS, the GNU Assembler.
@@ -299,7 +299,7 @@ arc_insert_operand (arc_insn insn,
       errmsg = NULL;
       insn = (*operand->insert) (insn, operand, mods, reg, (long) val, &errmsg);
       if (errmsg != (const char *) NULL)
-	as_warn (errmsg);
+	as_warn ("%s", errmsg);
     }
   else
     insn |= (((long) val & ((1 << operand->bits) - 1))
@@ -889,7 +889,7 @@ arc_common (int localScope)
       as_warn (_("length of symbol \"%s\" already %ld, ignoring %d"),
 	       S_GET_NAME (symbolP), (long) S_GET_VALUE (symbolP), size);
     }
-  assert (symbolP->sy_frag == &zero_address_frag);
+  gas_assert (symbolP->sy_frag == &zero_address_frag);
 
   /* Now parse the alignment field.  This field is optional for
      local and global symbols. Default alignment is zero.  */
@@ -1283,21 +1283,21 @@ md_apply_fix (fixS *fixP, valueT * valP, segT seg)
 	 limm values.  */
       if (operand->fmt == 'B')
 	{
-	  assert ((operand->flags & ARC_OPERAND_RELATIVE_BRANCH) != 0
+	  gas_assert ((operand->flags & ARC_OPERAND_RELATIVE_BRANCH) != 0
 		  && operand->bits == 20
 		  && operand->shift == 7);
 	  fixP->fx_r_type = BFD_RELOC_ARC_B22_PCREL;
 	}
       else if (operand->fmt == 'J')
 	{
-	  assert ((operand->flags & ARC_OPERAND_ABSOLUTE_BRANCH) != 0
+	  gas_assert ((operand->flags & ARC_OPERAND_ABSOLUTE_BRANCH) != 0
 		  && operand->bits == 24
 		  && operand->shift == 32);
 	  fixP->fx_r_type = BFD_RELOC_ARC_B26;
 	}
       else if (operand->fmt == 'L')
 	{
-	  assert ((operand->flags & ARC_OPERAND_LIMM) != 0
+	  gas_assert ((operand->flags & ARC_OPERAND_LIMM) != 0
 		  && operand->bits == 32
 		  && operand->shift == 32);
 	  fixP->fx_r_type = BFD_RELOC_32;
@@ -1365,7 +1365,7 @@ tc_gen_reloc (asection *section ATTRIBUTE_UNUSED,
       return NULL;
     }
 
-  assert (!fixP->fx_pcrel == !reloc->howto->pc_relative);
+  gas_assert (!fixP->fx_pcrel == !reloc->howto->pc_relative);
 
   /* Set addend to account for PC being advanced one insn before the
      target address is computed.  */
@@ -1504,11 +1504,11 @@ md_assemble (char *str)
 		      last_errmsg = errmsg;
 		      if (operand->flags & ARC_OPERAND_ERROR)
 			{
-			  as_bad (errmsg);
+			  as_bad ("%s", errmsg);
 			  return;
 			}
 		      else if (operand->flags & ARC_OPERAND_WARN)
-			as_warn (errmsg);
+			as_warn ("%s", errmsg);
 		      break;
 		    }
 		  if (limm_reloc_p
@@ -1721,11 +1721,11 @@ md_assemble (char *str)
 		      last_errmsg = errmsg;
 		      if (operand->flags & ARC_OPERAND_ERROR)
 			{
-			  as_bad (errmsg);
+			  as_bad ("%s", errmsg);
 			  return;
 			}
 		      else if (operand->flags & ARC_OPERAND_WARN)
-			as_warn (errmsg);
+			as_warn ("%s", errmsg);
 		      break;
 		    }
 		}
@@ -1889,5 +1889,5 @@ md_assemble (char *str)
   if (NULL == last_errmsg)
     as_bad (_("bad instruction `%s'"), start);
   else
-    as_bad (last_errmsg);
+    as_bad ("%s", last_errmsg);
 }

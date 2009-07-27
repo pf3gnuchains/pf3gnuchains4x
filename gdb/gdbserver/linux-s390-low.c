@@ -1,6 +1,6 @@
 /* GNU/Linux S/390 specific low level interface, for the remote server
    for GDB.
-   Copyright (C) 2001, 2002, 2005, 2006, 2007, 2008
+   Copyright (C) 2001, 2002, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -225,4 +225,3 @@ struct linux_target_ops the_low_target = {
   s390_collect_ptrace_register,
   s390_supply_ptrace_register,
 };
-

@@ -1,6 +1,6 @@
 // powerpc.cc -- powerpc target support for gold.
 
-// Copyright 2008 Free Software Foundation, Inc.
+// Copyright 2008, 2009 Free Software Foundation, Inc.
 // Written by David S. Miller <davem@davemloft.net>
 //        and David Edelsohn <edelsohn@gnu.org>
 
@@ -60,6 +60,22 @@ class Target_powerpc : public Sized_target<size, big_endian>
       dynbss_(NULL), got_mod_index_offset_(-1U)
   {
   }
+
+  // Process the relocations to determine unreferenced sections for 
+  // garbage collection.
+  void
+  gc_process_relocs(const General_options& options,
+	            Symbol_table* symtab,
+	            Layout* layout,
+	            Sized_relobj<size, big_endian>* object,
+	            unsigned int data_shndx,
+	            unsigned int sh_type,
+	            const unsigned char* prelocs,
+	            size_t reloc_count,
+	            Output_section* output_section,
+	            bool needs_special_offset_handling,
+	            size_t local_symbol_count,
+	            const unsigned char* plocal_symbols);
 
   // Scan the relocations to look for symbol adjustments.
   void
@@ -198,7 +214,8 @@ class Target_powerpc : public Sized_target<size, big_endian>
     // any warnings about this relocation.
     inline bool
     relocate(const Relocate_info<size, big_endian>*, Target_powerpc*,
-	     size_t relnum, const elfcpp::Rela<size, big_endian>&,
+	     Output_section*, size_t relnum,
+	     const elfcpp::Rela<size, big_endian>&,
 	     unsigned int r_type, const Sized_symbol<size>*,
 	     const Symbol_value<size>*,
 	     unsigned char*,
@@ -335,7 +352,11 @@ Target::Target_info Target_powerpc<32, true>::powerpc_info =
   "/usr/lib/ld.so.1",	// dynamic_linker
   0x10000000,		// default_text_segment_address
   64 * 1024,		// abi_pagesize (overridable by -z max-page-size)
-  4 * 1024		// common_pagesize (overridable by -z common-page-size)
+  4 * 1024,		// common_pagesize (overridable by -z common-page-size)
+  elfcpp::SHN_UNDEF,	// small_common_shndx
+  elfcpp::SHN_UNDEF,	// large_common_shndx
+  0,			// small_common_section_flags
+  0			// large_common_section_flags
 };
 
 template<>
@@ -352,7 +373,11 @@ Target::Target_info Target_powerpc<32, false>::powerpc_info =
   "/usr/lib/ld.so.1",	// dynamic_linker
   0x10000000,		// default_text_segment_address
   64 * 1024,		// abi_pagesize (overridable by -z max-page-size)
-  4 * 1024		// common_pagesize (overridable by -z common-page-size)
+  4 * 1024,		// common_pagesize (overridable by -z common-page-size)
+  elfcpp::SHN_UNDEF,	// small_common_shndx
+  elfcpp::SHN_UNDEF,	// large_common_shndx
+  0,			// small_common_section_flags
+  0			// large_common_section_flags
 };
 
 template<>
@@ -369,7 +394,11 @@ Target::Target_info Target_powerpc<64, true>::powerpc_info =
   "/usr/lib/ld.so.1",	// dynamic_linker
   0x10000000,		// default_text_segment_address
   64 * 1024,		// abi_pagesize (overridable by -z max-page-size)
-  8 * 1024		// common_pagesize (overridable by -z common-page-size)
+  8 * 1024,		// common_pagesize (overridable by -z common-page-size)
+  elfcpp::SHN_UNDEF,	// small_common_shndx
+  elfcpp::SHN_UNDEF,	// large_common_shndx
+  0,			// small_common_section_flags
+  0			// large_common_section_flags
 };
 
 template<>
@@ -386,7 +415,11 @@ Target::Target_info Target_powerpc<64, false>::powerpc_info =
   "/usr/lib/ld.so.1",	// dynamic_linker
   0x10000000,		// default_text_segment_address
   64 * 1024,		// abi_pagesize (overridable by -z max-page-size)
-  8 * 1024		// common_pagesize (overridable by -z common-page-size)
+  8 * 1024,		// common_pagesize (overridable by -z common-page-size)
+  elfcpp::SHN_UNDEF,	// small_common_shndx
+  elfcpp::SHN_UNDEF,	// large_common_shndx
+  0,			// small_common_section_flags
+  0			// large_common_section_flags
 };
 
 template<int size, bool big_endian>
@@ -663,9 +696,6 @@ public:
 	   typename elfcpp::Elf_types<size>::Elf_Addr addend,
 	   typename elfcpp::Elf_types<size>::Elf_Addr address)
   {
-    typedef typename elfcpp::Swap<16, true>::Valtype Valtype;
-    Valtype* wv = reinterpret_cast<Valtype*>(view);
-    Valtype val = elfcpp::Swap<16, true>::readval(wv);
     typename elfcpp::Elf_types<size>::Elf_Addr reloc;
 
     reloc = (psymval->value(object, addend) - address);
@@ -673,10 +703,7 @@ public:
       reloc += 0x10000;
     reloc >>= 16;
 
-    val &= ~static_cast<Valtype>(0xffff);
-    reloc &= static_cast<Valtype>(0xffff);
-
-    elfcpp::Swap<16, true>::writeval(wv, val | reloc);
+    elfcpp::Swap<16, big_endian>::writeval(view, reloc);
   }
 };
 
@@ -1083,6 +1110,7 @@ Target_powerpc<size, big_endian>::Scan::check_non_pic(Relobj* object,
   // error per object file.
   if (this->issued_non_pic_error_)
     return;
+  gold_assert(parameters->options().output_is_position_independent());
   object->error(_("requires unsupported dynamic reloc; "
 		  "recompile with -fPIC"));
   this->issued_non_pic_error_ = true;
@@ -1420,6 +1448,42 @@ Target_powerpc<size, big_endian>::Scan::global(
     }
 }
 
+// Process relocations for gc.
+
+template<int size, bool big_endian>
+void
+Target_powerpc<size, big_endian>::gc_process_relocs(
+			const General_options& options,
+			Symbol_table* symtab,
+			Layout* layout,
+			Sized_relobj<size, big_endian>* object,
+			unsigned int data_shndx,
+			unsigned int,
+			const unsigned char* prelocs,
+			size_t reloc_count,
+			Output_section* output_section,
+			bool needs_special_offset_handling,
+			size_t local_symbol_count,
+			const unsigned char* plocal_symbols)
+{
+  typedef Target_powerpc<size, big_endian> Powerpc;
+  typedef typename Target_powerpc<size, big_endian>::Scan Scan;
+
+  gold::gc_process_relocs<size, big_endian, Powerpc, elfcpp::SHT_RELA, Scan>(
+    options,
+    symtab,
+    layout,
+    this,
+    object,
+    data_shndx,
+    prelocs,
+    reloc_count,
+    output_section,
+    needs_special_offset_handling,
+    local_symbol_count,
+    plocal_symbols);
+}
+
 // Scan relocations for a section.
 
 template<int size, bool big_endian>
@@ -1532,6 +1596,7 @@ inline bool
 Target_powerpc<size, big_endian>::Relocate::relocate(
 			const Relocate_info<size, big_endian>* relinfo,
 			Target_powerpc* target,
+			Output_section*,
 			size_t relnum,
 			const elfcpp::Rela<size, big_endian>& rela,
 			unsigned int r_type,
@@ -1681,7 +1746,7 @@ Target_powerpc<size, big_endian>::Relocate::relocate(
       break;
 
     case elfcpp::R_PPC_REL16_HA:
-      Reloc::rel16_lo(view, object, psymval, addend, address);
+      Reloc::rel16_ha(view, object, psymval, addend, address);
       break;
 
     case elfcpp::R_POWERPC_GOT16:
@@ -1934,8 +1999,6 @@ public:
 		       (big_endian ? "elf32-powerpc" : "elf32-powerpcle")))
   { }
 
-  Target* instantiated_target_;
-
   Target* do_recognize(int machine, int, int)
   {
     switch (size)
@@ -1954,15 +2017,11 @@ public:
 	return NULL;
       }
 
-    return do_instantiate_target();
+    return this->instantiate_target();
   }
 
   Target* do_instantiate_target()
-  {
-    if (this->instantiated_target_ == NULL)
-      this->instantiated_target_ = new Target_powerpc<size, big_endian>();
-    return this->instantiated_target_;
-  }
+  { return new Target_powerpc<size, big_endian>(); }
 };
 
 Target_selector_powerpc<32, true> target_selector_ppc32;

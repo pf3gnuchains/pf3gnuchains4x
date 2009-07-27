@@ -1,7 +1,7 @@
 /* Machine independent variables that describe the core file under GDB.
 
    Copyright (C) 1986, 1987, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996,
-   1997, 1998, 1999, 2000, 2001, 2004, 2007, 2008
+   1997, 1998, 1999, 2000, 2001, 2004, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -50,13 +50,16 @@ extern void read_memory (CORE_ADDR memaddr, gdb_byte *myaddr, int len);
 /* Read an integer from debugged memory, given address and number of
    bytes.  */
 
-extern LONGEST read_memory_integer (CORE_ADDR memaddr, int len);
-extern int safe_read_memory_integer (CORE_ADDR memaddr, int len, LONGEST *return_value);
+extern LONGEST read_memory_integer (CORE_ADDR memaddr,
+				    int len, enum bfd_endian byte_order);
+extern int safe_read_memory_integer (CORE_ADDR memaddr, int len,
+				     enum bfd_endian byte_order, LONGEST *return_value);
 
 /* Read an unsigned integer from debugged memory, given address and
    number of bytes.  */
 
-extern ULONGEST read_memory_unsigned_integer (CORE_ADDR memaddr, int len);
+extern ULONGEST read_memory_unsigned_integer (CORE_ADDR memaddr,
+					      int len, enum bfd_endian byte_order);
 
 /* Read a null-terminated string from the debuggee's memory, given address,
  * a buffer into which to place the string, and the maximum available space */
@@ -77,16 +80,13 @@ extern void write_memory (CORE_ADDR memaddr, const gdb_byte *myaddr, int len);
 
 /* Store VALUE at ADDR in the inferior as a LEN-byte unsigned integer.  */
 extern void write_memory_unsigned_integer (CORE_ADDR addr, int len,
-                                           ULONGEST value);
+                                           enum bfd_endian byte_order,
+					   ULONGEST value);
 
 /* Store VALUE at ADDR in the inferior as a LEN-byte unsigned integer.  */
 extern void write_memory_signed_integer (CORE_ADDR addr, int len,
+                                         enum bfd_endian byte_order,
                                          LONGEST value);
-
-extern void generic_search (int len, char *data, char *mask,
-			    CORE_ADDR startaddr, int increment,
-			    CORE_ADDR lorange, CORE_ADDR hirange,
-			    CORE_ADDR * addr_found, char *data_found);
 
 /* Hook for `exec_file_command' command to call.  */
 
@@ -118,10 +118,6 @@ extern void exec_file_attach (char *filename, int from_tty);
 extern void exec_file_clear (int from_tty);
 
 extern void validate_files (void);
-
-/* The target vector for core files. */
-
-extern struct target_ops core_ops;
 
 /* The current default bfd target.  */
 
@@ -197,5 +193,7 @@ struct core_fns
 extern void deprecated_add_core_fns (struct core_fns *cf);
 extern int default_core_sniffer (struct core_fns *cf, bfd * abfd);
 extern int default_check_format (bfd * abfd);
+
+struct target_section *deprecated_core_resize_section_table (int num_added);
 
 #endif /* !defined (GDBCORE_H) */

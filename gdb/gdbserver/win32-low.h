@@ -1,5 +1,5 @@
 /* Internal interfaces for the Win32 specific target code for gdbserver.
-   Copyright (C) 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -70,6 +70,12 @@ struct win32_target_ops
 
   const unsigned char *breakpoint;
   int breakpoint_len;
+
+  /* Breakpoint/Watchpoint related functions.  See target.h for comments.  */
+  int (*insert_point) (char type, CORE_ADDR addr, int len);
+  int (*remove_point) (char type, CORE_ADDR addr, int len);
+  int (*stopped_by_watchpoint) (void);
+  CORE_ADDR (*stopped_data_address) (void);
 };
 
 extern struct win32_target_ops the_low_target;

@@ -1,7 +1,7 @@
 /* Multiple source language support for GDB.
 
    Copyright (C) 1991, 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2000, 2001,
-   2002, 2003, 2004, 2005, 2007, 2008 Free Software Foundation, Inc.
+   2002, 2003, 2004, 2005, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    Contributed by the Department of Computer Science at the State University
    of New York at Buffalo.
@@ -65,9 +65,11 @@ static void set_check (char *, int);
 
 static void set_type_range_case (void);
 
-static void unk_lang_emit_char (int c, struct ui_file *stream, int quoter);
+static void unk_lang_emit_char (int c, struct type *type,
+				struct ui_file *stream, int quoter);
 
-static void unk_lang_printchar (int c, struct ui_file *stream);
+static void unk_lang_printchar (int c, struct type *type,
+				struct ui_file *stream);
 
 static void unk_lang_print_type (struct type *, char *, struct ui_file *,
 				 int, int);
@@ -213,7 +215,7 @@ local or auto    Automatic setting based on source file\n"));
 
   /* Reset the language (esp. the global string "language") to the 
      correct values. */
-  err_lang = savestring (language, strlen (language));
+  err_lang = xstrdup (language);
   make_cleanup (xfree, err_lang);	/* Free it after error */
   set_language (current_language->la_language);
   error (_("Unknown language `%s'."), err_lang);
@@ -1043,6 +1045,13 @@ default_print_array_index (struct value *index_value, struct ui_file *stream,
   fprintf_filtered (stream, "] = ");
 }
 
+void
+default_get_string (struct value *value, gdb_byte **buffer, int *length,
+		    const char **charset)
+{
+  error (_("Getting a string is unsupported in this language."));
+}
+
 /* Define the language that is no language.  */
 
 static int
@@ -1058,20 +1067,22 @@ unk_lang_error (char *msg)
 }
 
 static void
-unk_lang_emit_char (int c, struct ui_file *stream, int quoter)
+unk_lang_emit_char (int c, struct type *type, struct ui_file *stream,
+		    int quoter)
 {
   error (_("internal error - unimplemented function unk_lang_emit_char called."));
 }
 
 static void
-unk_lang_printchar (int c, struct ui_file *stream)
+unk_lang_printchar (int c, struct type *type, struct ui_file *stream)
 {
   error (_("internal error - unimplemented function unk_lang_printchar called."));
 }
 
 static void
-unk_lang_printstr (struct ui_file *stream, const gdb_byte *string,
-		   unsigned int length, int width, int force_ellipses,
+unk_lang_printstr (struct ui_file *stream, struct type *type,
+		   const gdb_byte *string, unsigned int length,
+		   int force_ellipses,
 		   const struct value_print_options *options)
 {
   error (_("internal error - unimplemented function unk_lang_printstr called."));
@@ -1165,6 +1176,7 @@ const struct language_defn unknown_language_defn =
   unknown_language_arch_info,	/* la_language_arch_info.  */
   default_print_array_index,
   default_pass_by_reference,
+  default_get_string,
   LANG_MAGIC
 };
 
@@ -1203,6 +1215,7 @@ const struct language_defn auto_language_defn =
   unknown_language_arch_info,	/* la_language_arch_info.  */
   default_print_array_index,
   default_pass_by_reference,
+  default_get_string,
   LANG_MAGIC
 };
 
@@ -1240,6 +1253,7 @@ const struct language_defn local_language_defn =
   unknown_language_arch_info,	/* la_language_arch_info.  */
   default_print_array_index,
   default_pass_by_reference,
+  default_get_string,
   LANG_MAGIC
 };
 
@@ -1387,10 +1401,10 @@ For Fortran the default is off; for other languages the default is on."),
   add_language (&local_language_defn);
   add_language (&auto_language_defn);
 
-  language = savestring ("auto", strlen ("auto"));
-  type = savestring ("auto", strlen ("auto"));
-  range = savestring ("auto", strlen ("auto"));
-  case_sensitive = savestring ("auto",strlen ("auto"));
+  language = xstrdup ("auto");
+  type = xstrdup ("auto");
+  range = xstrdup ("auto");
+  case_sensitive = xstrdup ("auto");
 
   /* Have the above take effect */
   set_language (language_auto);

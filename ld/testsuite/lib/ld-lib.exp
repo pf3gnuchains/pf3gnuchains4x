@@ -1,6 +1,6 @@
 # Support routines for LD testsuite.
 #   Copyright 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003,
-#    2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+#    2004, 2005, 2006, 2007, 2009  Free Software Foundation, Inc.
 #
 # This file is part of the GNU Binutils.
 #
@@ -447,6 +447,7 @@ proc is_aout_format {} {
 proc is_pecoff_format {} {
     if { ![istarget *-*-mingw*] \
 	 && ![istarget *-*-cygwin*] \
+	 && ![istarget *-*-cegcc*] \
 	 && ![istarget *-*-pe*] } {
 	return 0
     }
@@ -629,7 +630,7 @@ proc run_dump_test { name } {
     global OBJDUMP NM AS OBJCOPY READELF LD
     global OBJDUMPFLAGS NMFLAGS ASFLAGS OBJCOPYFLAGS READELFFLAGS LDFLAGS
     global host_triplet runtests
-    global env
+    global env verbose
 
     if [string match "*/*" $name] {
 	set file $name
@@ -946,10 +947,10 @@ proc run_dump_test { name } {
 	return
     }
 
-    verbose_eval {[file_contents $dumpfile]} 3
+    if { $verbose > 2 } then { verbose "output is [file_contents $dumpfile]" 3 }
     if { [regexp_diff $dumpfile "${file}.d"] } then {
 	fail $testname
-	verbose "output is [file_contents $dumpfile]" 2
+	if { $verbose == 2 } then { verbose "output is [file_contents $dumpfile]" 2 }
 	return
     }
 
@@ -1093,9 +1094,25 @@ proc file_contents { filename } {
     return $contents
 }
 
+# Create an archive using ar
+#
+proc ar_simple_create { ar aropts target objects } {
+    remote_file host delete $target
+
+    set exec_output [run_host_cmd "$ar" "$aropts rc $target $objects"]
+    set exec_output [prune_warnings $exec_output]
+
+    if [string match "" $exec_output] then {
+	send_log "$exec_output\n"
+	return 1
+    } else {
+	return 0
+    }
+}
+
 # List contains test-items with 3 items followed by 2 lists, one item and
 # one optional item:
-# 0:name 1:ld options 2:assembler options
+# 0:name 1:ld/ar options 2:assembler options
 # 3:filenames of assembler files 4: action and options. 5: name of output file
 # 6:compiler flags (optional)
 #
@@ -1108,6 +1125,7 @@ proc run_ld_link_tests { ldtests } {
     global ld
     global as
     global nm
+    global ar
     global objdump
     global READELF
     global srcdir
@@ -1115,9 +1133,15 @@ proc run_ld_link_tests { ldtests } {
     global env
     global CC
     global CFLAGS
+    global runtests
 
     foreach testitem $ldtests {
 	set testname [lindex $testitem 0]
+
+	if ![runtest_file_p $runtests $testname] then {
+	    continue
+	}
+
 	set ld_options [lindex $testitem 1]
 	set as_options [lindex $testitem 2]
 	set src_files  [lindex $testitem 3]
@@ -1161,10 +1185,21 @@ proc run_ld_link_tests { ldtests } {
 	    continue
 	}
 
-	if ![ld_simple_link $ld $binfile "-L$srcdir/$subdir $ld_options $objfiles"] {
+	if { [regexp ".*a$" $binfile] } {
+	    if { ![ar_simple_create $ar $ld_options $binfile "$objfiles"] } {
+		fail $testname
+		set failed 1
+	    } else {
+		set failed 0
+	    }
+	} elseif { ![ld_simple_link $ld $binfile "-L$srcdir/$subdir $ld_options $objfiles"] } {
 	    fail $testname
+	    set failed 1
 	} else {
 	    set failed 0
+	}
+
+	if { $failed == 0 } {
 	    foreach actionlist $actions {
 		set action [lindex $actionlist 0]
 		set progopts [lindex $actionlist 1]
@@ -1244,12 +1279,6 @@ proc run_ld_link_tests { ldtests } {
 	    continue
 	}
     }
-}
-
-
-proc verbose_eval { expr { level 1 } } {
-    global verbose
-    if $verbose>$level then { eval verbose "$expr" $level }
 }
 
 # This definition is taken from an unreleased version of DejaGnu.  Once
@@ -1406,7 +1435,7 @@ proc run_ld_link_exec_tests { targets_to_xfail ldtests } {
 # List contains test-items with 3 items followed by 2 lists, one item and
 # one optional item:
 #  0:name
-#  1:link options
+#  1:ld or ar options
 #  2:compile options
 #  3:filenames of source files
 #  4:action and options.
@@ -1429,6 +1458,7 @@ proc run_cc_link_tests { ldtests } {
     global CXX
     global CFLAGS
     global CXXFLAGS
+    global ar
 
     foreach testitem $ldtests {
 	set testname [lindex $testitem 0]
@@ -1466,10 +1496,21 @@ proc run_cc_link_tests { ldtests } {
 	    set cc_cmd $CC
 	}
 
-	if ![ld_simple_link $cc_cmd $binfile "-L$srcdir/$subdir $ldflags $objfiles"] {
+	if { [regexp ".*a$" $binfile] } {
+	    if { ![ar_simple_create $ar $ldflags $binfile "$objfiles"] } {
+		fail $testname
+		set failed 1
+	    } else {
+		set failed 0
+	    }
+	} elseif { ![ld_simple_link $cc_cmd $binfile "-L$srcdir/$subdir $ldflags $objfiles"] } {
 	    fail $testname
+	    set failed 1
 	} else {
 	    set failed 0
+	}
+
+	if { $failed == 0 } {
 	    foreach actionlist $actions {
 		set action [lindex $actionlist 0]
 		set progopts [lindex $actionlist 1]
@@ -1551,7 +1592,10 @@ proc check_gc_sections_available { } {
 	# Some targets don't support gc-sections despite whatever's
 	# advertised by ld's options.
 	if { [istarget alpha*-*-*]
-	     || [istarget ia64-*-*] } {
+	     || [istarget mep-*-*]
+	     || [istarget ia64-*-*]
+	     || [istarget *-*-cygwin]
+	     || [istarget *-*-mingw*] } {
 	    set gc_sections_available_saved 0
 	    return 0
 	}

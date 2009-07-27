@@ -1,6 +1,6 @@
 /* ld.h -- general linker header file
    Copyright 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000,
-   2001, 2002, 2003, 2004, 2005, 2006, 2007
+   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of the GNU Binutils.
@@ -31,24 +31,6 @@
 #ifndef SEEK_END
 #define SEEK_END 2
 #endif
-
-#if defined(__GNUC__) && !defined(C_ALLOCA)
-# undef alloca
-# define alloca __builtin_alloca
-#else
-# if defined(HAVE_ALLOCA_H) && !defined(C_ALLOCA)
-#  include <alloca.h>
-# else
-#  ifndef alloca /* predefined by HP cc +Olibcalls */
-#   if !defined (__STDC__) && !defined (__hpux)
-char *alloca ();
-#   else
-void *alloca ();
-#   endif /* __STDC__, __hpux */
-#  endif /* alloca */
-# endif /* HAVE_ALLOCA_H */
-#endif
-
 
 #ifdef HAVE_LOCALE_H
 # ifndef ENABLE_NLS
@@ -167,10 +149,9 @@ typedef struct {
      search.  */
   bfd_boolean warn_search_mismatch;
 
-
-  /* If TRUE (the default) check section addresses, once compute,
-     fpor overlaps.  */
-  bfd_boolean check_section_addresses;
+  /* If non-zero check section addresses, once computed,
+     for overlaps.  Relocatable links only check when this is > 0.  */
+  signed char check_section_addresses;
 
   /* If TRUE allow the linking of input files in an unknown architecture
      assuming that the user knows what they are doing.  This was the old

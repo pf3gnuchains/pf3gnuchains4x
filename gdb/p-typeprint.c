@@ -1,5 +1,5 @@
 /* Support for printing Pascal types for GDB, the GNU debugger.
-   Copyright (C) 2000, 2001, 2002, 2006, 2007, 2008
+   Copyright (C) 2000, 2001, 2002, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -768,8 +768,6 @@ pascal_type_print_base (struct type *type, struct ui_file *stream, int show,
     case TYPE_CODE_RANGE:
       {
 	struct type *target = TYPE_TARGET_TYPE (type);
-	if (target == NULL)
-	  target = builtin_type_int32;
 	print_type_scalar (target, TYPE_LOW_BOUND (type), stream);
 	fputs_filtered ("..", stream);
 	print_type_scalar (target, TYPE_HIGH_BOUND (type), stream);

@@ -1,7 +1,7 @@
 /* Source-language-related definitions for GDB.
 
    Copyright (C) 1991, 1992, 1993, 1994, 1995, 1998, 1999, 2000, 2003, 2004,
-   2007, 2008 Free Software Foundation, Inc.
+   2007, 2008, 2009 Free Software Foundation, Inc.
 
    Contributed by the Department of Computer Science at the State University
    of New York at Buffalo.
@@ -186,14 +186,15 @@ struct language_defn
 
     void (*la_post_parser) (struct expression ** expp, int void_context_p);
 
-    void (*la_printchar) (int ch, struct ui_file * stream);
+    void (*la_printchar) (int ch, struct type *chtype, struct ui_file * stream);
 
-    void (*la_printstr) (struct ui_file * stream, const gdb_byte *string,
-			 unsigned int length, int width,
+    void (*la_printstr) (struct ui_file * stream, struct type *elttype,
+			 const gdb_byte *string, unsigned int length,
 			 int force_ellipses,
 			 const struct value_print_options *);
 
-    void (*la_emitchar) (int ch, struct ui_file * stream, int quoter);
+    void (*la_emitchar) (int ch, struct type *chtype,
+			 struct ui_file * stream, int quoter);
 
     /* Print a type using syntax appropriate for this language. */
 
@@ -281,6 +282,19 @@ struct language_defn
     /* Return non-zero if TYPE should be passed (and returned) by
        reference at the language level.  */
     int (*la_pass_by_reference) (struct type *type);
+
+    /* Obtain a string from the inferior, storing it in a newly allocated
+       buffer in BUFFER, which should be freed by the caller.  If the
+       in- and out-parameter *LENGTH is specified at -1, the string is
+       read until a null character of the appropriate width is found -
+       otherwise the string is read to the length of characters specified.
+       On completion, *LENGTH will hold the size of the string in characters.
+       If a *LENGTH of -1 was specified it will count only actual
+       characters, excluding any eventual terminating null character.
+       Otherwise *LENGTH will include all characters - including any nulls.
+       CHARSET will hold the encoding used in the string.  */
+    void (*la_get_string) (struct value *value, gdb_byte **buffer, int *length,
+			  const char **charset);
 
     /* Add fields above this point, so the magic number is always last. */
     /* Magic number for compat checking */
@@ -373,13 +387,15 @@ extern enum language set_language (enum language);
 #define LA_VALUE_PRINT(val,stream,options) \
   (current_language->la_value_print(val,stream,options))
 
-#define LA_PRINT_CHAR(ch, stream) \
-  (current_language->la_printchar(ch, stream))
-#define LA_PRINT_STRING(stream, string, length, width, force_ellipses,options) \
-  (current_language->la_printstr(stream, string, length, width, \
+#define LA_PRINT_CHAR(ch, type, stream) \
+  (current_language->la_printchar(ch, type, stream))
+#define LA_PRINT_STRING(stream, elttype, string, length, force_ellipses,options) \
+  (current_language->la_printstr(stream, elttype, string, length, \
 				 force_ellipses,options))
-#define LA_EMIT_CHAR(ch, stream, quoter) \
-  (current_language->la_emitchar(ch, stream, quoter))
+#define LA_EMIT_CHAR(ch, type, stream, quoter) \
+  (current_language->la_emitchar(ch, type, stream, quoter))
+#define LA_GET_STRING(value, buffer, length, encoding) \
+  (current_language->la_get_string(value, buffer, length, encoding))
 
 #define LA_PRINT_ARRAY_INDEX(index_value, stream, optins) \
   (current_language->la_print_array_index(index_value, stream, options))
@@ -488,5 +504,11 @@ int default_pass_by_reference (struct type *type);
 /* The default implementation of la_print_typedef.  */
 void default_print_typedef (struct type *type, struct symbol *new_symbol,
 			    struct ui_file *stream);
+
+void default_get_string (struct value *value, gdb_byte **buffer, int *length,
+			 const char **charset);
+
+void c_get_string (struct value *value, gdb_byte **buffer, int *length,
+		   const char **charset);
 
 #endif /* defined (LANGUAGE_H) */

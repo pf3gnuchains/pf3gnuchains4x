@@ -1,6 +1,6 @@
 // options.c -- handle command line options for gold
 
-// Copyright 2006, 2007, 2008 Free Software Foundation, Inc.
+// Copyright 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
 // Written by Ian Lance Taylor <iant@google.com>.
 
 // This file is part of gold.
@@ -273,6 +273,7 @@ void
 General_options::parse_V(const char*, const char*, Command_line*)
 {
   gold::print_version(true);
+  this->printed_version_ = true;
   printf(_("  Supported targets:\n"));
   std::vector<const char*> supported_names;
   gold::supported_target_names(&supported_names);
@@ -287,6 +288,30 @@ General_options::parse_defsym(const char*, const char* arg,
                               Command_line* cmdline)
 {
   cmdline->script_options().define_symbol(arg);
+}
+
+void
+General_options::parse_incremental_changed(const char*, const char*,
+                                           Command_line*)
+{
+  this->implicit_incremental_ = true;
+  this->incremental_disposition_ = INCREMENTAL_CHANGED;
+}
+
+void
+General_options::parse_incremental_unchanged(const char*, const char*,
+                                             Command_line*)
+{
+  this->implicit_incremental_ = true;
+  this->incremental_disposition_ = INCREMENTAL_UNCHANGED;
+}
+
+void
+General_options::parse_incremental_unknown(const char*, const char*,
+                                           Command_line*)
+{
+  this->implicit_incremental_ = true;
+  this->incremental_disposition_ = INCREMENTAL_CHECK;
 }
 
 void
@@ -378,6 +403,93 @@ General_options::parse_end_group(const char*, const char*,
   cmdline->inputs().end_group();
 }
 
+// The function add_excluded_libs() in ld/ldlang.c of GNU ld breaks up a list
+// of names seperated by commas or colons and puts them in a linked list.
+// We implement the same parsing of names here but store names in an unordered
+// map to speed up searching of names.
+
+void
+General_options::parse_exclude_libs(const char*, const char* arg,
+                                    Command_line*)
+{
+  const char *p = arg;
+
+  while (*p != '\0')
+    {
+      size_t length = strcspn(p, ",:");
+      this->excluded_libs_.insert(std::string(p, length));
+      p += (p[length] ? length + 1 : length);
+    }
+}
+
+// The checking logic is based on the function check_excluded_libs() in
+// ld/ldlang.c of GNU ld but our implementation is different because we use
+// an unordered map instead of a linked list, which is what GNU ld uses.  GNU
+// ld searches sequentially in the excluded libs list.  For a given archive,
+// a match is found if the archive's name matches exactly one of the list
+// entry or if the archive's name is of the form FOO.a and FOO matches exactly
+// one of the list entry.  An entry "ALL" in the list is considered as a
+// wild-card and matches any given name.
+
+bool
+General_options::check_excluded_libs (const std::string &name) const
+{
+  Unordered_set<std::string>::const_iterator p;
+
+  // Exit early for the most common case.
+  if (excluded_libs_.empty())
+    return false;
+
+  // If we see "ALL", all archives are excluded from automatic export.
+  p = excluded_libs_.find(std::string("ALL"));
+  if (p != excluded_libs_.end())
+    return true;
+
+  // First strip off any directories in name.
+  const char *basename = lbasename(name.c_str());
+
+  // Try finding an exact match.
+  p = excluded_libs_.find(std::string(basename));
+  if (p != excluded_libs_.end())
+    return true;
+
+  // Try matching NAME without ".a" at the end.
+  size_t length = strlen(basename);
+  if ((length >= 2)
+      && (basename[length - 2] == '.')
+      && (basename[length - 1] == 'a'))
+    {
+      p = excluded_libs_.find(std::string(basename, length - 2));
+      if (p != excluded_libs_.end())
+	return true;
+    }
+
+  return false;
+}
+
+// Recognize input and output target names.  The GNU linker accepts
+// these with --format and --oformat.  This code is intended to be
+// minimally compatible.  In practice for an ELF target this would be
+// the same target as the input files; that name always start with
+// "elf".  Non-ELF targets would be "srec", "symbolsrec", "tekhex",
+// "binary", "ihex".
+
+General_options::Object_format
+General_options::string_to_object_format(const char* arg)
+{
+  if (strncmp(arg, "elf", 3) == 0)
+    return gold::General_options::OBJECT_FORMAT_ELF;
+  else if (strcmp(arg, "binary") == 0)
+    return gold::General_options::OBJECT_FORMAT_BINARY;
+  else
+    {
+      gold::gold_error(_("format '%s' not supported; treating as elf "
+                         "(supported formats: elf, binary)"),
+                       arg);
+      return gold::General_options::OBJECT_FORMAT_ELF;
+    }
+}
+
 } // End namespace gold.
 
 namespace
@@ -401,33 +513,10 @@ usage(const char* msg, const char *opt)
   usage();
 }
 
-// Recognize input and output target names.  The GNU linker accepts
-// these with --format and --oformat.  This code is intended to be
-// minimally compatible.  In practice for an ELF target this would be
-// the same target as the input files; that name always start with
-// "elf".  Non-ELF targets would be "srec", "symbolsrec", "tekhex",
-// "binary", "ihex".
-
-gold::General_options::Object_format
-string_to_object_format(const char* arg)
-{
-  if (strncmp(arg, "elf", 3) == 0)
-    return gold::General_options::OBJECT_FORMAT_ELF;
-  else if (strcmp(arg, "binary") == 0)
-    return gold::General_options::OBJECT_FORMAT_BINARY;
-  else
-    {
-      gold::gold_error(_("format '%s' not supported; treating as elf "
-                         "(supported formats: elf, binary)"),
-                       arg);
-      return gold::General_options::OBJECT_FORMAT_ELF;
-    }
-}
-
 // If the default sysroot is relocatable, try relocating it based on
 // the prefix FROM.
 
-char*
+static char*
 get_relative_sysroot(const char* from)
 {
   char* path = make_relative_prefix(gold::program_name, from,
@@ -448,7 +537,7 @@ get_relative_sysroot(const char* from)
 // get_relative_sysroot, which is a small memory leak, but is
 // necessary since we store this pointer directly in General_options.
 
-const char*
+static const char*
 get_default_sysroot()
 {
   const char* sysroot = TARGET_SYSTEM_ROOT;
@@ -563,7 +652,7 @@ parse_short_option(int argc, const char** argv, int pos_in_argv_i,
 
   // We handle -z as a special case.
   static gold::options::One_option dash_z("", gold::options::DASH_Z,
-                                          'z', "", "-z", "Z-OPTION", false,
+                                          'z', "", NULL, "Z-OPTION", false,
 					  NULL);
   gold::options::One_option* retval = NULL;
   if (this_argv[pos_in_argv_i] == 'z')
@@ -620,21 +709,23 @@ namespace gold
 {
 
 General_options::General_options()
-  : execstack_status_(General_options::EXECSTACK_FROM_INPUT), static_(false),
-    do_demangle_(false), plugins_()
+  : printed_version_(false),
+    execstack_status_(General_options::EXECSTACK_FROM_INPUT), static_(false),
+    do_demangle_(false), plugins_(),
+    incremental_disposition_(INCREMENTAL_CHECK), implicit_incremental_(false)
 {
 }
 
 General_options::Object_format
 General_options::format_enum() const
 {
-  return string_to_object_format(this->format());
+  return General_options::string_to_object_format(this->format());
 }
 
 General_options::Object_format
 General_options::oformat_enum() const
 {
-  return string_to_object_format(this->oformat());
+  return General_options::string_to_object_format(this->oformat());
 }
 
 // Add the sysroot, if any, to the search paths.
@@ -657,6 +748,26 @@ General_options::add_sysroot()
     p->add_sysroot(this->sysroot(), canonical_sysroot);
 
   free(canonical_sysroot);
+}
+
+// Return whether FILENAME is in a system directory.
+
+bool
+General_options::is_in_system_directory(const std::string& filename) const
+{
+  for (Dir_list::const_iterator p = this->library_path_.value.begin();
+       p != this->library_path_.value.end();
+       ++p)
+    {
+      // We use a straight string comparison rather than calling
+      // FILENAME_CMP because we are only interested in the cases
+      // where we found the file in a system directory, which means
+      // that we used the directory name as a prefix for a -L search.
+      if (p->is_system_directory()
+	  && filename.compare(0, p->name().size(), p->name()) == 0)
+	return true;
+    }
+  return false;
 }
 
 // Add a plugin to the list of plugins.
@@ -695,6 +806,9 @@ General_options::finalize()
     this->set_strip_debug_non_line(true);
   if (this->strip_debug_non_line())
     this->set_strip_debug_gdb(true);
+
+  if (this->Bshareable())
+    this->set_shared(true);
 
   // If the user specifies both -s and -r, convert the -s to -S.
   // -r requires us to keep externally visible symbols!
@@ -835,6 +949,10 @@ General_options::finalize()
     gold_fatal(_("--hash-bucket-empty-fraction value %g out of range "
 		 "[0.0, 1.0)"),
 	       this->hash_bucket_empty_fraction());
+
+  if (this->implicit_incremental_ && !this->incremental())
+    gold_fatal(_("Options --incremental-changed, --incremental-unchanged, "
+                 "--incremental-unknown require the use of --incremental"));
 
   // FIXME: we can/should be doing a lot more sanity checking here.
 }

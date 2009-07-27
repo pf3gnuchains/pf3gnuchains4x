@@ -75,7 +75,7 @@ Contents of section \.tdata:
  8215c 28000000 29000000 2a000000           .*
 Contents of section \.got:
  82168 00000000 00000000 00000000 01000000  .*
- 82178 00000000 80000000 01000000 80000000  .*
+ 82178 00000000 f4ffffff 01000000 80000000  .*
  82188 b4210800 ac210800 bc210800 b8210800  .*
  82198 a4210800 b0210800 a8210800           .*
 Contents of section \.data:
@@ -102,7 +102,7 @@ Disassembly of section \.text:
 #...
 
 000800cc <tlsdsofn>:
-   800cc:	6fae 8000 0000      	move\.d 80 <x>,\$r10
+   800cc:	6fae f4ff ffff      	move\.d 0xfffffff4,\$r10
 #...
 
 000800d4 <tlsdsofn10>:

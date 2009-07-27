@@ -40,8 +40,10 @@
 #include "parameters.h"
 #include "layout.h"
 #include "symtab.h"
+#include "target-select.h"
 #include "script.h"
 #include "script-c.h"
+#include "incremental.h"
 
 namespace gold
 {
@@ -1162,9 +1164,12 @@ class Parser_closure
 		 bool in_group, bool is_in_sysroot,
                  Command_line* command_line,
 		 Script_options* script_options,
-		 Lex* lex)
+		 Lex* lex,
+		 bool skip_on_incompatible_target)
     : filename_(filename), posdep_options_(posdep_options),
       in_group_(in_group), is_in_sysroot_(is_in_sysroot),
+      skip_on_incompatible_target_(skip_on_incompatible_target),
+      found_incompatible_target_(false),
       command_line_(command_line), script_options_(script_options),
       version_script_info_(script_options->version_script_info()),
       lex_(lex), lineno_(0), charpos_(0), lex_mode_stack_(), inputs_(NULL)
@@ -1195,6 +1200,30 @@ class Parser_closure
   bool
   is_in_sysroot() const
   { return this->is_in_sysroot_; }
+
+  // Whether to skip to the next file with the same name if we find an
+  // incompatible target in an OUTPUT_FORMAT statement.
+  bool
+  skip_on_incompatible_target() const
+  { return this->skip_on_incompatible_target_; }
+
+  // Stop skipping to the next file on an incompatible target.  This
+  // is called when we make some unrevocable change to the data
+  // structures.
+  void
+  clear_skip_on_incompatible_target()
+  { this->skip_on_incompatible_target_ = false; }
+
+  // Whether we found an incompatible target in an OUTPUT_FORMAT
+  // statement.
+  bool
+  found_incompatible_target() const
+  { return this->found_incompatible_target_; }
+
+  // Note that we found an incompatible target.
+  void
+  set_found_incompatible_target()
+  { this->found_incompatible_target_ = true; }
 
   // Returns the Command_line structure passed in at constructor time.
   // This value may be NULL.  The caller may modify this, which modifies
@@ -1296,6 +1325,12 @@ class Parser_closure
   bool in_group_;
   // Whether the script was found in a sysrooted directory.
   bool is_in_sysroot_;
+  // If this is true, then if we find an OUTPUT_FORMAT with an
+  // incompatible target, then we tell the parser to abort so that we
+  // can search for the next file with the same name.
+  bool skip_on_incompatible_target_;
+  // True if we found an OUTPUT_FORMAT with an incompatible target.
+  bool found_incompatible_target_;
   // May be NULL if the user chooses not to pass one in.
   Command_line* command_line_;
   // Options which may be set from any linker script.
@@ -1321,10 +1356,10 @@ class Parser_closure
 // as a script.  Return true if the file was handled.
 
 bool
-read_input_script(Workqueue* workqueue, const General_options& options,
-		  Symbol_table* symtab, Layout* layout,
-		  Dirsearch* dirsearch, Input_objects* input_objects,
-		  Mapfile* mapfile, Input_group* input_group,
+read_input_script(Workqueue* workqueue, Symbol_table* symtab, Layout* layout,
+		  Dirsearch* dirsearch, int dirindex,
+		  Input_objects* input_objects, Mapfile* mapfile,
+		  Input_group* input_group,
 		  const Input_argument* input_argument,
 		  Input_file* input_file, Task_token* next_blocker,
 		  bool* used_next_blocker)
@@ -1342,10 +1377,21 @@ read_input_script(Workqueue* workqueue, const General_options& options,
 			 input_file->is_in_sysroot(),
                          NULL,
 			 layout->script_options(),
-			 &lex);
+			 &lex,
+			 input_file->will_search_for());
 
   if (yyparse(&closure) != 0)
-    return false;
+    {
+      if (closure.found_incompatible_target())
+	{
+	  Read_symbols::incompatible_warning(input_argument, input_file);
+	  Read_symbols::requeue(workqueue, input_objects, symtab, layout,
+				dirsearch, dirindex, mapfile, input_argument,
+				input_group, next_blocker);
+	  return true;
+	}
+      return false;
+    }
 
   if (!closure.saw_inputs())
     return true;
@@ -1363,12 +1409,22 @@ read_input_script(Workqueue* workqueue, const General_options& options,
 	  nb = new Task_token(true);
 	  nb->add_blocker();
 	}
-      workqueue->queue_soon(new Read_symbols(options, input_objects, symtab,
-					     layout, dirsearch, mapfile, &*p,
+      workqueue->queue_soon(new Read_symbols(input_objects, symtab,
+					     layout, dirsearch, 0, mapfile, &*p,
 					     input_group, this_blocker, nb));
       this_blocker = nb;
     }
 
+  if (layout->incremental_inputs())
+    {
+      // Like new Read_symbols(...) above, we rely on close.inputs()
+      // getting leaked by closure.
+      Script_info* info = new Script_info(closure.inputs());
+      layout->incremental_inputs()->report_script(
+          input_argument,
+          input_file->file().get_mtime(),
+          info);
+    }
   *used_next_blocker = true;
 
   return true;
@@ -1398,7 +1454,8 @@ read_script_file(const char* filename, Command_line* cmdline,
     posdep.set_format_enum(General_options::OBJECT_FORMAT_ELF);
   Input_file_argument input_argument(filename, false, "", false, posdep);
   Input_file input_file(&input_argument);
-  if (!input_file.open(cmdline->options(), dirsearch, task))
+  int dummy = 0;
+  if (!input_file.open(dirsearch, task, &dummy))
     return false;
 
   std::string input_string;
@@ -1413,7 +1470,8 @@ read_script_file(const char* filename, Command_line* cmdline,
 			 input_file.is_in_sysroot(),
                          cmdline,
 			 script_options,
-			 &lex);
+			 &lex,
+			 false);
   if (yyparse(&closure) != 0)
     {
       input_file.file().unlock(task);
@@ -1472,7 +1530,7 @@ Script_options::define_symbol(const char* definition)
   Position_dependent_options posdep_options;
 
   Parser_closure closure("command line", posdep_options, false, false, NULL,
-			 this, &lex);
+			 this, &lex, false);
 
   if (yyparse(&closure) != 0)
     return false;
@@ -1699,6 +1757,52 @@ Keyword_to_parsecode::keyword_to_parsecode(const char* keyword,
   return ktt->parsecode;
 }
 
+// Helper class that calls cplus_demangle when needed and takes care of freeing
+// the result.
+
+class Lazy_demangler
+{
+ public:
+  Lazy_demangler(const char* symbol, int options)
+    : symbol_(symbol), options_(options), demangled_(NULL), did_demangle_(false)
+  { }
+
+  ~Lazy_demangler()
+  { free(this->demangled_); }
+
+  // Return the demangled name. The actual demangling happens on the first call,
+  // and the result is later cached.
+
+  inline char*
+  get();
+
+ private:
+  // The symbol to demangle.
+  const char *symbol_;
+  // Option flags to pass to cplus_demagle.
+  const int options_;
+  // The cached demangled value, or NULL if demangling didn't happen yet or
+  // failed.
+  char *demangled_;
+  // Whether we already called cplus_demangle
+  bool did_demangle_;
+};
+
+// Return the demangled name. The actual demangling happens on the first call,
+// and the result is later cached. Returns NULL if the symbol cannot be
+// demangled.
+
+inline char*
+Lazy_demangler::get()
+{
+  if (!this->did_demangle_)
+    {
+      this->demangled_ = cplus_demangle(this->symbol_, this->options_);
+      this->did_demangle_ = true;
+    }
+  return this->demangled_;
+}
+
 // The following structs are used within the VersionInfo class as well
 // as in the bison helper functions.  They store the information
 // parsed from the version script.
@@ -1801,6 +1905,9 @@ Version_script_info::get_symbol_version_helper(const char* symbol_name,
                                                bool check_global,
 					       std::string* pversion) const
 {
+  Lazy_demangler cpp_demangled_name(symbol_name, DMGL_ANSI | DMGL_PARAMS);
+  Lazy_demangler java_demangled_name(symbol_name,
+                                     DMGL_ANSI | DMGL_PARAMS | DMGL_JAVA);
   for (size_t j = 0; j < version_trees_.size(); ++j)
     {
       // Is it a global symbol for this version?
@@ -1811,25 +1918,19 @@ Version_script_info::get_symbol_version_helper(const char* symbol_name,
           {
             const char* name_to_match = symbol_name;
             const struct Version_expression& exp = explist->expressions[k];
-            char* demangled_name = NULL;
             if (exp.language == "C++")
               {
-                demangled_name = cplus_demangle(symbol_name,
-                                                DMGL_ANSI | DMGL_PARAMS);
+                name_to_match = cpp_demangled_name.get();
                 // This isn't a C++ symbol.
-                if (demangled_name == NULL)
+                if (name_to_match == NULL)
                   continue;
-                name_to_match = demangled_name;
               }
             else if (exp.language == "Java")
               {
-                demangled_name = cplus_demangle(symbol_name,
-                                                (DMGL_ANSI | DMGL_PARAMS
-						 | DMGL_JAVA));
+                name_to_match = java_demangled_name.get();
                 // This isn't a Java symbol.
-                if (demangled_name == NULL)
+                if (name_to_match == NULL)
                   continue;
-                name_to_match = demangled_name;
               }
             bool matched;
             if (exp.exact_match)
@@ -1837,8 +1938,6 @@ Version_script_info::get_symbol_version_helper(const char* symbol_name,
             else
               matched = fnmatch(exp.pattern.c_str(), name_to_match,
                                 FNM_NOESCAPE) == 0;
-            if (demangled_name != NULL)
-              free(demangled_name);
             if (matched)
 	      {
 		if (pversion != NULL)
@@ -2031,6 +2130,19 @@ yyerror(void* closurev, const char* message)
 	     closure->charpos(), message);
 }
 
+// Called by the bison parser to add an external symbol to the link.
+
+extern "C" void
+script_add_extern(void* closurev, const char* name, size_t length)
+{
+  // We treat exactly like -u NAME.  FIXME: If it seems useful, we
+  // could handle this after the command line has been read, by adding
+  // entries to the symbol table directly.
+  std::string arg("--undefined=");
+  arg.append(name, length);
+  script_parse_option(closurev, arg.c_str(), arg.size());
+}
+
 // Called by the bison parser to add a file to the link.
 
 extern "C" void
@@ -2151,6 +2263,7 @@ script_set_symbol(void* closurev, const char* name, size_t length,
   const bool hidden = hiddeni != 0;
   closure->script_options()->add_symbol_assignment(name, length, value,
 						   provide, hidden);
+  closure->clear_skip_on_incompatible_target();
 }
 
 // Called by the bison parser to add an assertion.
@@ -2161,6 +2274,7 @@ script_add_assertion(void* closurev, Expression* check, const char* message,
 {
   Parser_closure* closure = static_cast<Parser_closure*>(closurev);
   closure->script_options()->add_assertion(check, message, messagelen);
+  closure->clear_skip_on_incompatible_target();
 }
 
 // Called by the bison parser to parse an OPTION.
@@ -2190,6 +2304,46 @@ script_parse_option(void* closurev, const char* option, size_t length)
       // into mutable_option, so we can't free it.  In cases the class
       // does not store such a pointer, this is a memory leak.  Alas. :(
     }
+  closure->clear_skip_on_incompatible_target();
+}
+
+// Called by the bison parser to handle OUTPUT_FORMAT.  OUTPUT_FORMAT
+// takes either one or three arguments.  In the three argument case,
+// the format depends on the endianness option, which we don't
+// currently support (FIXME).  If we see an OUTPUT_FORMAT for the
+// wrong format, then we want to search for a new file.  Returning 0
+// here will cause the parser to immediately abort.
+
+extern "C" int
+script_check_output_format(void* closurev,
+			   const char* default_name, size_t default_length,
+			   const char*, size_t, const char*, size_t)
+{
+  Parser_closure* closure = static_cast<Parser_closure*>(closurev);
+  std::string name(default_name, default_length);
+  Target* target = select_target_by_name(name.c_str());
+  if (target == NULL || !parameters->is_compatible_target(target))
+    {
+      if (closure->skip_on_incompatible_target())
+	{
+	  closure->set_found_incompatible_target();
+	  return 0;
+	}
+      // FIXME: Should we warn about the unknown target?
+    }
+  return 1;
+}
+
+// Called by the bison parser to handle TARGET.
+
+extern "C" void
+script_set_target(void* closurev, const char* target, size_t len)
+{
+  Parser_closure* closure = static_cast<Parser_closure*>(closurev);
+  std::string s(target, len);
+  General_options::Object_format format_enum;
+  format_enum = General_options::string_to_object_format(s.c_str());
+  closure->position_dependent_options().set_format_enum(format_enum);
 }
 
 // Called by the bison parser to handle SEARCH_DIR.  This is handled
@@ -2348,6 +2502,7 @@ script_start_sections(void* closurev)
 {
   Parser_closure* closure = static_cast<Parser_closure*>(closurev);
   closure->script_options()->script_sections()->start_sections();
+  closure->clear_skip_on_incompatible_target();
 }
 
 // Called by the bison parser to finish a SECTIONS clause.
@@ -2540,6 +2695,7 @@ script_add_phdr(void* closurev, const char* name, size_t namelen,
   Script_sections* ss = closure->script_options()->script_sections();
   ss->add_phdr(name, namelen, type, includes_filehdr, includes_phdrs,
 	       is_flags_valid, info->flags, info->load_address);
+  closure->clear_skip_on_incompatible_target();
 }
 
 // Convert a program header string to a type.

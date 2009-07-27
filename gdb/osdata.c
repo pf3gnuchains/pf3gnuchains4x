@@ -1,6 +1,6 @@
 /* Routines for handling XML generic OS data provided by target.
 
-   Copyright (C) 2008 Free Software Foundation, Inc.
+   Copyright (C) 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -278,7 +278,7 @@ get_osdata_column (struct osdata_item *item, const char *name)
   return NULL;
 }
 
-void
+static void
 info_osdata_command (char *type, int from_tty)
 {
   struct osdata *osdata = NULL;

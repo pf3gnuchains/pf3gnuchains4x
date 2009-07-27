@@ -1,6 +1,6 @@
 /* Python/gdb header for generic use in gdb
 
-   Copyright (C) 2008 Free Software Foundation, Inc.
+   Copyright (C) 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -25,5 +25,11 @@
 extern struct value *values_in_python;
 
 void eval_python_from_control_command (struct command_line *);
+
+int apply_val_pretty_printer (struct type *type, const gdb_byte *valaddr,
+			      int embedded_offset, CORE_ADDR address,
+			      struct ui_file *stream, int recurse,
+			      const struct value_print_options *options,
+			      const struct language_defn *language);
 
 #endif /* GDB_PYTHON_H */

@@ -1,6 +1,6 @@
 /* tc-ia64.c -- Assembler for the HP/Intel IA-64 architecture.
-   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008
-   Free Software Foundation, Inc.
+   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
+   2008, 2009   Free Software Foundation, Inc.
    Contributed by David Mosberger-Tang <davidm@hpl.hp.com>
 
    This file is part of GAS, the GNU Assembler.
@@ -50,6 +50,8 @@
 #include "opcode/ia64.h"
 
 #include "elf/ia64.h"
+#include "bfdver.h"
+#include <time.h>
 
 #ifdef HAVE_LIMITS_H
 #include <limits.h>
@@ -834,13 +836,19 @@ set_section (char *name)
 
 /* Map 's' to SHF_IA_64_SHORT.  */
 
-int
+bfd_vma
 ia64_elf_section_letter (int letter, char **ptr_msg)
 {
   if (letter == 's')
     return SHF_IA_64_SHORT;
   else if (letter == 'o')
     return SHF_LINK_ORDER;
+#ifdef TE_VMS
+  else if (letter == 'O')
+    return SHF_IA_64_VMS_OVERLAID;
+  else if (letter == 'g')
+    return SHF_IA_64_VMS_GLOBAL;
+#endif
 
   *ptr_msg = _("Bad .section directive: want a,o,s,w,x,M,S,G,T in string");
   return -1;
@@ -850,7 +858,7 @@ ia64_elf_section_letter (int letter, char **ptr_msg)
 
 flagword
 ia64_elf_section_flags (flagword flags,
-			int attr,
+			bfd_vma attr,
 			int type ATTRIBUTE_UNUSED)
 {
   if (attr & SHF_IA_64_SHORT)
@@ -2809,7 +2817,7 @@ ia64_estimate_size_before_relax (fragS *frag,
 
   /* fr_var carries the max_chars that we created the fragment with.
      We must, of course, have allocated enough memory earlier.  */
-  assert (frag->fr_var >= size);
+  gas_assert (frag->fr_var >= size);
 
   return frag->fr_fix + size;
 }
@@ -2840,7 +2848,7 @@ ia64_convert_frag (fragS *frag)
 
   /* fr_var carries the max_chars that we created the fragment with.
      We must, of course, have allocated enough memory earlier.  */
-  assert (frag->fr_var >= size);
+  gas_assert (frag->fr_var >= size);
 
   /* Initialize the header area. fr_offset is initialized with
      unwind.personality_routine.  */
@@ -5878,7 +5886,7 @@ parse_operands (struct ia64_opcode *idesc)
   char *first_arg = 0, *end, *saved_input_pointer;
   unsigned int sof;
 
-  assert (strlen (idesc->name) <= 128);
+  gas_assert (strlen (idesc->name) <= 128);
 
   strcpy (mnemonic, idesc->name);
   if (idesc->operands[2] == IA64_OPND_SOF
@@ -6202,7 +6210,7 @@ build_insn (struct slot *slot, bfd_vma *insnp)
       else if (slot->opnd[i].X_op == O_big)
 	{
 	  /* This must be the value 0x10000000000000000.  */
-	  assert (idesc->operands[i] == IA64_OPND_IMM8M1U8);
+	  gas_assert (idesc->operands[i] == IA64_OPND_IMM8M1U8);
 	  val = 0;
 	}
       else
@@ -7297,7 +7305,10 @@ void
 ia64_init (int argc ATTRIBUTE_UNUSED, char **argv ATTRIBUTE_UNUSED)
 {
   md.flags = MD_FLAGS_DEFAULT;
+#ifndef TE_VMS
+  /* Don't turn on dependency checking for VMS, doesn't work.  */
   md.detect_dv = 1;
+#endif
   /* FIXME: We should change it to unwind_check_error someday.  */
   md.unwind_check = unwind_check_warning;
   md.hint_b = hint_b_error;
@@ -7333,8 +7344,13 @@ ia64_target_format (void)
       else
 	{
 	  if (md.flags & EF_IA_64_ABI64)
-#ifdef TE_AIX50
+#if defined (TE_AIX50)
 	    return "elf64-ia64-aix-little";
+#elif defined (TE_VMS)
+	  {
+	    md.flags |= EF_IA_64_ARCHVER_1;
+	    return "elf64-ia64-vms";
+	  }
 #else
 	    return "elf64-ia64-little";
 #endif
@@ -11144,7 +11160,7 @@ fix_insn (fixS *fix, const struct ia64_operand *odesc, valueT value)
   else if (odesc - elf64_ia64_operands == IA64_OPND_IMMU62)
     {
       if (value & ~0x3fffffffffffffffULL)
-	err = "integer operand out of range";
+	err = _("integer operand out of range");
       insn[1] = (value >> 21) & 0x1ffffffffffLL;
       insn[2] |= (((value & 0xfffff) << 6) | (((value >> 20) & 0x1) << 36));
     }
@@ -11159,7 +11175,7 @@ fix_insn (fixS *fix, const struct ia64_operand *odesc, valueT value)
     err = (*odesc->insert) (odesc, value, insn + slot);
 
   if (err)
-    as_bad_where (fix->fx_file, fix->fx_line, err);
+    as_bad_where (fix->fx_file, fix->fx_line, "%s", err);
 
   t0 = control_bits | (insn[0] << 5) | (insn[1] << 46);
   t1 = ((insn[1] >> 18) & 0x7fffff) | (insn[2] << 23);
@@ -11575,9 +11591,17 @@ do_alias (const char *alias, void *value)
   symbolS *sym = symbol_find (h->name);
 
   if (sym == NULL)
-    as_warn_where (h->file, h->line,
-		   _("symbol `%s' aliased to `%s' is not used"),
-		   h->name, alias);
+    {
+#ifdef TE_VMS
+      /* Uses .alias extensively to alias CRTL functions to same with
+	 decc$ prefix. Sometimes function gets optimized away and a
+	 warning results, which should be suppressed.  */
+      if (strncmp (alias, "decc$", 5) != 0)
+#endif
+	as_warn_where (h->file, h->line,
+		       _("symbol `%s' aliased to `%s' is not used"),
+		       h->name, alias);
+    }
     else
       S_SET_NAME (sym, (char *) alias);
 }
@@ -11610,3 +11634,138 @@ ia64_frob_file (void)
 {
   hash_traverse (secalias_hash, do_secalias);
 }
+
+#ifdef TE_VMS
+#define NT_VMS_MHD 1
+#define NT_VMS_LNM 2
+
+/* Integrity VMS 8.x identifies it's ELF modules with a standard ELF
+   .note section.  */
+
+/* Manufacture a VMS-like time string.  */
+static void
+get_vms_time (char *Now)
+{
+  char *pnt;
+  time_t timeb;
+
+  time (&timeb);
+  pnt = ctime (&timeb);
+  pnt[3] = 0;
+  pnt[7] = 0;
+  pnt[10] = 0;
+  pnt[16] = 0;
+  pnt[24] = 0;
+  sprintf (Now, "%2s-%3s-%s %s", pnt + 8, pnt + 4, pnt + 20, pnt + 11);
+}
+
+void
+ia64_vms_note (void)
+{
+  char *p;
+  asection *seg = now_seg;
+  subsegT subseg = now_subseg;
+  Elf_Internal_Note i_note;
+  asection *secp = NULL;
+  char *basec, *bname;
+  char buf [256];
+  symbolS *sym;
+
+  /* Create the .note section.  */
+
+  secp = subseg_new (".note", 0);
+  bfd_set_section_flags (stdoutput,
+			 secp,
+			 SEC_HAS_CONTENTS | SEC_READONLY);
+
+  /* Module header note.  */
+  basec = xstrdup (out_file_name);
+  bname = basename (basec);
+  if ((p = strrchr (bname, '.')))
+    *p = '\0';
+
+  i_note.namesz = 8;
+  i_note.descsz = 40 + strlen (bname);
+  i_note.type = NT_VMS_MHD;
+
+  p = frag_more (sizeof (i_note.namesz));
+  number_to_chars_littleendian (p, i_note.namesz, 8);
+
+  p = frag_more (sizeof (i_note.descsz));
+  number_to_chars_littleendian (p, i_note.descsz, 8);
+
+  p = frag_more (sizeof (i_note.type));
+  number_to_chars_littleendian (p, i_note.type, 8);
+
+  p = frag_more (8);
+  strcpy (p, "IPF/VMS");
+
+  get_vms_time (buf);
+  p = frag_more (17);
+  strcpy (p, buf);
+
+  p = frag_more (17);
+  strcpy (p, "24-FEB-2005 15:00");
+
+  p = frag_more (strlen (bname) + 1);
+  strcpy (p, bname);
+
+  p = frag_more (5);
+  strcpy (p, "V1.0");
+
+  frag_align (3, 0, 0);
+
+  /* Language processor name note.  */
+  sprintf (buf, "GNU assembler version %s (%s) using BFD version %s",
+	   VERSION, TARGET_ALIAS, BFD_VERSION_STRING);
+
+  i_note.namesz = 8;
+  i_note.descsz = 1 + strlen (buf);
+  i_note.type = NT_VMS_LNM;
+
+  p = frag_more (sizeof (i_note.namesz));
+  number_to_chars_littleendian (p, i_note.namesz, 8);
+
+  p = frag_more (sizeof (i_note.descsz));
+  number_to_chars_littleendian (p, i_note.descsz, 8);
+
+  p = frag_more (sizeof (i_note.type));
+  number_to_chars_littleendian (p, i_note.type, 8);
+
+  p = frag_more (8);
+  strcpy (p, "IPF/VMS");
+
+  p = frag_more (strlen (buf) + 1);
+  strcpy (p, buf);
+
+  frag_align (3, 0, 0);
+
+  secp = subseg_new (".vms_display_name_info", 0);
+  bfd_set_section_flags (stdoutput,
+			 secp,
+			 SEC_HAS_CONTENTS | SEC_READONLY);
+
+  /* This symbol should be passed on the command line and be variable
+     according to language.  */
+  sym = symbol_new ("__gnat_vms_display_name@gnat_demangler_rtl",
+		    absolute_section, 0, &zero_address_frag);
+  symbol_table_insert (sym);
+  symbol_get_bfdsym (sym)->flags |= BSF_DEBUGGING | BSF_DYNAMIC;
+
+  p = frag_more (4);
+  /* Format 3 of VMS demangler Spec.  */
+  number_to_chars_littleendian (p, 3, 4);
+
+  p = frag_more (4);
+  /* Place holder for symbol table index of above symbol.  */
+  number_to_chars_littleendian (p, -1, 4);
+
+  frag_align (3, 0, 0);
+
+  /* We probably can't restore the current segment, for there likely
+     isn't one yet...  */
+  if (seg && subseg)
+    subseg_set (seg, subseg);
+}
+
+#endif /* TE_VMS */

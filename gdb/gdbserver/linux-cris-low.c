@@ -1,6 +1,6 @@
 /* GNU/Linux/CRIS specific low level interface, for the remote server for GDB.
    Copyright (C) 1995, 1996, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2007, 2008 Free Software Foundation, Inc.
+   2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -38,7 +38,7 @@ static int cris_regmap[] = {
   -1, 17*4, -1, 16*4,
   -1, -1, -1, 18*4,
   -1, 17*4, -1, -1
-  
+
 };
 
 static int
@@ -46,7 +46,7 @@ cris_cannot_store_register (int regno)
 {
   if (cris_regmap[regno] == -1)
     return 1;
-  
+
   return (regno >= cris_num_regs);
 }
 

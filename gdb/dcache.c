@@ -1,7 +1,7 @@
 /* Caching code for GDB, the GNU debugger.
 
    Copyright (C) 1992, 1993, 1995, 1996, 1998, 1999, 2000, 2001, 2003, 2007,
-   2008 Free Software Foundation, Inc.
+   2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -569,7 +569,7 @@ dcache_info (char *exp, int tty)
 	{
 	  int j;
 	  printf_filtered (_("Line at %s, referenced %d times\n"),
-			   paddr (p->addr), p->refs);
+			   paddress (target_gdbarch, p->addr), p->refs);
 
 	  for (j = 0; j < LINE_SIZE; j++)
 	    printf_filtered ("%02x", p->data[j] & 0xFF);

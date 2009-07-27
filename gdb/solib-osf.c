@@ -1,7 +1,7 @@
 /* Handle OSF/1, Digital UNIX, and Tru64 shared libraries
    for GDB, the GNU Debugger.
-   Copyright (C) 1993, 1994, 1995, 1996, 1998, 1999, 2000, 2001, 2007, 2008
-   Free Software Foundation, Inc.
+   Copyright (C) 1993, 1994, 1995, 1996, 1998, 1999, 2000, 2001, 2007, 2008,
+   2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -234,7 +234,7 @@ fetch_sec_names (struct lm_info *lmi)
 
 static void
 osf_relocate_section_addresses (struct so_list *so,
-				struct section_table *sec)
+				struct target_section *sec)
 {
   struct lm_info *lmi;
   struct lm_sec lms_key, *lms;
@@ -424,8 +424,8 @@ init_so (struct so_list *so, char *name, int isloader, int nsecs)
   memcpy (so->so_name, so->so_original_name, namelen + 1);
 
   /* Allocate section space.  */
-  so->lm_info = xmalloc ((unsigned) &(((struct lm_info *)0)->secs) +
-			 nsecs * sizeof *so->lm_info);
+  so->lm_info = xmalloc (sizeof (struct lm_info)
+                         + (nsecs - 1) * sizeof (struct lm_sec));
   so->lm_info->isloader = isloader;
   so->lm_info->nsecs = nsecs;
   for (i = 0; i < nsecs; i++)
@@ -584,7 +584,7 @@ osf_open_symbol_file_object (void *from_ttyp)
   int found;
 
   if (symfile_objfile)
-    if (!query ("Attempt to reload symbols from process? "))
+    if (!query (_("Attempt to reload symbols from process? ")))
       return 0;
 
   /* The first module after /sbin/loader is the main program.  */
@@ -631,6 +631,7 @@ _initialize_osf_solib (void)
   osf_so_ops.current_sos = osf_current_sos;
   osf_so_ops.open_symbol_file_object = osf_open_symbol_file_object;
   osf_so_ops.in_dynsym_resolve_code = osf_in_dynsym_resolve_code;
+  osf_so_ops.bfd_open = solib_bfd_open;
 
   /* FIXME: Don't do this here.  *_gdbarch_init() should set so_ops. */
   current_target_so_ops = &osf_so_ops;

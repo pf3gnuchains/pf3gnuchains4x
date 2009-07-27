@@ -34,6 +34,7 @@ struct dwarf2_line_info {
   unsigned int column;
   unsigned int isa;
   unsigned int flags;
+  unsigned int discriminator;
 };
 
 /* Implements the .file FILENO "FILENAME" directive.  FILENO can be 0
@@ -86,7 +87,7 @@ bfd_boolean dwarf2_loc_directive_seen;
 /* True when we're supposed to set the basic block mark whenever a label
    is seen.  Unless the target is doing Something Weird, just call 
    dwarf2_emit_label.  */
-bfd_boolean dwarf2_loc_mark_labels;
+extern bfd_boolean dwarf2_loc_mark_labels;
 
 extern void dwarf2_finish (void);
 

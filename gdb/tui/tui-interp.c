@@ -1,6 +1,6 @@
 /* TUI Interpreter definitions for GDB, the GNU debugger.
 
-   Copyright (C) 2003, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2003, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -189,6 +189,9 @@ tui_command_loop (void *data)
      to listen to.  So we exit GDB.  */
   return;
 }
+
+/* Provide a prototype to silence -Wmissing-prototypes.  */
+extern initialize_file_ftype _initialize_tui_interp;
 
 void
 _initialize_tui_interp (void)

@@ -1,6 +1,6 @@
 /* This file is tc-arm.h
    Copyright 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003,
-   2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+   2004, 2005, 2006, 2007, 2008, 2009  Free Software Foundation, Inc.
    Contributed by Richard Earnshaw (rwe@pegasus.esprit.ec.org)
 	Modified by David Taylor (dtaylor@armltd.co.uk)
 
@@ -82,7 +82,7 @@ struct fix;
 #define TC_FORCE_RELOCATION(FIX) arm_force_relocation (FIX)
 
 #define md_relax_frag(segment, fragp, stretch) \
-  arm_relax_frag(segment, fragp, stretch)
+  arm_relax_frag (segment, fragp, stretch)
 extern int arm_relax_frag (asection *, struct frag *, long);
 
 #define md_optimize_expr(l,o,r)		arm_optimize_expr (l, o, r)
@@ -123,18 +123,31 @@ bfd_boolean arm_is_eabi (void);
 
 #define ARM_IS_THUMB(s)		(ARM_GET_FLAG (s) & ARM_FLAG_THUMB)
 #define ARM_IS_INTERWORK(s)	(ARM_GET_FLAG (s) & ARM_FLAG_INTERWORK)
+
 #ifdef OBJ_ELF
 
 /* For ELF objects THUMB_IS_FUNC is inferred from
-   ARM_IS_TUMB and the function type.  */
-#define THUMB_IS_FUNC(s) \
-  ((arm_is_eabi () \
-    && (ARM_IS_THUMB (s)) \
-    && (symbol_get_bfdsym (s)->flags & BSF_FUNCTION)) \
-   || (ARM_GET_FLAG (s) & THUMB_FLAG_FUNC))
+   ARM_IS_THUMB and the function type.  */
+#define THUMB_IS_FUNC(s)					\
+  ((s) != NULL							\
+   && ((arm_is_eabi ()						\
+	&& (ARM_IS_THUMB (s))					\
+	&& (symbol_get_bfdsym (s)->flags & BSF_FUNCTION))	\
+       || (ARM_GET_FLAG (s) & THUMB_FLAG_FUNC)))
+
+#define ARM_IS_FUNC(s)					\
+  (((s) != NULL						\
+    && arm_is_eabi ()					\
+    && !(ARM_IS_THUMB (s))				\
+    /* && !(THUMB_FLAG_FUNC & ARM_GET_FLAG (s)) \ */	\
+    && (symbol_get_bfdsym (s)->flags & BSF_FUNCTION)))
+
 
 #else
-#define THUMB_IS_FUNC(s)	(ARM_GET_FLAG (s) & THUMB_FLAG_FUNC)
+
+#define THUMB_IS_FUNC(s)	((s) && ARM_GET_FLAG (s) & THUMB_FLAG_FUNC)
+#define ARM_IS_FUNC(s)          (!THUMB_IS_FUNC (s) \
+				 && (s) && (symbol_get_bfdsym (s)->flags & BSF_FUNCTION))
 #endif
 
 #define ARM_SET_THUMB(s,t)      ((t) ? ARM_SET_FLAG (s, ARM_FLAG_THUMB)     : ARM_RESET_FLAG (s, ARM_FLAG_THUMB))
@@ -142,6 +155,7 @@ bfd_boolean arm_is_eabi (void);
 #define THUMB_SET_FUNC(s,t)     ((t) ? ARM_SET_FLAG (s, THUMB_FLAG_FUNC)    : ARM_RESET_FLAG (s, THUMB_FLAG_FUNC))
 
 void arm_copy_symbol_attributes (symbolS *, symbolS *);
+
 #ifndef TC_COPY_SYMBOL_ATTRIBUTES
 #define TC_COPY_SYMBOL_ATTRIBUTES(DEST, SRC) \
   (arm_copy_symbol_attributes (DEST, SRC))
@@ -179,7 +193,8 @@ void arm_copy_symbol_attributes (symbolS *, symbolS *);
 
 #define TC_CONS_FIX_NEW cons_fix_new_arm
 
-#define MAX_MEM_FOR_RS_ALIGN_CODE 31
+#define MAX_MEM_ALIGNMENT_BYTES    6
+#define MAX_MEM_FOR_RS_ALIGN_CODE ((1 << MAX_MEM_ALIGNMENT_BYTES) - 1)
 
 /* For frags in code sections we need to record whether they contain
    ARM code or THUMB code.  This is that if they have to be aligned,
@@ -202,6 +217,21 @@ void arm_copy_symbol_attributes (symbolS *, symbolS *);
 
 /* Registers are generally saved at negative offsets to the CFA.  */
 #define DWARF2_CIE_DATA_ALIGNMENT     (-4)
+
+/* State variables for IT block handling.  */
+enum it_state
+{
+  OUTSIDE_IT_BLOCK, MANUAL_IT_BLOCK, AUTOMATIC_IT_BLOCK
+};
+struct current_it
+{
+  int mask;
+  enum it_state state;
+  int cc;
+  int block_length;
+  char *insn;
+  int state_handled;
+};
 
 #ifdef OBJ_ELF
 # define obj_frob_symbol(sym, punt)	armelf_frob_symbol ((sym), & (punt))
@@ -230,6 +260,7 @@ struct arm_segment_info_type
 {
   enum mstate mapstate;
   unsigned int marked_pr_dependency;
+  struct current_it current_it;
 };
 
 /* We want .cfi_* pseudo-ops for generating unwind info.  */
@@ -247,10 +278,17 @@ struct arm_segment_info_type
 
 # define EXTERN_FORCE_RELOC 			1
 # define tc_fix_adjustable(FIX) 		arm_fix_adjustable (FIX)
+#endif
+
+#ifdef OBJ_ELF
+/* Values passed to md_apply_fix don't include the symbol value.  */
+# define MD_APPLY_SYM_VALUE(FIX) 		arm_apply_sym_value (FIX)
+#endif
+
+#ifdef OBJ_COFF
+# define TC_VALIDATE_FIX(FIX, SEGTYPE, LABEL)	arm_validate_fix (FIX)
 /* Values passed to md_apply_fix don't include the symbol value.  */
 # define MD_APPLY_SYM_VALUE(FIX) 		0
-# define TC_VALIDATE_FIX(FIX, SEGTYPE, LABEL)	arm_validate_fix (FIX)
-
 #endif
 
 #define MD_PCREL_FROM_SECTION(F,S) md_pcrel_from_section(F,S)
@@ -284,3 +322,9 @@ extern void tc_arm_frame_initial_instructions (void);
 void tc_pe_dwarf2_emit_offset (symbolS *, unsigned int);
 
 #endif /* TE_PE */
+
+#ifdef OBJ_ELF
+#define CONVERT_SYMBOLIC_ATTRIBUTE(name) arm_convert_symbolic_attribute (name)
+extern int arm_convert_symbolic_attribute (const char *);
+extern int arm_apply_sym_value (struct fix *);
+#endif

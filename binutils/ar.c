@@ -1,6 +1,6 @@
 /* ar.c - Archive modify and extract.
    Copyright 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000,
-   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008
+   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GNU Binutils.
@@ -37,6 +37,7 @@
 #include "arsup.h"
 #include "filenames.h"
 #include "binemul.h"
+#include "plugin.h"
 #include <sys/stat.h>
 
 #ifdef __GO32___
@@ -98,6 +99,11 @@ int newer_only = 0;
    However, for POSIX.2 compliance the default is now to write a symbol table
    if any of the members are object files.  */
 int write_armap = 0;
+
+/* Operate in deterministic mode: write zero for timestamps, uids,
+   and gids for archive members and the archive symbol table, and write
+   consistent file modes.  */
+int deterministic = 0;
 
 /* Nonzero means it's the name of an existing member; position new or moved
    files with respect to this one.  */
@@ -225,8 +231,14 @@ usage (int help)
   if (! is_ranlib)
     {
       /* xgettext:c-format */
-      fprintf (s, _("Usage: %s [emulation options] [-]{dmpqrstx}[abcfilNoPsSuvV] [member-name] [count] archive-file file...\n"),
-	       program_name);
+      const char * command_line =
+#if BFD_SUPPORTS_PLUGINS
+	_("Usage: %s [emulation options] [--plugin <name>] [-]{dmpqrstx}[abcfilNoPsSuvV] [member-name] [count] archive-file file...\n");
+#else
+	_("Usage: %s [emulation options] [-]{dmpqrstx}[abcfilNoPsSuvV] [member-name] [count] archive-file file...\n");
+#endif
+      fprintf (s, command_line, program_name);
+
       /* xgettext:c-format */
       fprintf (s, _("       %s -M [<mri-script]\n"), program_name);
       fprintf (s, _(" commands:\n"));
@@ -240,6 +252,7 @@ usage (int help)
       fprintf (s, _(" command specific modifiers:\n"));
       fprintf (s, _("  [a]          - put file(s) after [member-name]\n"));
       fprintf (s, _("  [b]          - put file(s) before [member-name] (same as [i])\n"));
+      fprintf (s, _("  [D]          - use zero for timestamps and uids/gids\n"));
       fprintf (s, _("  [N]          - use instance [count] of name\n"));
       fprintf (s, _("  [f]          - truncate inserted file names\n"));
       fprintf (s, _("  [P]          - use full path names when matching\n"));
@@ -253,7 +266,10 @@ usage (int help)
       fprintf (s, _("  [v]          - be verbose\n"));
       fprintf (s, _("  [V]          - display the version number\n"));
       fprintf (s, _("  @<file>      - read options from <file>\n"));
-
+#if BFD_SUPPORTS_PLUGINS
+      fprintf (s, _(" optional:\n"));
+      fprintf (s, _("  --plugin <p> - load the specified plugin\n"));
+#endif
       ar_emul_usage (s);
     }
   else
@@ -262,7 +278,12 @@ usage (int help)
       fprintf (s, _("Usage: %s [options] archive\n"), program_name);
       fprintf (s, _(" Generate an index to speed access to archives\n"));
       fprintf (s, _(" The options are:\n\
-  @<file>                      Read options from <file>\n\
+  @<file>                      Read options from <file>\n"));
+#if BFD_SUPPORTS_PLUGINS
+      fprintf (s, _("\
+  --plugin <name>              Load the specified plugin\n"));
+#endif
+      fprintf (s, _("\
   -t                           Update the archive's symbol map timestamp\n\
   -h --help                    Print this help message\n\
   -v --version                 Print version information\n"));
@@ -373,6 +394,9 @@ main (int argc, char **argv)
 
   program_name = argv[0];
   xmalloc_set_program_name (program_name);
+#if BFD_SUPPORTS_PLUGINS
+  bfd_plugin_set_program_name (program_name);
+#endif
 
   expandargv (&argc, &argv);
 
@@ -474,6 +498,22 @@ main (int argc, char **argv)
   arg_index = 1;
   arg_ptr = argv[arg_index];
 
+  if (strcmp (arg_ptr, "--plugin") == 0)
+    {
+#if BFD_SUPPORTS_PLUGINS
+      if (argc < 4)
+	usage (1);
+
+      bfd_plugin_set_plugin (argv[2]);
+
+      arg_index += 2;
+      arg_ptr = argv[arg_index];
+#else
+      fprintf (stderr, _("sorry - this program has been built without plugin support\n"));
+      xexit (1);
+#endif
+    }
+
   if (*arg_ptr == '-')
     {
       /* When the first option starts with '-' we support POSIX-compatible
@@ -572,6 +612,9 @@ main (int argc, char **argv)
 	    case 'T':
 	      make_thin_archive = TRUE;
 	      break;
+	    case 'D':
+	      deterministic = TRUE;
+	      break;
 	    default:
 	      /* xgettext:c-format */
 	      non_fatal (_("illegal option -- %c"), c);
@@ -621,6 +664,9 @@ main (int argc, char **argv)
 
       if (newer_only && operation != replace)
 	fatal (_("`u' is only meaningful with the `r' option."));
+
+      if (newer_only && deterministic)
+	fatal (_("`u' is not meaningful with the `D' option."));
 
       if (postype != pos_default)
 	posname = argv[arg_index++];
@@ -971,6 +1017,9 @@ write_archive (bfd *iarch)
          archives.  */
       obfd->flags |= BFD_TRADITIONAL_FORMAT;
     }
+
+  if (deterministic)
+    obfd->flags |= BFD_DETERMINISTIC_OUTPUT;
 
   if (make_thin_archive || bfd_is_thin_archive (iarch))
     bfd_is_thin_archive (obfd) = 1;

@@ -1,6 +1,6 @@
 // plugin.h -- plugin manager for gold      -*- C++ -*-
 
-// Copyright 2008 Free Software Foundation, Inc.
+// Copyright 2008, 2009 Free Software Foundation, Inc.
 // Written by Cary Coutant <ccoutant@google.com>.
 
 // This file is part of gold.
@@ -121,9 +121,10 @@ class Plugin_manager
  public:
   Plugin_manager(const General_options& options)
     : plugins_(), objects_(), deferred_layout_objects_(), input_file_(NULL),
-      plugin_input_file_(), in_replacement_phase_(false), options_(options),
-      workqueue_(NULL), input_objects_(NULL), symtab_(NULL), layout_(NULL),
-      dirpath_(NULL), mapfile_(NULL), this_blocker_(NULL)
+      plugin_input_file_(), in_replacement_phase_(false), cleanup_done_(false),
+      options_(options), workqueue_(NULL), task_(NULL), input_objects_(NULL),
+      symtab_(NULL), layout_(NULL), dirpath_(NULL), mapfile_(NULL),
+      this_blocker_(NULL)
   { this->current_ = plugins_.end(); }
 
   ~Plugin_manager();
@@ -151,13 +152,18 @@ class Plugin_manager
 
   // Call the all-symbols-read handlers.
   void
-  all_symbols_read(Workqueue* workqueue, Input_objects* input_objects,
-                   Symbol_table* symtab, Layout* layout, Dirsearch* dirpath,
-                   Mapfile* mapfile, Task_token** last_blocker);
+  all_symbols_read(Workqueue* workqueue, Task* task,
+                   Input_objects* input_objects, Symbol_table* symtab,
+                   Layout* layout, Dirsearch* dirpath, Mapfile* mapfile,
+                   Task_token** last_blocker);
 
-  // Run deferred layout and call the cleanup handlers.
+  // Run deferred layout.
   void
-  finish();
+  layout_deferred_objects();
+
+  // Call the cleanup handlers.
+  void
+  cleanup();
 
   // Register a claim-file handler.
   void
@@ -210,6 +216,15 @@ class Plugin_manager
   add_deferred_layout_object(Relobj* obj)
   { this->deferred_layout_objects_.push_back(obj); }
 
+  // Get input file information with an open (possibly re-opened)
+  // file descriptor.
+  ld_plugin_status
+  get_input_file(unsigned int handle, struct ld_plugin_input_file *file);
+
+  // Release an input file.
+  ld_plugin_status
+  release_input_file(unsigned int handle);
+
   // Add a new input file.
   ld_plugin_status
   add_input_file(char *pathname);
@@ -248,8 +263,12 @@ class Plugin_manager
   // placeholder symbols from the Pluginobj objects.
   bool in_replacement_phase_;
 
+  // TRUE if the cleanup handlers have been called.
+  bool cleanup_done_;
+
   const General_options& options_;
   Workqueue* workqueue_;
+  Task* task_;
   Input_objects* input_objects_;
   Symbol_table* symtab_;
   Layout* layout_;
@@ -268,16 +287,12 @@ class Pluginobj : public Object
 
   typedef std::vector<Symbol*> Symbols;
 
-  Pluginobj(const std::string& name, Input_file* input_file, off_t offset);
+  Pluginobj(const std::string& name, Input_file* input_file, off_t offset,
+            off_t filesize);
 
   // Fill in the symbol resolution status for the given plugin symbols.
   ld_plugin_status
   get_symbol_resolution_info(int nsyms, ld_plugin_symbol* syms) const;
-
-  // Add symbol information to the global symbol table.
-  void
-  add_symbols(Symbol_table* symtab, Layout* layout)
-  { this->do_add_symbols(symtab, layout); }
 
   // Store the incoming symbols from the plugin for later processing.
   void
@@ -292,16 +307,26 @@ class Pluginobj : public Object
   bool
   include_comdat_group(std::string comdat_key, Layout* layout);
 
+  // Return the filename.
+  const std::string&
+  filename() const
+  { return this->input_file()->filename(); }
+
+  // Return the file descriptor.
+  int
+  descriptor()
+  { return this->input_file()->file().descriptor(); }
+
+  // Return the size of the file or archive member.
+  off_t
+  filesize()
+  { return this->filesize_; }
+
  protected:
   // Return TRUE if this is an object claimed by a plugin.
   virtual Pluginobj*
   do_pluginobj()
   { return this; }
-
-  // Add symbol information to the global symbol table--implemented by
-  // child class.
-  virtual void
-  do_add_symbols(Symbol_table*, Layout*) = 0;
 
   // The number of symbols provided by the plugin.
   int nsyms_;
@@ -313,6 +338,8 @@ class Pluginobj : public Object
   Symbols symbols_;
 
  private:
+  // Size of the file (or archive member).
+  off_t filesize_;
   // Map a comdat key symbol to a boolean indicating whether the comdat
   // group in this object with that key should be kept.
   typedef Unordered_map<std::string, bool> Comdat_map;
@@ -326,7 +353,7 @@ class Sized_pluginobj : public Pluginobj
 {
  public:
   Sized_pluginobj(const std::string& name, Input_file* input_file,
-                  off_t offset);
+                  off_t offset, off_t filesize);
 
   // Read the symbols.
   void
@@ -338,10 +365,7 @@ class Sized_pluginobj : public Pluginobj
 
   // Add the symbols to the symbol table.
   void
-  do_add_symbols(Symbol_table*, Read_symbols_data*);
-
-  void
-  do_add_symbols(Symbol_table*, Layout*);
+  do_add_symbols(Symbol_table*, Read_symbols_data*, Layout*);
 
   // Get the size of a section.
   uint64_t
@@ -394,50 +418,6 @@ class Sized_pluginobj : public Pluginobj
  protected:
 
  private:
-};
-
-// This Task handles adding the symbols to the symbol table.  These
-// tasks must be run in the same order as the arguments appear on the
-// command line.
-
-class Add_plugin_symbols : public Task
-{
- public:
-  // THIS_BLOCKER is used to prevent this task from running before the
-  // one for the previous input file.  NEXT_BLOCKER is used to prevent
-  // the next task from running.
-  Add_plugin_symbols(Symbol_table* symtab,
-	             Layout* layout,
-	             Pluginobj* obj,
-	             Task_token* this_blocker,
-	             Task_token* next_blocker)
-    : symtab_(symtab), layout_(layout), obj_(obj),
-      this_blocker_(this_blocker), next_blocker_(next_blocker)
-  { }
-
-  ~Add_plugin_symbols();
-
-  // The standard Task methods.
-
-  Task_token*
-  is_runnable();
-
-  void
-  locks(Task_locker*);
-
-  void
-  run(Workqueue*);
-
-  std::string
-  get_name() const
-  { return "Add_plugin_symbols " + this->obj_->name(); }
-
-private:
-  Symbol_table* symtab_;
-  Layout* layout_;
-  Pluginobj* obj_;
-  Task_token* this_blocker_;
-  Task_token* next_blocker_;
 };
 
 // This Task handles handles the "all symbols read" event hook.

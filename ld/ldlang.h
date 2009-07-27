@@ -1,6 +1,6 @@
 /* ldlang.h - linker command language support
    Copyright 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000,
-   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008
+   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of the GNU Binutils.
@@ -43,13 +43,19 @@ struct _fill_type
 
 typedef struct statement_list
 {
-  union lang_statement_union *head;
-  union lang_statement_union **tail;
+  union lang_statement_union *  head;
+  union lang_statement_union ** tail;
 } lang_statement_list_type;
+
+typedef struct memory_region_name_struct
+{
+  const char * name;
+  struct memory_region_name_struct * next;
+} lang_memory_region_name;
 
 typedef struct memory_region_struct
 {
-  char *name;
+  lang_memory_region_name name_list;
   struct memory_region_struct *next;
   bfd_vma origin;
   bfd_size_type length;
@@ -429,7 +435,8 @@ struct lang_definedness_hash_entry
 
 /* Used by place_orphan to keep track of orphan sections and statements.  */
 
-struct orphan_save {
+struct orphan_save
+{
   const char *name;
   flagword flags;
   lang_output_section_statement_type *os;
@@ -457,10 +464,10 @@ extern void lang_init
   (void);
 extern void lang_finish
   (void);
-extern lang_memory_region_type *lang_memory_region_lookup
-  (const char *const, bfd_boolean);
-extern lang_memory_region_type *lang_memory_region_default
-  (asection *);
+extern lang_memory_region_type * lang_memory_region_lookup
+  (const char * const, bfd_boolean);
+extern void lang_memory_region_alias
+  (const char *, const char *);
 extern void lang_map
   (void);
 extern void lang_set_flags
@@ -550,6 +557,10 @@ extern void lang_add_output_format
   (const char *, const char *, const char *, int);
 extern void lang_list_init
   (lang_statement_list_type *);
+extern void push_stat_ptr
+  (lang_statement_list_type *);
+extern void pop_stat_ptr
+  (void);
 extern void lang_add_data
   (int type, union etree_union *);
 extern void lang_add_reloc

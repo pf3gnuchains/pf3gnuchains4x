@@ -1,6 +1,7 @@
 /* Target-dependent code for GNU/Linux SPARC.
 
-   Copyright (C) 2003, 2004, 2005, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2003, 2004, 2005, 2007, 2008, 2009
+   Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -138,6 +139,9 @@ sparc32_linux_step_trap (struct frame_info *frame, unsigned long insn)
       /* __NR_rt_sigreturn is 101 and __NR_sigreturn is 216  */
       if (sc_num == 101 || sc_num == 216)
 	{
+	  struct gdbarch *gdbarch = get_frame_arch (frame);
+	  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
+
 	  ULONGEST sp, pc_offset;
 
 	  sp = get_frame_register_unsigned (frame, SPARC_SP_REGNUM);
@@ -157,7 +161,7 @@ sparc32_linux_step_trap (struct frame_info *frame, unsigned long insn)
 	  if (sc_num == 101)
 	    pc_offset += 128;
 
-	  return read_memory_unsigned_integer (sp + pc_offset, 4);
+	  return read_memory_unsigned_integer (sp + pc_offset, 4, byte_order);
 	}
     }
 

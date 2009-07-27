@@ -30,8 +30,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+extern ssize_t pread (int, void *, size_t, off_t);
+
 ssize_t
-pread(int fd, void* buf, size_t count, off_t offset)
+pread (int fd, void *buf, size_t count, off_t offset)
 {
   if (lseek(fd, offset, SEEK_SET) != offset)
     return -1;

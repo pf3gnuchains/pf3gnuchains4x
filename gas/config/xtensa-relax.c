@@ -525,8 +525,8 @@ append_transition (TransitionTable *tt,
   TransitionList *tl = (TransitionList *) xmalloc (sizeof (TransitionList));
   TransitionList *prev;
   TransitionList **t_p;
-  assert (tt != NULL);
-  assert (opcode < tt->num_opcodes);
+  gas_assert (tt != NULL);
+  gas_assert (opcode < tt->num_opcodes);
 
   prev = tt->table[opcode];
   tl->rule = t;
@@ -899,7 +899,7 @@ op_is_constant (const opname_map_e *m1)
 static unsigned
 op_get_constant (const opname_map_e *m1)
 {
-  assert (m1->operand_name == NULL);
+  gas_assert (m1->operand_name == NULL);
   return m1->constant_value;
 }
 
@@ -1543,9 +1543,12 @@ transition_applies (insn_pattern *initial_insn,
 	  else if (!strcmp (option_name, "Loops"))
 	    option_available = (XCHAL_HAVE_LOOPS == 1);
 	  else if (!strcmp (option_name, "WideBranches"))
-	    option_available = (XCHAL_HAVE_WIDE_BRANCHES == 1);
+	    option_available 
+	      = (XCHAL_HAVE_WIDE_BRANCHES == 1 && produce_flix == FLIX_ALL);
 	  else if (!strcmp (option_name, "PredictedBranches"))
-	    option_available = (XCHAL_HAVE_PREDICTED_BRANCHES == 1);
+	    option_available
+	      = (XCHAL_HAVE_PREDICTED_BRANCHES == 1
+		 && produce_flix == FLIX_ALL);
 	  else if (!strcmp (option_name, "Booleans"))
 	    option_available = (XCHAL_HAVE_BOOLEANS == 1);
 	  else

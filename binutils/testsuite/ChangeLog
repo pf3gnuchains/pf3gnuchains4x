@@ -1,3 +1,75 @@
+2009-07-16  Dave Korn  <dave.korn.cygwin@gmail.com>
+	    H.J. Lu  <hongjiu.lu@intel.com>
+
+	* binutils-all/objcopy.exp: Run testranges and testranges-ia64
+	for ELF targets only.
+
+2009-07-16  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* binutils-all/objcopy.exp; Run testranges-ia64.
+
+	* binutils-all/testranges.d: Don't run for ia64.
+
+	* binutils-all/testranges-ia64.d: New.
+	* binutils-all/testranges-ia64.s: Likewise.
+
+2009-07-14  Jan Kratochvil  <jan.kratochvil@redhat.com>
+
+	* binutils-all/objcopy.exp (testranges): New test.
+	* binutils-all/testranges.d, binutils-all/testranges.s: New files.
+
+2009-06-25  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* binutils-all/objcopy.exp: Move XFAIL from objcopy_test to
+	copy_executable.
+
+2009-06-25  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* binutils-all/objcopy.exp: Always treat objcopy_test as XFAIL on
+	cygwin.
+
+2009-04-16  Alan Modra  <amodra@bigpond.net.au>
+
+	* binutils-all/localize-hidden-1.s: Use "==" instead of ".set".
+	* binutils-all/localize-hidden-2.s: Likewise.
+
+2009-04-02  Dave Korn  <dave.korn.cygwin@gmail.com>
+
+	* inutils-all/objcopy.exp (strip_executable):  Delete remote dest
+	file before downloading.
+	(strip_executable_with_saving_a_symbol):  Likewise.
+	(keep_debug_symbols_and_test_copy):  Likewise.
+
+2009-03-11  Joseph Myers  <joseph@codesourcery.com>
+
+	* binutils-all/objdump.W, binutils-all/objdump.s: Don't match
+	literal "tmpdir/" in expected output.
+
+2009-03-11  Chris Demetriou  <cgd@google.com>
+
+	* binutils-all/ar.exp (deterministic_archive): New test.
+
+2009-03-09  H.J. Lu  <hongjiu.lu@intel.com>
+
+	PR binutils/9933
+	* binutils-all/copy-4.d: New.
+
+	* binutils-all/objcopy.exp: Run copy-4.
+
+2009-03-03  John David Anglin  <dave.anglin@nrc-cnrc.gc.ca>
+
+	* config/hppa.sed: Fix spelling.
+
+2009-03-02  John David Anglin  <dave.anglin@nrc-cnrc.gc.ca>
+
+	* binutils-all/localize-hidden-1.s: Change .equ to .set.
+	* binutils-all/localize-hidden-2.s: Likewise.
+
+2009-01-29  Nick Clifton  <nickc@redhat.com>
+
+	* binutils-all/objdump.W: Do not assume that high and low PC
+	addresses will have been computed.
+
 2008-10-06  Tom Tromey  <tromey@redhat.com>
 
 	* binutils-all/objdump.W: Update.

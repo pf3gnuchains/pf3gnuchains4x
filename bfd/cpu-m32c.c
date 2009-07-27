@@ -47,7 +47,7 @@ const bfd_arch_info_type bfd_m32c_arch =
   8,				/* Bits per byte.  */
   bfd_arch_m32c,		/* Architecture.  */
   bfd_mach_m16c,		/* Machine.  */
-  "m16c",			/* Architecture name.  */
+  "m32c",			/* Architecture name.  */
   "m16c",			/* Printable name.  */
   4,				/* Section align power.  */
   TRUE,				/* The default ?  */

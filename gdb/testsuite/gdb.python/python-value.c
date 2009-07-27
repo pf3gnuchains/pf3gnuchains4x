@@ -1,6 +1,6 @@
 /* This testcase is part of GDB, the GNU debugger.
 
-   Copyright 2008 Free Software Foundation, Inc.
+   Copyright 2008, 2009 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -27,11 +27,25 @@ union u
   float b;
 };
 
+enum e
+  {
+    ONE = 1,
+    TWO = 2
+  };
+
+typedef struct s *PTR;
+
+enum e evalue = TWO;
+
 int
 main (int argc, char *argv[])
 {
+  char *cp = argv[0]; /* Prevent gcc from optimizing argv[] out.  */
   struct s s;
   union u u;
+  PTR x = &s;
+  char st[17] = "divide et impera";
+  char nullst[17] = "divide\0et\0impera";
 
   s.a = 3;
   s.b = 5;

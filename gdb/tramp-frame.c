@@ -1,6 +1,6 @@
 /* Signal trampoline unwinder, for GDB the GNU Debugger.
 
-   Copyright (C) 2004, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2004, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -81,6 +81,8 @@ static CORE_ADDR
 tramp_frame_start (const struct tramp_frame *tramp,
 		   struct frame_info *this_frame, CORE_ADDR pc)
 {
+  struct gdbarch *gdbarch = get_frame_arch (this_frame);
+  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   int ti;
   /* Search through the trampoline for one that matches the
      instruction sequence around PC.  */
@@ -98,7 +100,7 @@ tramp_frame_start (const struct tramp_frame *tramp,
 					 func + i * tramp->insn_size,
 					 buf, tramp->insn_size))
 	    break;
-	  insn = extract_unsigned_integer (buf, tramp->insn_size);
+	  insn = extract_unsigned_integer (buf, tramp->insn_size, byte_order);
 	  if (tramp->insn[i].bytes != (insn & tramp->insn[i].mask))
 	    break;
 	}

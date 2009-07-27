@@ -176,10 +176,13 @@ ALL_EMULATIONS = \
 	eelf32elmipvxworks.o \
 	eelf32fr30.o \
 	eelf32frv.o \
+	eelf32moxie.o \
 	eelf32i370.o \
 	eelf32ip2k.o \
 	eelf32iq2000.o \
 	eelf32iq10.o \
+	eelf32lm32.o \
+	eelf32lm32fd.o \
 	eelf32l4300.o \
 	eelf32lmip.o \
 	eelf32lppc.o \
@@ -354,7 +357,8 @@ ALL_EMULATIONS = \
 	eppcpe.o \
 	eppclynx.o \
 	eriscix.o \
-	escoreelf.o \
+	escore3_elf.o \
+	escore7_elf.o \
 	esh.o \
 	eshelf32.o \
 	eshlelf32.o \
@@ -409,6 +413,8 @@ ALL_64_EMULATIONS = \
 	eshlelf64_nbsd.o \
 	eelf_x86_64.o \
 	eelf_x86_64_fbsd.o \
+	eelf_l1om.o \
+	eelf_l1om_fbsd.o \
 	eelf64_s390.o \
 	eelf64_sparc.o \
 	eelf64_sparc_fbsd.o \
@@ -724,6 +730,9 @@ eelf32frvfd.c: $(srcdir)/emulparams/elf32frvfd.sh \
   $(srcdir)/emulparams/elf32frv.sh \
   $(ELF_DEPS) $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
 	${GENSCRIPTS} elf32frvfd "$(tdir_frv)"
+eelf32moxie.c: $(srcdir)/emulparams/elf32moxie.sh \
+  $(ELF_GEN_DEPS) $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
+	${GENSCRIPTS} elf32moxie "$(tdir_moxie)"
 eelf32mcore.c: $(srcdir)/emulparams/elf32mcore.sh \
   $(ELF_DEPS) $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
 	${GENSCRIPTS} elf32mcore "$(tdir_mcore)"
@@ -751,7 +760,7 @@ eelf32_sparc_vxworks.c: $(srcdir)/emulparams/elf32_sparc_vxworks.sh \
   $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
 	${GENSCRIPTS} elf32_sparc_vxworks "$(tdir_elf32_sparc_vxworks)"
 eelf32_spu.c: $(srcdir)/emulparams/elf32_spu.sh $(srcdir)/emultempl/spuelf.em \
-  $(srcdir)/emultempl/spu_ovl.o_c \
+  $(srcdir)/emultempl/spu_ovl.o_c $(srcdir)/emultempl/spu_icache.o_c \
   ldemul-list.h \
   $(ELF_DEPS) $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
 	${GENSCRIPTS} elf32_spu "$(tdir_elf32_spu)"
@@ -761,6 +770,13 @@ $(srcdir)/emultempl/spu_ovl.o_c: @MAINT@ $(srcdir)/emultempl/spu_ovl.S
 	  cpp -DOVLY_IRQ_SAVE $(srcdir)/emultempl/spu_ovl.S spu_ovl.s; \
 	  ../gas/as-new -o spu_ovl.o spu_ovl.s; \
 	  ../binutils/bin2c <spu_ovl.o >$@; \
+	fi
+$(srcdir)/emultempl/spu_icache.o_c: @MAINT@ $(srcdir)/emultempl/spu_icache.S
+	if ../gas/as-new --version \
+		| grep 'target.*spu' >/dev/null 2>/dev/null; then \
+	  cpp -DOVLY_IRQ_SAVE $(srcdir)/emultempl/spu_icache.S spu_icache.s; \
+	  ../gas/as-new -o spu_icache.o spu_icache.s; \
+	  ../binutils/bin2c <spu_icache.o >$@; \
 	fi
 eelf32_i860.c: $(srcdir)/emulparams/elf32_i860.sh \
   $(ELF_GEN_DEPS) $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
@@ -928,7 +944,7 @@ eelf32i370.c: $(srcdir)/emulparams/elf32i370.sh \
   $(ELF_DEPS) $(srcdir)/scripttempl/elfi370.sc ${GEN_DEPENDS}
 	${GENSCRIPTS} elf32i370 "$(tdir_elf32i370)"
 eelf32ip2k.c: $(srcdir)/emulparams/elf32ip2k.sh \
-  $(ELF_DEPS) $(srcdir)/scripttempl/ip2k.sc ${GEN_DEPENDS}
+  $(ELF_DEPS) $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
 	${GENSCRIPTS} elf32ip2k "$(tdir_ip2k)"
 eelf32iq2000.c: $(srcdir)/emulparams/elf32iq2000.sh \
   $(ELF_GEN_DEPS) $(srcdir)/scripttempl/iq2000.sc ${GEN_DEPENDS}
@@ -936,6 +952,13 @@ eelf32iq2000.c: $(srcdir)/emulparams/elf32iq2000.sh \
 eelf32iq10.c: $(srcdir)/emulparams/elf32iq10.sh \
   $(ELF_GEN_DEPS) $(srcdir)/scripttempl/iq2000.sc ${GEN_DEPENDS}
 	${GENSCRIPTS} elf32iq10 "$(tdir_iq10)"
+eelf32lm32.c: $(srcdir)/emulparams/elf32lm32.sh \
+  $(srcdir)/emultempl/elf32.em $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
+	${GENSCRIPTS} elf32lm32 "$(tdir_elf32lm32)"
+eelf32lm32fd.c: $(srcdir)/emulparams/elf32lm32fd.sh \
+  $(srcdir)/emulparams/elf32lm32.sh $(ELF_DEPS) \
+  $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS} 
+	${GENSCRIPTS} elf32lm32fd "$(tdir_elf32lm32fd)" 
 eelf64alpha.c: $(srcdir)/emulparams/elf64alpha.sh \
   $(ELF_DEPS) $(srcdir)/emultempl/alphaelf.em \
   $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
@@ -1013,6 +1036,13 @@ eelf_x86_64_fbsd.c: $(srcdir)/emulparams/elf_x86_64_fbsd.sh \
   $(srcdir)/emulparams/elf_x86_64.sh \
   $(ELF_DEPS) $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
 	${GENSCRIPTS} elf_x86_64_fbsd "$(tdir_elf_x86_64_fbsd)"
+eelf_l1om.c: $(srcdir)/emulparams/elf_l1om.sh \
+  $(ELF_DEPS) $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
+	${GENSCRIPTS} elf_l1om "$(tdir_elf_l1om)"
+eelf_l1om_fbsd.c: $(srcdir)/emulparams/elf_l1om_fbsd.sh \
+  $(srcdir)/emulparams/elf_l1om.sh \
+  $(ELF_DEPS) $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
+	${GENSCRIPTS} elf_l1om_fbsd "$(tdir_elf_l1om_fbsd)"
 eelf_i386_be.c: $(srcdir)/emulparams/elf_i386_be.sh \
   $(ELF_DEPS) $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
 	${GENSCRIPTS} elf_i386_be "$(tdir_elf_i386_be)"
@@ -1540,10 +1570,14 @@ eppclynx.c: $(srcdir)/emulparams/ppclynx.sh \
 eriscix.c: $(srcdir)/emulparams/riscix.sh \
   $(srcdir)/emultempl/generic.em $(srcdir)/scripttempl/aout.sc ${GEN_DEPENDS}
 	${GENSCRIPTS} riscix "$(tdir_riscix)"
-escoreelf.c: $(srcdir)/emulparams/scoreelf.sh \
-  $(srcdir)/emultempl/elf32.em $(srcdir)/emultempl/scoreelf.em \
-  $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS}
-	${GENSCRIPTS} scoreelf "$(tdir_scoreelf)"
+escore3_elf.c: $(srcdir)/emulparams/scoreelf.sh \
+  $(ELF_DEPS) $(srcdir)/emultempl/scoreelf.em \
+  $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS} 
+	${GENSCRIPTS} score3_elf "$(tdir_score3_elf)" scoreelf 
+escore7_elf.c: $(srcdir)/emulparams/scoreelf.sh \
+  $(ELF_DEPS) $(srcdir)/emultempl/scoreelf.em \
+  $(srcdir)/scripttempl/elf.sc ${GEN_DEPENDS} 
+	${GENSCRIPTS} score7_elf "$(tdir_score7_elf)" scoreelf
 esh.c: $(srcdir)/emulparams/sh.sh \
   $(srcdir)/emultempl/generic.em $(srcdir)/scripttempl/sh.sc ${GEN_DEPENDS}
 	${GENSCRIPTS} sh "$(tdir_sh)"
@@ -1746,6 +1780,7 @@ check-DEJAGNU: site.exp
 		CC_FOR_HOST="$(CC)" CFLAGS_FOR_HOST="$(CFLAGS)" \
 		OFILES="$(OFILES)" BFDLIB="$(TESTBFDLIB)" \
 		LIBIBERTY="$(LIBIBERTY) $(LIBINTL)" LIBS="$(LIBS)" \
+		DO_COMPARE="`echo '$(do_compare)' | sed -e 's,\\$$,,g'`" \
 		$(RUNTESTFLAGS); \
 	else echo "WARNING: could not find \`runtest'" 1>&2; :;\
 	fi
@@ -1835,7 +1870,48 @@ MOSTLYCLEANFILES = $(STAGESTUFF) ld1$(EXEEXT) ld2$(EXEEXT) ld3$(EXEEXT) \
 	ldemul-list.h crtbegin.o crtend.o ld.log ld.sum
 mostlyclean-local:
 	-rm -rf tmpdir
-CLEANFILES = dep.sed DEP DEPA DEP1 DEP2 spu_ovl.s spu_ovl.o
+CLEANFILES = dep.sed DEP DEPA DEP1 DEP2 spu_ovl.s spu_ovl.o spu_icache.s spu_icache.o
+
+.PHONY: install-pdf install-pdf-am install-pdf-recursive
+
+pdf__strip_dir = `echo $$p | sed -e 's|^.*/||'`;
+
+install-pdf: install-pdf-recursive install-pdf-am
+ 
+install-pdf-am: $(PDFS)
+	@$(NORMAL_INSTALL)
+	test -z "$(pdfdir)" || $(mkinstalldirs) "$(DESTDIR)$(pdfdir)"
+	@list='$(PDFS)'; for p in $$list; do \
+	  if test -f "$$p"; then d=; else d="$(srcdir)/"; fi; \
+	  f=$(pdf__strip_dir) \
+	  echo " $(INSTALL_DATA) '$$d$$p' '$(DESTDIR)$(pdfdir)/$$f'"; \
+	  $(INSTALL_DATA) "$$d$$p" "$(DESTDIR)$(pdfdir)/$$f"; \
+	done
+
+install-pdf-recursive:
+	@failcom='exit 1'; \
+	for f in x $$MAKEFLAGS; do \
+	  case $$f in \
+	    *=* | --[!k]*);; \
+	    *k*) failcom='fail=yes';; \
+	  esac; \
+	done; \
+	dot_seen=no; \
+	target=`echo $@ | sed s/-recursive//`; \
+	list='$(SUBDIRS)'; for subdir in $$list; do \
+	  echo "Making $$target in $$subdir"; \
+	  if test "$$subdir" = "."; then \
+	    dot_seen=yes; \
+	    local_target="$$target-am"; \
+	  else \
+	    local_target="$$target"; \
+	  fi; \
+	  (cd $$subdir && $(MAKE) $(AM_MAKEFLAGS) $$local_target) \
+	  || eval $$failcom; \
+	done; \
+	if test "$$dot_seen" = "no"; then \
+	  $(MAKE) $(AM_MAKEFLAGS) "$$target-am" || exit 1; \
+	fi; test -z "$$fail"
 
 .PHONY: install-html install-html-am install-html-recursive
 
@@ -1914,7 +1990,8 @@ install-data-local: install-info
 
 # Stuff that should be included in a distribution.  The diststuff
 # target is run by the taz target in ../Makefile.in.
-EXTRA_DIST = ldgram.c ldgram.h ldlex.c emultempl/spu_ovl.o_c $(man_MANS)
+EXTRA_DIST = ldgram.c ldgram.h ldlex.c emultempl/spu_ovl.o_c \
+	     emultempl/spu_icache.o_c deffilep.c deffilep.h $(man_MANS)
 diststuff: info $(EXTRA_DIST)
 all: info ld.1
 
@@ -1941,18 +2018,24 @@ endif
 DEP: dep.sed $(CFILES) $(HFILES) $(GENERATED_CFILES) $(GENERATED_HFILES) config.h
 	rm -f DEP1
 	$(MAKE) MKDEP="$(MKDEP)" DEP1
-	sed -f dep.sed < DEP1 > DEPA
-	echo '# IF YOU PUT ANYTHING HERE IT WILL GO AWAY' >> DEPA
-	if grep ' /' DEPA > /dev/null 2> /dev/null; then \
+	echo '# IF YOU PUT ANYTHING HERE IT WILL GO AWAY' >> DEP1
+	if grep ' /' DEP1 > /dev/null 2> /dev/null; then \
 	  echo 'make DEP failed!'; exit 1; \
 	else \
-	  mv -f DEPA $@; \
+	  mv -f DEP1 $@; \
 	fi
 
 DEP1: $(CFILES) $(GENERATED_CFILES)
 	echo '# DO NOT DELETE THIS LINE -- mkdep uses it.' > DEP2
 	echo '# DO NOT PUT ANYTHING AFTER THIS LINE, IT WILL GO AWAY.' >> DEP2
-	$(MKDEP) $(INCLUDES) $(CFLAGS) $? >> DEP2
+	for f in $?; do \
+	  $(MKDEP) $(INCLUDES) $(CFLAGS) $$f > DEPA; \
+	  sed -n -e '1s/: .*/: \\/p' -e q < DEPA >> DEP2; \
+	  sed -e '1s/.*: //' -f dep.sed < DEPA | \
+	    LC_ALL=C sort | LC_ALL=C uniq | \
+	    sed -e 's/^[AB]/  /' -e '$$s/ \\$$//' >> DEP2; \
+	done
+	rm -f DEPA
 	mv -f DEP2 $@
 
 dep.sed: dep-in.sed config.status
@@ -1983,92 +2066,339 @@ dep-am: DEP
 
 # DO NOT DELETE THIS LINE -- mkdep uses it.
 # DO NOT PUT ANYTHING AFTER THIS LINE, IT WILL GO AWAY.
-ldctor.o: ldctor.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/bfdlink.h $(INCDIR)/safe-ctype.h ld.h ldexp.h \
-  ldlang.h ldmisc.h ldgram.h ldmain.h ldctor.h
-ldemul.o: ldemul.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/bfdlink.h ld.h ldmisc.h ldexp.h ldlang.h \
-  ldfile.h ldemul.h ldmain.h ldemul-list.h
-ldexp.o: ldexp.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/bfdlink.h ld.h ldmain.h ldmisc.h ldexp.h \
-  ldlex.h ldgram.h ldlang.h $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h \
-  $(INCDIR)/safe-ctype.h
-ldfile.o: ldfile.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/bfdlink.h $(INCDIR)/safe-ctype.h ld.h ldmisc.h \
-  ldexp.h ldlang.h ldfile.h ldmain.h ldgram.h ldlex.h \
-  ldemul.h $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h \
-  $(INCDIR)/filenames.h
-ldlang.o: ldlang.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h $(INCDIR)/safe-ctype.h \
-  $(INCDIR)/obstack.h $(INCDIR)/bfdlink.h ld.h ldmain.h \
-  ldexp.h ldlang.h ldgram.h ldlex.h ldmisc.h ldctor.h \
-  ldfile.h ldemul.h $(INCDIR)/fnmatch.h $(INCDIR)/demangle.h \
-  $(INCDIR)/libiberty.h $(INCDIR)/hashtab.h
-ldmain.o: ldmain.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/safe-ctype.h $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h \
-  $(INCDIR)/progress.h $(INCDIR)/bfdlink.h $(INCDIR)/filenames.h \
-  ld.h ldmain.h ldmisc.h ldwrite.h ldexp.h ldlang.h ldgram.h \
-  ldlex.h ldfile.h ldemul.h ldctor.h
-ldmisc.o: ldmisc.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/bfdlink.h $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h \
-  $(INCDIR)/demangle.h $(INCDIR)/libiberty.h ld.h ldmisc.h \
-  ldexp.h ldlang.h ldgram.h ldlex.h ldmain.h ldfile.h \
-  $(BFDDIR)/elf-bfd.h $(INCDIR)/elf/common.h $(INCDIR)/elf/external.h \
-  $(INCDIR)/elf/internal.h
-ldver.o: ldver.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  ../bfd/bfdver.h ld.h ldver.h ldexp.h ldlang.h ldfile.h \
-  ldemul.h ldmain.h
-ldwrite.o: ldwrite.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/bfdlink.h $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h \
-  $(INCDIR)/safe-ctype.h ld.h ldexp.h ldlang.h ldwrite.h \
-  ldmisc.h ldgram.h ldmain.h
-lexsup.o: lexsup.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  ../bfd/bfdver.h $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h \
-  $(INCDIR)/safe-ctype.h $(INCDIR)/bfdlink.h ld.h ldmain.h \
-  ldmisc.h ldexp.h ldlang.h ldgram.h ldlex.h ldfile.h \
-  ldver.h ldemul.h $(INCDIR)/demangle.h $(INCDIR)/libiberty.h
-mri.o: mri.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  ld.h ldexp.h ldlang.h ldmisc.h mri.h ldgram.h $(INCDIR)/libiberty.h \
-  $(INCDIR)/ansidecl.h
-ldcref.o: ldcref.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/bfdlink.h $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h \
-  $(INCDIR)/demangle.h $(INCDIR)/libiberty.h $(INCDIR)/objalloc.h \
-  ld.h ldmain.h ldmisc.h ldexp.h ldlang.h
-pe-dll.o: pe-dll.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/bfdlink.h $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h \
-  $(INCDIR)/safe-ctype.h ld.h ldexp.h ldlang.h ldwrite.h \
-  ldmisc.h ldgram.h ldmain.h ldfile.h ldemul.h $(INCDIR)/coff/internal.h \
-  $(BFDDIR)/libcoff.h deffile.h pe-dll.h
-pep-dll.o: pep-dll.c pe-dll.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/bfdlink.h $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h \
-  $(INCDIR)/safe-ctype.h ld.h ldexp.h ldlang.h ldwrite.h \
-  ldmisc.h ldgram.h ldmain.h ldfile.h ldemul.h $(INCDIR)/coff/internal.h \
-  $(BFDDIR)/libcoff.h deffile.h pe-dll.h pep-dll.h
-ldgram.o: ldgram.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/bfdlink.h ld.h ldexp.h ldver.h ldlang.h ldfile.h \
-  ldemul.h ldmisc.h ldmain.h mri.h ldctor.h ldlex.h
-ldlex.o: ldlex.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  $(INCDIR)/safe-ctype.h $(INCDIR)/bfdlink.h ld.h ldmisc.h \
-  ldexp.h ldlang.h ldgram.h ldfile.h ldlex.h ldmain.h \
-  $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h
-deffilep.o: deffilep.c sysdep.h config.h $(INCDIR)/fopen-same.h \
-  $(INCDIR)/libiberty.h $(INCDIR)/ansidecl.h $(INCDIR)/safe-ctype.h \
-  ../bfd/bfd.h $(INCDIR)/ansidecl.h $(INCDIR)/symcat.h \
-  ld.h ldmisc.h deffile.h
+ldctor.o: \
+  ldctor.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/safe-ctype.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldctor.h \
+  ldexp.h \
+  ldgram.h \
+  ldlang.h \
+  ldmain.h \
+  ldmisc.h \
+  sysdep.h
+ldemul.o: \
+  ldemul.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldemul-list.h \
+  ldemul.h \
+  ldexp.h \
+  ldfile.h \
+  ldlang.h \
+  ldmain.h \
+  ldmisc.h \
+  sysdep.h
+ldexp.o: \
+  ldexp.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/safe-ctype.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldexp.h \
+  ldgram.h \
+  ldlang.h \
+  ldlex.h \
+  ldmain.h \
+  ldmisc.h \
+  sysdep.h
+ldfile.o: \
+  ldfile.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/filenames.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/safe-ctype.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldemul.h \
+  ldexp.h \
+  ldfile.h \
+  ldgram.h \
+  ldlang.h \
+  ldlex.h \
+  ldmain.h \
+  ldmisc.h \
+  sysdep.h
+ldlang.o: \
+  ldlang.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/demangle.h \
+  $(INCDIR)/fnmatch.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/hashtab.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/obstack.h \
+  $(INCDIR)/safe-ctype.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldctor.h \
+  ldemul.h \
+  ldexp.h \
+  ldfile.h \
+  ldgram.h \
+  ldlang.h \
+  ldlex.h \
+  ldmain.h \
+  ldmisc.h \
+  sysdep.h
+ldmain.o: \
+  ldmain.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/filenames.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/progress.h \
+  $(INCDIR)/safe-ctype.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldctor.h \
+  ldemul.h \
+  ldexp.h \
+  ldfile.h \
+  ldgram.h \
+  ldlang.h \
+  ldlex.h \
+  ldmain.h \
+  ldmisc.h \
+  ldwrite.h \
+  sysdep.h
+ldmisc.o: \
+  ldmisc.c \
+  $(BFDDIR)/elf-bfd.h \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/demangle.h \
+  $(INCDIR)/elf/common.h \
+  $(INCDIR)/elf/external.h \
+  $(INCDIR)/elf/internal.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldexp.h \
+  ldfile.h \
+  ldgram.h \
+  ldlang.h \
+  ldlex.h \
+  ldmain.h \
+  ldmisc.h \
+  sysdep.h
+ldver.o: \
+  ldver.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  ../bfd/bfdver.h \
+  config.h \
+  ld.h \
+  ldemul.h \
+  ldexp.h \
+  ldfile.h \
+  ldlang.h \
+  ldmain.h \
+  ldver.h \
+  sysdep.h
+ldwrite.o: \
+  ldwrite.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/safe-ctype.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldexp.h \
+  ldgram.h \
+  ldlang.h \
+  ldmain.h \
+  ldmisc.h \
+  ldwrite.h \
+  sysdep.h
+lexsup.o: \
+  lexsup.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/demangle.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/safe-ctype.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  ../bfd/bfdver.h \
+  config.h \
+  ld.h \
+  ldemul.h \
+  ldexp.h \
+  ldfile.h \
+  ldgram.h \
+  ldlang.h \
+  ldlex.h \
+  ldmain.h \
+  ldmisc.h \
+  ldver.h \
+  sysdep.h
+mri.o: \
+  mri.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldexp.h \
+  ldgram.h \
+  ldlang.h \
+  ldmisc.h \
+  mri.h \
+  sysdep.h
+ldcref.o: \
+  ldcref.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/demangle.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/objalloc.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldexp.h \
+  ldlang.h \
+  ldmain.h \
+  ldmisc.h \
+  sysdep.h
+pe-dll.o: \
+  pe-dll.c \
+  $(BFDDIR)/libcoff.h \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/coff/internal.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/safe-ctype.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  deffile.h \
+  ld.h \
+  ldemul.h \
+  ldexp.h \
+  ldfile.h \
+  ldgram.h \
+  ldlang.h \
+  ldmain.h \
+  ldmisc.h \
+  ldwrite.h \
+  pe-dll.h \
+  sysdep.h
+pep-dll.o: \
+  pep-dll.c \
+  $(BFDDIR)/libcoff.h \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/coff/internal.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/safe-ctype.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  deffile.h \
+  ld.h \
+  ldemul.h \
+  ldexp.h \
+  ldfile.h \
+  ldgram.h \
+  ldlang.h \
+  ldmain.h \
+  ldmisc.h \
+  ldwrite.h \
+  pe-dll.c \
+  pep-dll.h \
+  sysdep.h
+ldgram.o: \
+  ldgram.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldctor.h \
+  ldemul.h \
+  ldexp.h \
+  ldfile.h \
+  ldlang.h \
+  ldlex.h \
+  ldmain.h \
+  ldmisc.h \
+  ldver.h \
+  mri.h \
+  sysdep.h
+ldlex.o: \
+  ldlex.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/bfdlink.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/safe-ctype.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  ld.h \
+  ldexp.h \
+  ldfile.h \
+  ldgram.h \
+  ldlang.h \
+  ldlex.h \
+  ldmain.h \
+  ldmisc.h \
+  sysdep.h
+deffilep.o: \
+  deffilep.c \
+  $(INCDIR)/ansidecl.h \
+  $(INCDIR)/fopen-same.h \
+  $(INCDIR)/libiberty.h \
+  $(INCDIR)/safe-ctype.h \
+  $(INCDIR)/symcat.h \
+  ../bfd/bfd.h \
+  config.h \
+  deffile.h \
+  ld.h \
+  ldmisc.h \
+  sysdep.h
 # IF YOU PUT ANYTHING HERE IT WILL GO AWAY

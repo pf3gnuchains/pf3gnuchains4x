@@ -48,8 +48,10 @@ CCFILES = \
 	errors.cc \
 	expression.cc \
 	fileread.cc \
+        gc.cc \
 	gold.cc \
 	gold-threads.cc \
+	incremental.cc \
 	layout.cc \
 	mapfile.cc \
 	merge.cc \
@@ -66,6 +68,7 @@ CCFILES = \
 	script.cc \
 	stringpool.cc \
 	symtab.cc \
+	target.cc \
 	target-select.cc \
 	version.cc \
 	workqueue.cc \
@@ -86,6 +89,8 @@ HFILES = \
 	ehframe.h \
 	errors.h \
 	fileread.h \
+	freebsd.h \
+        gc.h \
 	gold.h \
 	gold-threads.h \
 	layout.h \
@@ -119,12 +124,14 @@ YFILES = \
 EXTRA_DIST = yyscript.c yyscript.h
 
 TARGETSOURCES = \
-	i386.cc x86_64.cc sparc.cc powerpc.cc
+	i386.cc x86_64.cc sparc.cc powerpc.cc arm.cc
 
 ALL_TARGETOBJS = \
-	i386.$(OBJEXT) x86_64.$(OBJEXT) sparc.$(OBJEXT) powerpc.$(OBJEXT)
+	i386.$(OBJEXT) x86_64.$(OBJEXT) sparc.$(OBJEXT) powerpc.$(OBJEXT) \
+	arm.$(OBJEXT)
 
 libgold_a_SOURCES = $(CCFILES) $(HFILES) $(YFILES)
+libgold_a_LIBADD = $(LIBOBJS)
 
 sources_var = main.cc
 deps_var = $(TARGETOBJS) libgold.a $(LIBIBERTY) $(LIBINTL_DEP)
@@ -132,8 +139,8 @@ ldadd_var = $(TARGETOBJS) libgold.a $(LIBIBERTY) $(LIBINTL) \
 	 $(THREADSLIB) $(LIBDL)
 
 ld_new_SOURCES = $(sources_var)
-ld_new_DEPENDENCIES = $(deps_var) $(LIBOBJS)
-ld_new_LDADD = $(ldadd_var) $(LIBOBJS)
+ld_new_DEPENDENCIES = $(deps_var)
+ld_new_LDADD = $(ldadd_var)
 
 EXTRA_ld_new_SOURCES = $(TARGETSOURCES)
 

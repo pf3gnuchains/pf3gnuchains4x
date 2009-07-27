@@ -1,5 +1,5 @@
 /* C preprocessor macro expansion commands for GDB.
-   Copyright (C) 2002, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2002, 2007, 2008, 2009 Free Software Foundation, Inc.
    Contributed by Red Hat, Inc.
 
    This file is part of GDB.
@@ -158,7 +158,10 @@ info_macro_command (char *name, int from_tty)
 
       fprintf_filtered (gdb_stdout, "Defined at ");
       show_pp_source_pos (gdb_stdout, file, line);
-      fprintf_filtered (gdb_stdout, "#define %s", name);
+      if (line != 0)
+	fprintf_filtered (gdb_stdout, "#define %s", name);
+      else
+	fprintf_filtered (gdb_stdout, "-D%s", name);
       if (d->kind == macro_function_like)
         {
           int i;
@@ -172,7 +175,10 @@ info_macro_command (char *name, int from_tty)
             }
           fputs_filtered (")", gdb_stdout);
         }
-      fprintf_filtered (gdb_stdout, " %s\n", d->replacement);
+      if (line != 0)
+	fprintf_filtered (gdb_stdout, " %s\n", d->replacement);
+      else
+	fprintf_filtered (gdb_stdout, "=%s\n", d->replacement);
     }
   else
     {

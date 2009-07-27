@@ -1,6 +1,7 @@
 /* Target-dependent code for FreeBSD/amd64.
 
-   Copyright (C) 2003, 2004, 2005, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2003, 2004, 2005, 2007, 2008, 2009
+   Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -180,7 +181,7 @@ amd64fbsd_collect_uthread (const struct regcache *regcache,
     }
 }
 
-void
+static void
 amd64fbsd_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);

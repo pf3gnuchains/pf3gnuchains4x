@@ -1,6 +1,6 @@
 // x86_64.cc -- x86_64 target support for gold.
 
-// Copyright 2006, 2007, 2008 Free Software Foundation, Inc.
+// Copyright 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
 // Written by Ian Lance Taylor <iant@google.com>.
 
 // This file is part of gold.
@@ -37,6 +37,7 @@
 #include "target-reloc.h"
 #include "target-select.h"
 #include "tls.h"
+#include "freebsd.h"
 
 namespace
 {
@@ -52,7 +53,7 @@ class Output_data_plt_x86_64;
 //   http://people.redhat.com/drepper/tls.pdf
 //   http://www.lsd.ic.unicamp.br/~oliva/writeups/TLS/RFC-TLSDESC-x86.txt
 
-class Target_x86_64 : public Sized_target<64, false>
+class Target_x86_64 : public Target_freebsd<64, false>
 {
  public:
   // In the x86_64 ABI (p 68), it says "The AMD64 ABI architectures
@@ -60,11 +61,30 @@ class Target_x86_64 : public Sized_target<64, false>
   typedef Output_data_reloc<elfcpp::SHT_RELA, true, 64, false> Reloc_section;
 
   Target_x86_64()
-    : Sized_target<64, false>(&x86_64_info),
+    : Target_freebsd<64, false>(&x86_64_info),
       got_(NULL), plt_(NULL), got_plt_(NULL), rela_dyn_(NULL),
       copy_relocs_(elfcpp::R_X86_64_COPY), dynbss_(NULL),
       got_mod_index_offset_(-1U), tls_base_symbol_defined_(false)
   { }
+
+  // Hook for a new output section.
+  void
+  do_new_output_section(Output_section*) const;
+
+  // Scan the relocations to look for symbol adjustments.
+  void
+  gc_process_relocs(const General_options& options,
+	            Symbol_table* symtab,
+	            Layout* layout,
+	            Sized_relobj<64, false>* object,
+	            unsigned int data_shndx,
+	            unsigned int sh_type,
+	            const unsigned char* prelocs,
+	            size_t reloc_count,
+	            Output_section* output_section,
+	            bool needs_special_offset_handling,
+	            size_t local_symbol_count,
+	            const unsigned char* plocal_symbols);
 
   // Scan the relocations to look for symbol adjustments.
   void
@@ -212,8 +232,8 @@ class Target_x86_64 : public Sized_target<64, false>
     // Do a relocation.  Return false if the caller should not issue
     // any warnings about this relocation.
     inline bool
-    relocate(const Relocate_info<64, false>*, Target_x86_64*, size_t relnum,
-	     const elfcpp::Rela<64, false>&,
+    relocate(const Relocate_info<64, false>*, Target_x86_64*, Output_section*,
+	     size_t relnum, const elfcpp::Rela<64, false>&,
 	     unsigned int r_type, const Sized_symbol<64>*,
 	     const Symbol_value<64>*,
 	     unsigned char*, elfcpp::Elf_types<64>::Elf_Addr,
@@ -422,8 +442,22 @@ const Target::Target_info Target_x86_64::x86_64_info =
   "/lib/ld64.so.1",     // program interpreter
   0x400000,		// default_text_segment_address
   0x1000,		// abi_pagesize (overridable by -z max-page-size)
-  0x1000		// common_pagesize (overridable by -z common-page-size)
+  0x1000,		// common_pagesize (overridable by -z common-page-size)
+  elfcpp::SHN_UNDEF,	// small_common_shndx
+  elfcpp::SHN_X86_64_LCOMMON,	// large_common_shndx
+  0,			// small_common_section_flags
+  elfcpp::SHF_X86_64_LARGE	// large_common_section_flags
 };
+
+// This is called when a new output section is created.  This is where
+// we handle the SHF_X86_64_LARGE.
+
+void
+Target_x86_64::do_new_output_section(Output_section *os) const
+{
+  if ((os->flags() & elfcpp::SHF_X86_64_LARGE) != 0)
+    os->set_is_large_section();
+}
 
 // Get the GOT section, creating it if necessary.
 
@@ -585,9 +619,7 @@ Output_data_plt_x86_64::Output_data_plt_x86_64(Layout* layout,
 void
 Output_data_plt_x86_64::do_adjust_output_section(Output_section* os)
 {
-  // UnixWare sets the entsize of .plt to 4, and so does the old GNU
-  // linker, and so do we.
-  os->set_entsize(4);
+  os->set_entsize(plt_entry_size);
 }
 
 // Add an entry to the PLT.
@@ -958,6 +990,7 @@ Target_x86_64::Scan::check_non_pic(Relobj* object, unsigned int r_type)
       // error per object file.
       if (this->issued_non_pic_error_)
         return;
+      gold_assert(parameters->options().output_is_position_independent());
       object->error(_("requires unsupported dynamic reloc; "
                       "recompile with -fPIC"));
       this->issued_non_pic_error_ = true;
@@ -1544,6 +1577,42 @@ Target_x86_64::Scan::global(const General_options&,
     }
 }
 
+void
+Target_x86_64::gc_process_relocs(const General_options& options,
+                                 Symbol_table* symtab,
+                                 Layout* layout,
+                                 Sized_relobj<64, false>* object,
+                                 unsigned int data_shndx,
+                                 unsigned int sh_type,
+                                 const unsigned char* prelocs,
+                                 size_t reloc_count,
+			         Output_section* output_section,
+			         bool needs_special_offset_handling,
+                                 size_t local_symbol_count,
+                                 const unsigned char* plocal_symbols)
+{
+
+  if (sh_type == elfcpp::SHT_REL)
+    {
+      return;
+    }
+
+   gold::gc_process_relocs<64, false, Target_x86_64, elfcpp::SHT_RELA,
+                           Target_x86_64::Scan>(
+    options,
+    symtab,
+    layout,
+    this,
+    object,
+    data_shndx,
+    prelocs,
+    reloc_count,
+    output_section,
+    needs_special_offset_handling,
+    local_symbol_count,
+    plocal_symbols);
+ 
+}
 // Scan relocations for a section.
 
 void
@@ -1641,6 +1710,7 @@ Target_x86_64::do_finalize_sections(Layout* layout)
 inline bool
 Target_x86_64::Relocate::relocate(const Relocate_info<64, false>* relinfo,
                                   Target_x86_64* target,
+				  Output_section*,
                                   size_t relnum,
                                   const elfcpp::Rela<64, false>& rela,
                                   unsigned int r_type,
@@ -1652,7 +1722,8 @@ Target_x86_64::Relocate::relocate(const Relocate_info<64, false>* relinfo,
 {
   if (this->skip_call_tls_get_addr_)
     {
-      if (r_type != elfcpp::R_X86_64_PLT32
+      if ((r_type != elfcpp::R_X86_64_PLT32
+           && r_type != elfcpp::R_X86_64_PC32)
 	  || gsym == NULL
 	  || strcmp(gsym->name(), "__tls_get_addr") != 0)
 	{
@@ -2549,40 +2620,40 @@ Target_x86_64::do_code_fill(section_size_type length) const
   // Nop sequences of various lengths.
   const char nop1[1] = { 0x90 };                   // nop
   const char nop2[2] = { 0x66, 0x90 };             // xchg %ax %ax
-  const char nop3[3] = { 0x8d, 0x76, 0x00 };       // leal 0(%esi),%esi
-  const char nop4[4] = { 0x8d, 0x74, 0x26, 0x00};  // leal 0(%esi,1),%esi
-  const char nop5[5] = { 0x90, 0x8d, 0x74, 0x26,   // nop
-                         0x00 };                   // leal 0(%esi,1),%esi
-  const char nop6[6] = { 0x8d, 0xb6, 0x00, 0x00,   // leal 0L(%esi),%esi
-                         0x00, 0x00 };
-  const char nop7[7] = { 0x8d, 0xb4, 0x26, 0x00,   // leal 0L(%esi,1),%esi
-                         0x00, 0x00, 0x00 };
-  const char nop8[8] = { 0x90, 0x8d, 0xb4, 0x26,   // nop
-                         0x00, 0x00, 0x00, 0x00 }; // leal 0L(%esi,1),%esi
-  const char nop9[9] = { 0x89, 0xf6, 0x8d, 0xbc,   // movl %esi,%esi
-                         0x27, 0x00, 0x00, 0x00,   // leal 0L(%edi,1),%edi
+  const char nop3[3] = { 0x0f, 0x1f, 0x00 };       // nop (%rax)
+  const char nop4[4] = { 0x0f, 0x1f, 0x40, 0x00};  // nop 0(%rax)
+  const char nop5[5] = { 0x0f, 0x1f, 0x44, 0x00,   // nop 0(%rax,%rax,1)
                          0x00 };
-  const char nop10[10] = { 0x8d, 0x76, 0x00, 0x8d, // leal 0(%esi),%esi
-                           0xbc, 0x27, 0x00, 0x00, // leal 0L(%edi,1),%edi
+  const char nop6[6] = { 0x66, 0x0f, 0x1f, 0x44,   // nopw 0(%rax,%rax,1)
+                         0x00, 0x00 };
+  const char nop7[7] = { 0x0f, 0x1f, 0x80, 0x00,   // nopl 0L(%rax)
+                         0x00, 0x00, 0x00 };
+  const char nop8[8] = { 0x0f, 0x1f, 0x84, 0x00,   // nopl 0L(%rax,%rax,1)
+                         0x00, 0x00, 0x00, 0x00 };
+  const char nop9[9] = { 0x66, 0x0f, 0x1f, 0x84,   // nopw 0L(%rax,%rax,1)
+                         0x00, 0x00, 0x00, 0x00,
+                         0x00 };
+  const char nop10[10] = { 0x66, 0x2e, 0x0f, 0x1f, // nopw %cs:0L(%rax,%rax,1)
+                           0x84, 0x00, 0x00, 0x00,
                            0x00, 0x00 };
-  const char nop11[11] = { 0x8d, 0x74, 0x26, 0x00, // leal 0(%esi,1),%esi
-                           0x8d, 0xbc, 0x27, 0x00, // leal 0L(%edi,1),%edi
+  const char nop11[11] = { 0x66, 0x66, 0x2e, 0x0f, // data16
+                           0x1f, 0x84, 0x00, 0x00, // nopw %cs:0L(%rax,%rax,1)
                            0x00, 0x00, 0x00 };
-  const char nop12[12] = { 0x8d, 0xb6, 0x00, 0x00, // leal 0L(%esi),%esi
-                           0x00, 0x00, 0x8d, 0xbf, // leal 0L(%edi),%edi
+  const char nop12[12] = { 0x66, 0x66, 0x66, 0x2e, // data16; data16
+                           0x0f, 0x1f, 0x84, 0x00, // nopw %cs:0L(%rax,%rax,1)
                            0x00, 0x00, 0x00, 0x00 };
-  const char nop13[13] = { 0x8d, 0xb6, 0x00, 0x00, // leal 0L(%esi),%esi
-                           0x00, 0x00, 0x8d, 0xbc, // leal 0L(%edi,1),%edi
-                           0x27, 0x00, 0x00, 0x00,
+  const char nop13[13] = { 0x66, 0x66, 0x66, 0x66, // data16; data16; data16
+                           0x2e, 0x0f, 0x1f, 0x84, // nopw %cs:0L(%rax,%rax,1)
+                           0x00, 0x00, 0x00, 0x00,
                            0x00 };
-  const char nop14[14] = { 0x8d, 0xb4, 0x26, 0x00, // leal 0L(%esi,1),%esi
-                           0x00, 0x00, 0x00, 0x8d, // leal 0L(%edi,1),%edi
-                           0xbc, 0x27, 0x00, 0x00,
+  const char nop14[14] = { 0x66, 0x66, 0x66, 0x66, // data16; data16; data16
+                           0x66, 0x2e, 0x0f, 0x1f, // data16
+                           0x84, 0x00, 0x00, 0x00, // nopw %cs:0L(%rax,%rax,1)
                            0x00, 0x00 };
-  const char nop15[15] = { 0xeb, 0x0d, 0x90, 0x90, // jmp .+15
-                           0x90, 0x90, 0x90, 0x90, // nop,nop,nop,...
-                           0x90, 0x90, 0x90, 0x90,
-                           0x90, 0x90, 0x90 };
+  const char nop15[15] = { 0x66, 0x66, 0x66, 0x66, // data16; data16; data16
+                           0x66, 0x66, 0x2e, 0x0f, // data16; data16
+                           0x1f, 0x84, 0x00, 0x00, // nopw %cs:0L(%rax,%rax,1)
+                           0x00, 0x00, 0x00 };
 
   const char* nops[16] = {
     NULL,
@@ -2595,16 +2666,18 @@ Target_x86_64::do_code_fill(section_size_type length) const
 
 // The selector for x86_64 object files.
 
-class Target_selector_x86_64 : public Target_selector
+class Target_selector_x86_64 : public Target_selector_freebsd
 {
 public:
   Target_selector_x86_64()
-    : Target_selector(elfcpp::EM_X86_64, 64, false, "elf64-x86-64")
+    : Target_selector_freebsd(elfcpp::EM_X86_64, 64, false, "elf64-x86-64",
+			      "elf64-x86-64-freebsd")
   { }
 
   Target*
   do_instantiate_target()
   { return new Target_x86_64(); }
+
 };
 
 Target_selector_x86_64 target_selector_x86_64;

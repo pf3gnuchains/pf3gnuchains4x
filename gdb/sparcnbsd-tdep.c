@@ -1,6 +1,6 @@
 /* Target-dependent code for NetBSD/sparc.
 
-   Copyright (C) 2002, 2003, 2004, 2006, 2007, 2008
+   Copyright (C) 2002, 2003, 2004, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
    Contributed by Wasabi Systems, Inc.
 
@@ -99,6 +99,7 @@ sparc32nbsd_pc_in_sigtramp (CORE_ADDR pc, char *name)
 struct trad_frame_saved_reg *
 sparc32nbsd_sigcontext_saved_regs (struct frame_info *this_frame)
 {
+  struct gdbarch *gdbarch = get_frame_arch (this_frame);
   struct trad_frame_saved_reg *saved_regs;
   CORE_ADDR addr, sigcontext_addr;
   int regnum, delta;
@@ -147,7 +148,7 @@ sparc32nbsd_sigcontext_saved_regs (struct frame_info *this_frame)
 
   /* Handle StackGhost.  */
   {
-    ULONGEST wcookie = sparc_fetch_wcookie ();
+    ULONGEST wcookie = sparc_fetch_wcookie (gdbarch);
 
     if (wcookie != 0)
       {
@@ -353,7 +354,7 @@ sparcnbsd_core_osabi_sniffer (bfd *abfd)
 void _initialize_sparcnbsd_tdep (void);
 
 void
-_initialize_sparnbsd_tdep (void)
+_initialize_sparcnbsd_tdep (void)
 {
   gdbarch_register_osabi_sniffer (bfd_arch_sparc, bfd_target_aout_flavour,
 				  sparcnbsd_aout_osabi_sniffer);

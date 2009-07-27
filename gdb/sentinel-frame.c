@@ -1,7 +1,7 @@
 /* Code dealing with register stack frames, for GDB, the GNU debugger.
 
    Copyright (C) 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995,
-   1996, 1997, 1998, 1999, 2000, 2001, 2002, 2007, 2008
+   1996, 1997, 1998, 1999, 2000, 2001, 2002, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -76,11 +76,23 @@ sentinel_frame_this_id (struct frame_info *this_frame,
   internal_error (__FILE__, __LINE__, _("sentinel_frame_this_id called"));
 }
 
+static struct gdbarch *
+sentinel_frame_prev_arch (struct frame_info *this_frame,
+			  void **this_prologue_cache)
+{
+  struct frame_unwind_cache *cache = *this_prologue_cache;
+  return get_regcache_arch (cache->regcache);
+}
+
 const struct frame_unwind sentinel_frame_unwinder =
 {
   SENTINEL_FRAME,
   sentinel_frame_this_id,
-  sentinel_frame_prev_register
+  sentinel_frame_prev_register,
+  NULL,
+  NULL,
+  NULL,
+  sentinel_frame_prev_arch,
 };
 
 const struct frame_unwind *const sentinel_frame_unwind = &sentinel_frame_unwinder;

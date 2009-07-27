@@ -2,8 +2,8 @@
 
 # Make certain that the script is not running in an internationalized
 # environment.
-LANG=c ; export LANG
-LC_ALL=c ; export LC_ALL
+LANG=C ; export LANG
+LC_ALL=C ; export LC_ALL
 
 if test $# -ne 3
 then
@@ -29,7 +29,7 @@ rm -f ${otmp}
 cat <<EOF >>${otmp}
 /* GDB Notifications to Observers.
 
-   Copyright (C) 2004, 2005, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2004, 2005, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 

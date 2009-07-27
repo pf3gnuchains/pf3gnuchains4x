@@ -1,6 +1,6 @@
 /* Target-dependent code for GNU/Linux x86-64.
 
-   Copyright (C) 2001, 2003, 2004, 2005, 2006, 2007, 2008
+   Copyright (C) 2001, 2003, 2004, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
    Contributed by Jiri Smid, SuSE Labs.
 
@@ -20,6 +20,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "defs.h"
+#include "arch-utils.h"
 #include "frame.h"
 #include "gdbcore.h"
 #include "regcache.h"
@@ -28,6 +29,7 @@
 #include "gdbtypes.h"
 #include "reggroups.h"
 #include "amd64-linux-tdep.h"
+#include "linux-tdep.h"
 
 #include "gdb_string.h"
 
@@ -151,11 +153,13 @@ amd64_linux_sigtramp_p (struct frame_info *this_frame)
 static CORE_ADDR
 amd64_linux_sigcontext_addr (struct frame_info *this_frame)
 {
+  struct gdbarch *gdbarch = get_frame_arch (this_frame);
+  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   CORE_ADDR sp;
   gdb_byte buf[8];
 
   get_frame_register (this_frame, AMD64_RSP_REGNUM, buf);
-  sp = extract_unsigned_integer (buf, 8);
+  sp = extract_unsigned_integer (buf, 8, byte_order);
 
   /* The sigcontext structure is part of the user context.  A pointer
      to the user context is passed as the third argument to the signal
@@ -216,7 +220,7 @@ static struct type *
 amd64_linux_register_type (struct gdbarch *gdbarch, int reg)
 {
   if (reg == AMD64_LINUX_ORIG_RAX_REGNUM)
-    return builtin_type_int64;
+    return builtin_type (gdbarch)->builtin_int64;
 
   return amd64_register_type (gdbarch, reg);
 }
@@ -286,6 +290,17 @@ amd64_linux_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
   /* Enable TLS support.  */
   set_gdbarch_fetch_tls_load_module_address (gdbarch,
                                              svr4_fetch_objfile_link_map);
+
+  /* Displaced stepping.  */
+  set_gdbarch_displaced_step_copy_insn (gdbarch,
+                                        amd64_displaced_step_copy_insn);
+  set_gdbarch_displaced_step_fixup (gdbarch, amd64_displaced_step_fixup);
+  set_gdbarch_displaced_step_free_closure (gdbarch,
+                                           simple_displaced_step_free_closure);
+  set_gdbarch_displaced_step_location (gdbarch,
+                                       displaced_step_at_entry_point);
+
+  set_gdbarch_get_siginfo_type (gdbarch, linux_get_siginfo_type);
 }
 
 

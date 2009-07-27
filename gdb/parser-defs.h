@@ -1,7 +1,7 @@
 /* Parser definitions for GDB.
 
    Copyright (C) 1986, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997,
-   1998, 1999, 2000, 2002, 2007, 2008 Free Software Foundation, Inc.
+   1998, 1999, 2000, 2002, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    Modified from expread.y by the Department of Computer Science at the
    State University of New York at Buffalo.
@@ -69,6 +69,22 @@ struct stoken
     int length;
   };
 
+struct typed_stoken
+  {
+    /* A language-specific type field.  */
+    int type;
+    /* Pointer to first byte of char-string or first bit of bit-string */
+    char *ptr;
+    /* Length of string in bytes for char-string or bits for bit-string */
+    int length;
+  };
+
+struct stoken_vector
+  {
+    int len;
+    struct typed_stoken *tokens;
+  };
+
 struct ttype
   {
     struct stoken stoken;
@@ -129,6 +145,8 @@ extern void write_exp_elt_type (struct type *);
 extern void write_exp_elt_intern (struct internalvar *);
 
 extern void write_exp_string (struct stoken);
+
+void write_exp_string_vector (int type, struct stoken_vector *vec);
 
 extern void write_exp_bitstring (struct stoken);
 

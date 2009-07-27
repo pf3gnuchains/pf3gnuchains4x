@@ -1,6 +1,7 @@
 /* Target-dependent code for SPARC.
 
-   Copyright (C) 2003, 2004, 2006, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2003, 2004, 2006, 2007, 2008, 2009
+   Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -66,6 +67,13 @@ struct gdbarch_tdep
 
   /* Alternative location for trap return.  Used for single-stepping.  */
   CORE_ADDR (*step_trap) (struct frame_info *frame, unsigned long insn);
+
+  /* ISA-specific data types.  */
+  struct type *sparc_psr_type;
+  struct type *sparc_fsr_type;
+  struct type *sparc64_pstate_type;
+  struct type *sparc64_fsr_type;
+  struct type *sparc64_fprs_type;
 };
 
 /* Register numbers of various important registers.  */
@@ -149,7 +157,7 @@ struct sparc_frame_cache
 extern unsigned long sparc_fetch_instruction (CORE_ADDR pc);
 
 /* Fetch StackGhost Per-Process XOR cookie.  */
-extern ULONGEST sparc_fetch_wcookie (void);
+extern ULONGEST sparc_fetch_wcookie (struct gdbarch *gdbarch);
 
 extern CORE_ADDR sparc_analyze_prologue (struct gdbarch *gdbarch,
 					 CORE_ADDR pc, CORE_ADDR current_pc,

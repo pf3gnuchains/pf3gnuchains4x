@@ -113,15 +113,15 @@ if test -z "${INITIAL_READONLY_SECTIONS}${CREATE_SHLIB}"; then
   INITIAL_READONLY_SECTIONS=".interp       ${RELOCATING-0} : { *(.interp) }"
 fi
 if test -z "$PLT"; then
-  PLT=".plt          ${RELOCATING-0} : { *(.plt) }"
+  PLT=".plt          ${RELOCATING-0} : { *(.plt) *(.iplt)}"
 fi
 test -n "${DATA_PLT-${BSS_PLT-text}}" && TEXT_PLT=yes
 if test -z "$GOT"; then
   if test -z "$SEPARATE_GOTPLT"; then
-    GOT=".got          ${RELOCATING-0} : { *(.got.plt) *(.got) }"
+    GOT=".got          ${RELOCATING-0} : { *(.got.plt) *(.igot.plt) *(.got) *(.igot) }"
   else
-    GOT=".got          ${RELOCATING-0} : { *(.got) }"
-    GOTPLT=".got.plt      ${RELOCATING-0} : { *(.got.plt) }"
+    GOT=".got          ${RELOCATING-0} : { *(.got) *(.igot) }"
+    GOTPLT=".got.plt      ${RELOCATING-0} : { *(.got.plt)  *(.igot.plt) }"
   fi
 fi
 DYNAMIC=".dynamic      ${RELOCATING-0} : { *(.dynamic) }"
@@ -242,6 +242,9 @@ STACK="  .stack        ${RELOCATING-0}${RELOCATING+${STACK_ADDR}} :
     *(.stack)
   }"
 
+TEXT_START_ADDR="SEGMENT_START(\"text-segment\", ${TEXT_START_ADDR})"
+SHLIB_TEXT_START_ADDR="SEGMENT_START(\"text-segment\", ${SHLIB_TEXT_START_ADDR:-0})"
+
 # if this is for an embedded system, don't add SIZEOF_HEADERS.
 if [ -z "$EMBEDDED" ]; then
    test -z "${TEXT_BASE_ADDRESS}" && TEXT_BASE_ADDRESS="${TEXT_START_ADDR} + SIZEOF_HEADERS"
@@ -267,8 +270,8 @@ SECTIONS
 {
   /* Read-only sections, merged into text segment: */
   ${CREATE_SHLIB-${CREATE_PIE-${RELOCATING+PROVIDE (__executable_start = ${TEXT_START_ADDR}); . = ${TEXT_BASE_ADDRESS};}}}
-  ${CREATE_SHLIB+${RELOCATING+. = ${SHLIB_TEXT_START_ADDR:-0} + SIZEOF_HEADERS;}}
-  ${CREATE_PIE+${RELOCATING+. = ${SHLIB_TEXT_START_ADDR:-0} + SIZEOF_HEADERS;}}
+  ${CREATE_SHLIB+${RELOCATING+. = ${SHLIB_TEXT_START_ADDR} + SIZEOF_HEADERS;}}
+  ${CREATE_PIE+${RELOCATING+. = ${SHLIB_TEXT_START_ADDR} + SIZEOF_HEADERS;}}
   ${INITIAL_READONLY_SECTIONS}
   .note.gnu.build-id : { *(.note.gnu.build-id) }
 EOF
@@ -323,6 +326,8 @@ eval $COMBRELOCCAT <<EOF
   .rel.bss      ${RELOCATING-0} : { *(.rel.bss${RELOCATING+ .rel.bss.* .rel.gnu.linkonce.b.*}) }
   .rela.bss     ${RELOCATING-0} : { *(.rela.bss${RELOCATING+ .rela.bss.* .rela.gnu.linkonce.b.*}) }
   ${REL_LARGE}
+  .rel.ifunc      ${RELOCATING-0} : { *(.rel.ifunc) }
+  .rela.ifunc     ${RELOCATING-0} : { *(.rela.ifunc) }
 EOF
 
 if [ -n "$COMBRELOC" ]; then
@@ -333,26 +338,30 @@ EOF
 sed -e '/^[ 	]*[{}][ 	]*$/d;/:[ 	]*$/d;/\.rela\./d;s/^.*: { *\(.*\)}$/      \1/' $COMBRELOC >> ldscripts/dyntmp.$$
 cat >> ldscripts/dyntmp.$$ <<EOF
     }
-  .rel.ifunc.dyn      ${RELOCATING-0} :
-    {
-      *(.rel.ifunc.*)
-    }
   .rela.dyn     ${RELOCATING-0} :
     {
 EOF
 sed -e '/^[ 	]*[{}][ 	]*$/d;/:[ 	]*$/d;/\.rel\./d;s/^.*: { *\(.*\)}/      \1/' $COMBRELOC >> ldscripts/dyntmp.$$
 cat >> ldscripts/dyntmp.$$ <<EOF
     }
-  .rela.ifunc.dyn     ${RELOCATING-0} :
-    {
-      *(.rela.ifunc.*)
-    }
 EOF
 fi
 
 cat >> ldscripts/dyntmp.$$ <<EOF
-  .rel.plt      ${RELOCATING-0} : { *(.rel.plt) }
-  .rela.plt     ${RELOCATING-0} : { *(.rela.plt) }
+  .rel.plt      ${RELOCATING-0} :
+    {
+      *(.rel.plt)
+      ${RELOCATING+${CREATE_SHLIB-PROVIDE_HIDDEN (${USER_LABEL_PREFIX}__rel_iplt_start = .);}}
+      *(.rel.iplt)
+      ${RELOCATING+${CREATE_SHLIB-PROVIDE_HIDDEN (${USER_LABEL_PREFIX}__rel_iplt_end = .);}}
+    }
+  .rela.plt     ${RELOCATING-0} :
+    {
+      *(.rela.plt)
+      ${RELOCATING+${CREATE_SHLIB-PROVIDE_HIDDEN (${USER_LABEL_PREFIX}__rela_iplt_start = .);}}
+      *(.rela.iplt)
+      ${RELOCATING+${CREATE_SHLIB-PROVIDE_HIDDEN (${USER_LABEL_PREFIX}__rela_iplt_end = .);}}
+    }
   ${OTHER_PLT_RELOC_SECTIONS}
 EOF
 

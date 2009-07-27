@@ -458,7 +458,7 @@ ac_includes_default="\
 # include <unistd.h>
 #endif"
 
-ac_subst_vars='SHELL PATH_SEPARATOR PACKAGE_NAME PACKAGE_TARNAME PACKAGE_VERSION PACKAGE_STRING PACKAGE_BUGREPORT exec_prefix prefix program_transform_name bindir sbindir libexecdir datadir sysconfdir sharedstatedir localstatedir libdir includedir oldincludedir infodir mandir build_alias host_alias target_alias DEFS ECHO_C ECHO_N ECHO_T LIBS build build_cpu build_vendor build_os host host_cpu host_vendor host_os target target_cpu target_vendor target_os CC CFLAGS LDFLAGS CPPFLAGS ac_ct_CC EXEEXT OBJEXT INSTALL_PROGRAM INSTALL_SCRIPT INSTALL_DATA CYGPATH_W PACKAGE VERSION ACLOCAL AUTOCONF AUTOMAKE AUTOHEADER MAKEINFO install_sh STRIP ac_ct_STRIP INSTALL_STRIP_PROGRAM mkdir_p AWK SET_MAKE am__leading_dot AMTAR am__tar am__untar DEPDIR am__include am__quote AMDEP_TRUE AMDEP_FALSE AMDEPBACKSLASH CCDEPMODE am__fastdepCC_TRUE am__fastdepCC_FALSE CPP EGREP LIBTOOL SED FGREP GREP LD DUMPBIN ac_ct_DUMPBIN NM LN_S OBJDUMP ac_ct_OBJDUMP AR ac_ct_AR RANLIB ac_ct_RANLIB lt_ECHO DSYMUTIL ac_ct_DSYMUTIL NMEDIT ac_ct_NMEDIT LIPO ac_ct_LIPO OTOOL ac_ct_OTOOL OTOOL64 ac_ct_OTOOL64 WARN_CFLAGS NO_WERROR YACC LEX LEXLIB LEX_OUTPUT_ROOT USE_NLS LIBINTL LIBINTL_DEP INCINTL XGETTEXT GMSGFMT POSUB CATALOGS DATADIRNAME INSTOBJEXT GENCAT CATOBJEXT MKINSTALLDIRS MSGFMT MSGMERGE MAINTAINER_MODE_TRUE MAINTAINER_MODE_FALSE MAINT GENINSRC_NEVER_TRUE GENINSRC_NEVER_FALSE HDEFINES CC_FOR_BUILD EXEEXT_FOR_BUILD DEMANGLER_NAME ALLOCA LIBICONV LTLIBICONV NLMCONV_DEFS BUILD_NLMCONV BUILD_SRCONV BUILD_DLLTOOL DLLTOOL_DEFS BUILD_WINDRES BUILD_WINDMC BUILD_DLLWRAP BUILD_MISC BUILD_INSTALL_MISC OBJDUMP_DEFS EMULATION EMULATION_VECTOR datarootdir docdir htmldir LIBOBJS LTLIBOBJS'
+ac_subst_vars='SHELL PATH_SEPARATOR PACKAGE_NAME PACKAGE_TARNAME PACKAGE_VERSION PACKAGE_STRING PACKAGE_BUGREPORT exec_prefix prefix program_transform_name bindir sbindir libexecdir datadir sysconfdir sharedstatedir localstatedir libdir includedir oldincludedir infodir mandir build_alias host_alias target_alias DEFS ECHO_C ECHO_N ECHO_T LIBS build build_cpu build_vendor build_os host host_cpu host_vendor host_os target target_cpu target_vendor target_os CC CFLAGS LDFLAGS CPPFLAGS ac_ct_CC EXEEXT OBJEXT INSTALL_PROGRAM INSTALL_SCRIPT INSTALL_DATA CYGPATH_W PACKAGE VERSION ACLOCAL AUTOCONF AUTOMAKE AUTOHEADER MAKEINFO install_sh STRIP ac_ct_STRIP INSTALL_STRIP_PROGRAM mkdir_p AWK SET_MAKE am__leading_dot AMTAR am__tar am__untar DEPDIR am__include am__quote AMDEP_TRUE AMDEP_FALSE AMDEPBACKSLASH CCDEPMODE am__fastdepCC_TRUE am__fastdepCC_FALSE CPP EGREP LIBTOOL SED FGREP GREP LD DUMPBIN ac_ct_DUMPBIN NM LN_S OBJDUMP ac_ct_OBJDUMP AR ac_ct_AR RANLIB ac_ct_RANLIB lt_ECHO DSYMUTIL ac_ct_DSYMUTIL NMEDIT ac_ct_NMEDIT LIPO ac_ct_LIPO OTOOL ac_ct_OTOOL OTOOL64 ac_ct_OTOOL64 WARN_CFLAGS NO_WERROR YACC LEX LEXLIB LEX_OUTPUT_ROOT USE_NLS LIBINTL LIBINTL_DEP INCINTL XGETTEXT GMSGFMT POSUB CATALOGS DATADIRNAME INSTOBJEXT GENCAT CATOBJEXT MKINSTALLDIRS MSGFMT MSGMERGE MAINTAINER_MODE_TRUE MAINTAINER_MODE_FALSE MAINT GENINSRC_NEVER_TRUE GENINSRC_NEVER_FALSE HDEFINES CC_FOR_BUILD EXEEXT_FOR_BUILD DEMANGLER_NAME ALLOCA LIBICONV LTLIBICONV NLMCONV_DEFS BUILD_NLMCONV BUILD_SRCONV BUILD_DLLTOOL DLLTOOL_DEFS BUILD_WINDRES BUILD_WINDMC BUILD_DLLWRAP BUILD_MISC BUILD_INSTALL_MISC OBJDUMP_DEFS EMULATION EMULATION_VECTOR datarootdir docdir htmldir pdfdir LIBOBJS LTLIBOBJS'
 ac_subst_files=''
 ac_pwd=`pwd`
 
@@ -1002,6 +1002,7 @@ Optional Features:
   --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
   --disable-dependency-tracking  speeds up one-time build
   --enable-dependency-tracking   do not reject slow dependency extractors
+  --enable-plugins        Enable support for plugins (defaults no)
   --disable-largefile     omit support for large files
   --enable-shared[=PKGS]
                           build shared libraries [default=yes]
@@ -1011,7 +1012,6 @@ Optional Features:
                           optimize for fast installation [default=yes]
   --disable-libtool-lock  avoid locking (might break parallel builds)
   --enable-targets        alternative target configurations
-  --enable-commonbfdlib   build shared BFD/opcodes/libiberty library
   --enable-werror         treat compile warnings as errors
   --enable-build-warnings enable build-time compiler warnings
   --disable-nls           do not use Native Language Support
@@ -4736,6 +4736,35 @@ _ACEOF
 _ACEOF
 
 
+
+
+# Check whether --enable-plugins or --disable-plugins was given.
+if test "${enable_plugins+set}" = set; then
+  enableval="$enable_plugins"
+  case "${enableval}" in
+  yes | "") plugins=yes ;;
+  no) plugins=no ;;
+  *) plugins=yes ;;
+ esac
+else
+  plugins=no
+fi;
+
+
+case "${target}" in
+  sparc-*-solaris*|i[3-7]86-*-solaris*)
+    # See comment in bfd/configure.in for the reason for this test.
+    # PR 9992/binutils: We have to duplicate the behaviour of bfd's
+    # configure script so that the utilities in this directory agree
+    # on the size of structures used to describe files.
+    if test "${target}" = "${host}" -a "$enable_largefile" != 'yes'; then
+      if test "$plugins" = "no"; then
+        enable_largefile="no"
+      fi
+    fi
+    ;;
+esac
+
 # Check whether --enable-largefile or --disable-largefile was given.
 if test "${enable_largefile+set}" = set; then
   enableval="$enable_largefile"
@@ -5506,13 +5535,13 @@ if test "${lt_cv_nm_interface+set}" = set; then
 else
   lt_cv_nm_interface="BSD nm"
   echo "int some_variable = 0;" > conftest.$ac_ext
-  (eval echo "\"\$as_me:5509: $ac_compile\"" >&5)
+  (eval echo "\"\$as_me:5538: $ac_compile\"" >&5)
   (eval "$ac_compile" 2>conftest.err)
   cat conftest.err >&5
-  (eval echo "\"\$as_me:5512: $NM \\\"conftest.$ac_objext\\\"\"" >&5)
+  (eval echo "\"\$as_me:5541: $NM \\\"conftest.$ac_objext\\\"\"" >&5)
   (eval "$NM \"conftest.$ac_objext\"" 2>conftest.err > conftest.out)
   cat conftest.err >&5
-  (eval echo "\"\$as_me:5515: output\"" >&5)
+  (eval echo "\"\$as_me:5544: output\"" >&5)
   cat conftest.out >&5
   if $GREP 'External.*some_variable' conftest.out > /dev/null; then
     lt_cv_nm_interface="MS dumpbin"
@@ -5966,7 +5995,7 @@ irix5* | irix6* | nonstopux*)
   ;;
 
 # This must be Linux ELF.
-linux* | k*bsd*-gnu)
+linux* | k*bsd*-gnu | kopensolaris*-gnu)
   lt_cv_deplibs_check_method=pass_all
   ;;
 
@@ -6669,7 +6698,7 @@ ia64-*-hpux*)
   ;;
 *-*-irix6*)
   # Find out which ABI we are using.
-  echo '#line 6672 "configure"' > conftest.$ac_ext
+  echo '#line 6701 "configure"' > conftest.$ac_ext
   if { (eval echo "$as_me:$LINENO: \"$ac_compile\"") >&5
   (eval $ac_compile) 2>&5
   ac_status=$?
@@ -7975,11 +8004,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:7978: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:8007: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>conftest.err)
    ac_status=$?
    cat conftest.err >&5
-   echo "$as_me:7982: \$? = $ac_status" >&5
+   echo "$as_me:8011: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s "$ac_outfile"; then
      # The compiler can only warn and ignore the option if not recognized
      # So say no if there are warnings other than the usual output.
@@ -8144,7 +8173,7 @@ echo $ECHO_N "checking for $compiler option to produce PIC... $ECHO_C" >&6
       lt_prog_compiler_static='-non_shared'
       ;;
 
-    linux* | k*bsd*-gnu)
+    linux* | k*bsd*-gnu | kopensolaris*-gnu)
       case $cc_basename in
       # old Intel for x86_64 which still supported -KPIC.
       ecc*)
@@ -8314,11 +8343,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:8317: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:8346: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>conftest.err)
    ac_status=$?
    cat conftest.err >&5
-   echo "$as_me:8321: \$? = $ac_status" >&5
+   echo "$as_me:8350: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s "$ac_outfile"; then
      # The compiler can only warn and ignore the option if not recognized
      # So say no if there are warnings other than the usual output.
@@ -8419,11 +8448,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:8422: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:8451: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>out/conftest.err)
    ac_status=$?
    cat out/conftest.err >&5
-   echo "$as_me:8426: \$? = $ac_status" >&5
+   echo "$as_me:8455: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s out/conftest2.$ac_objext
    then
      # The compiler can only warn and ignore the option if not recognized
@@ -8474,11 +8503,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:8477: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:8506: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>out/conftest.err)
    ac_status=$?
    cat out/conftest.err >&5
-   echo "$as_me:8481: \$? = $ac_status" >&5
+   echo "$as_me:8510: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s out/conftest2.$ac_objext
    then
      # The compiler can only warn and ignore the option if not recognized
@@ -8705,7 +8734,7 @@ _LT_EOF
       archive_expsym_cmds='sed "s,^,_," $export_symbols >$output_objdir/$soname.expsym~$CC -shared $pic_flag $libobjs $deplibs $compiler_flags ${wl}-h,$soname ${wl}--retain-symbols-file,$output_objdir/$soname.expsym ${wl}--image-base,`expr ${RANDOM-$$} % 4096 / 2 \* 262144 + 1342177280` -o $lib'
       ;;
 
-    gnu* | linux* | tpf* | k*bsd*-gnu)
+    gnu* | linux* | tpf* | k*bsd*-gnu | kopensolaris*-gnu)
       tmp_diet=no
       if test "$host_os" = linux-dietlibc; then
 	case $cc_basename in
@@ -10254,7 +10283,7 @@ linux*oldld* | linux*aout* | linux*coff*)
   ;;
 
 # This must be Linux ELF.
-linux* | k*bsd*-gnu)
+linux* | k*bsd*-gnu | kopensolaris*-gnu)
   version_type=linux
   need_lib_prefix=no
   need_version=no
@@ -11286,7 +11315,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 11289 "configure"
+#line 11318 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -11382,7 +11411,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 11385 "configure"
+#line 11414 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -11620,16 +11649,6 @@ echo "$as_me: error: enable-targets option must specify target names or 'all'" >
             ;;
   no)       enable_targets= ;;
   *)        enable_targets=$enableval ;;
-esac
-fi; # Check whether --enable-commonbfdlib or --disable-commonbfdlib was given.
-if test "${enable_commonbfdlib+set}" = set; then
-  enableval="$enable_commonbfdlib"
-  case "${enableval}" in
-  yes) commonbfdlib=true ;;
-  no)  commonbfdlib=false ;;
-  *)   { { echo "$as_me:$LINENO: error: bad value ${enableval} for BFD commonbfdlib option" >&5
-echo "$as_me: error: bad value ${enableval} for BFD commonbfdlib option" >&2;}
-   { (exit 1); exit 1; }; } ;;
 esac
 fi;
 
@@ -16114,7 +16133,7 @@ do
 	  BUILD_WINDRES='$(WINDRES_PROG)$(EXEEXT)'
 	  BUILD_WINDMC='$(WINDMC_PROG)$(EXEEXT)'
 	  ;;
-	arm-wince-pe* | arm-*-wince)
+	arm-wince-pe* | arm-*-wince | arm*-*-cegcc* | arm*-*-mingw32ce*)
   	  BUILD_DLLTOOL='$(DLLTOOL_PROG)$(EXEEXT)'
 	  if test -z "$DLLTOOL_DEFAULT"; then
 	    DLLTOOL_DEFAULT="-DDLLTOOL_DEFAULT_ARM_WINCE"
@@ -16170,7 +16189,7 @@ do
 	  ;;
 	powerpc*-aix5.[01])
 	  ;;
-	powerpc*-aix5.*)
+	powerpc*-aix[5-9].*)
 	  OBJDUMP_DEFS="-DAIX_WEAK_SUPPORT"
 	  ;;
 	powerpc*-*-pe* | powerpc*-*-cygwin*)
@@ -16291,6 +16310,7 @@ done
 
 
 # Required for html and install-html
+
 
 
 
@@ -17341,6 +17361,7 @@ s,@EMULATION_VECTOR@,$EMULATION_VECTOR,;t t
 s,@datarootdir@,$datarootdir,;t t
 s,@docdir@,$docdir,;t t
 s,@htmldir@,$htmldir,;t t
+s,@pdfdir@,$pdfdir,;t t
 s,@LIBOBJS@,$LIBOBJS,;t t
 s,@LTLIBOBJS@,$LTLIBOBJS,;t t
 CEOF

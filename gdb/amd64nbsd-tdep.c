@@ -1,6 +1,6 @@
 /* Target-dependent code for NetBSD/amd64.
 
-   Copyright (C) 2003, 2004, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2003, 2004, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -125,7 +125,7 @@ amd64nbsd_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
 void _initialize_amd64nbsd_tdep (void);
 
 void
-_initialize_amd64nbsd_ndep (void)
+_initialize_amd64nbsd_tdep (void)
 {
   /* The NetBSD/amd64 native dependent code makes this assumption.  */
   gdb_assert (ARRAY_SIZE (amd64nbsd_r_reg_offset) == AMD64_NUM_GREGS);

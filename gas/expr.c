@@ -31,6 +31,13 @@
 #include "safe-ctype.h"
 #include "obstack.h"
 
+#ifdef HAVE_LIMITS_H
+#include <limits.h>
+#endif
+#ifndef CHAR_BIT
+#define CHAR_BIT 8
+#endif
+
 static void floating_constant (expressionS * expressionP);
 static valueT generic_bignum_to_int32 (void);
 #ifdef BFD64
@@ -404,7 +411,7 @@ integer_constant (int radix, expressionS *expressionP)
       if (num_little_digits > SIZE_OF_LARGE_NUMBER - 1)
 	num_little_digits = SIZE_OF_LARGE_NUMBER - 1;
 
-      assert (num_little_digits >= 4);
+      gas_assert (num_little_digits >= 4);
 
       if (num_little_digits != 8)
 	as_bad (_("a bignum with underscores must have exactly 4 words"));
@@ -943,10 +950,15 @@ operand (expressionS *expressionP, enum expr_mode mode)
 
       break;
 
-    case '(':
 #ifndef NEED_INDEX_OPERATOR
     case '[':
+# ifdef md_need_index_operator
+      if (md_need_index_operator())
+	goto de_fault;
+# endif
+      /* FALLTHROUGH */
 #endif
+    case '(':
       /* Didn't begin with digit & not a name.  */
       if (mode != expr_defer)
 	segment = expression (expressionP);
@@ -1004,6 +1016,9 @@ operand (expressionS *expressionP, enum expr_mode mode)
     case '-':
     case '+':
       {
+#ifdef md_operator
+      unary:
+#endif
 	operand (expressionP, mode);
 	if (expressionP->X_op == O_constant)
 	  {
@@ -1200,7 +1215,7 @@ operand (expressionS *expressionP, enum expr_mode mode)
 #endif
 
     default:
-#ifdef TC_M68K
+#if defined(md_need_index_operator) || defined(TC_M68K)
     de_fault:
 #endif
       if (is_name_beginner (c))	/* Here if did not begin with a digit.  */
@@ -1210,6 +1225,43 @@ operand (expressionS *expressionP, enum expr_mode mode)
 	isname:
 	  name = --input_line_pointer;
 	  c = get_symbol_end ();
+
+#ifdef md_operator
+	  {
+	    operatorT operator = md_operator (name, 1, &c);
+
+	    switch (operator)
+	      {
+	      case O_uminus:
+		*input_line_pointer = c;
+		c = '-';
+		goto unary;
+	      case O_bit_not:
+		*input_line_pointer = c;
+		c = '~';
+		goto unary;
+	      case O_logical_not:
+		*input_line_pointer = c;
+		c = '!';
+		goto unary;
+	      case O_illegal:
+		as_bad (_("invalid use of operator \"%s\""), name);
+		break;
+	      default:
+		break;
+	      }
+	    if (operator != O_absent && operator != O_illegal)
+	      {
+		*input_line_pointer = c;
+		expr (9, expressionP, mode);
+		expressionP->X_add_symbol = make_expr_symbol (expressionP);
+		expressionP->X_op_symbol = NULL;
+		expressionP->X_add_number = 0;
+		expressionP->X_op = operator;
+		break;
+	      }
+	  }
+#endif
 
 #ifdef md_parse_name
 	  /* This is a hook for the backend to parse certain names
@@ -1509,6 +1561,13 @@ expr_set_precedence (void)
     }
 }
 
+void
+expr_set_rank (operatorT operator, operator_rankT rank)
+{
+  gas_assert (operator >= O_md1 && operator < ARRAY_SIZE (op_rank));
+  op_rank[operator] = rank;
+}
+
 /* Initialize the expression parser.  */
 
 void
@@ -1520,7 +1579,7 @@ expr_begin (void)
   {
     expressionS e;
     e.X_op = O_max;
-    assert (e.X_op == O_max);
+    gas_assert (e.X_op == O_max);
   }
 }
 
@@ -1540,10 +1599,50 @@ operator (int *num_chars)
   if (is_end_of_line[c])
     return O_illegal;
 
+#ifdef md_operator
+  if (is_name_beginner (c))
+    {
+      char *name = input_line_pointer;
+      char c = get_symbol_end ();
+
+      ret = md_operator (name, 2, &c);
+      switch (ret)
+	{
+	case O_absent:
+	  *input_line_pointer = c;
+	  input_line_pointer = name;
+	  break;
+	case O_uminus:
+	case O_bit_not:
+	case O_logical_not:
+	  as_bad (_("invalid use of operator \"%s\""), name);
+	  ret = O_illegal;
+	  /* FALLTHROUGH */
+	default:
+	  *input_line_pointer = c;
+	  *num_chars = input_line_pointer - name;
+	  input_line_pointer = name;
+	  return ret;
+	}
+    }
+#endif
+
   switch (c)
     {
     default:
-      return op_encoding[c];
+      ret = op_encoding[c];
+#ifdef md_operator
+      if (ret == O_illegal)
+	{
+	  char *start = input_line_pointer;
+
+	  ret = md_operator (NULL, 2, NULL);
+	  if (ret != O_illegal)
+	    *num_chars = input_line_pointer - start;
+	  input_line_pointer = start;
+	}
+#endif
+      return ret;
 
     case '+':
     case '-':
@@ -1682,10 +1781,14 @@ expr (int rankarg,		/* Larger # is higher rank.  */
 
       op_right = operator (&op_chars);
 
-      know (op_right == O_illegal
+      know (op_right == O_illegal || op_left == O_index
 	    || op_rank[(int) op_right] <= op_rank[(int) op_left]);
-      know ((int) op_left >= (int) O_multiply
-	    && (int) op_left <= (int) O_index);
+      know ((int) op_left >= (int) O_multiply);
+#ifndef md_operator
+      know ((int) op_left <= (int) O_index);
+#else
+      know ((int) op_left < (int) O_max);
+#endif
 
       /* input_line_pointer->after right-hand quantity.  */
       /* left-hand quantity in resultP.  */
@@ -1779,9 +1882,17 @@ expr (int rankarg,		/* Larger # is higher rank.  */
 	      as_warn (_("division by zero"));
 	      v = 1;
 	    }
+	  if ((valueT) v >= sizeof(valueT) * CHAR_BIT
+	      && (op_left == O_left_shift || op_left == O_right_shift))
+	    {
+	      as_warn_value_out_of_range (_("shift count"), v, 0,
+					  sizeof(valueT) * CHAR_BIT - 1,
+					  NULL, 0);
+	      resultP->X_add_number = v = 0;
+	    }
 	  switch (op_left)
 	    {
-	    default:			abort ();
+	    default:			goto general;
 	    case O_multiply:		resultP->X_add_number *= v; break;
 	    case O_divide:		resultP->X_add_number /= v; break;
 	    case O_modulus:		resultP->X_add_number %= v; break;
@@ -1856,6 +1967,7 @@ expr (int rankarg,		/* Larger # is higher rank.  */
 	}
       else
 	{
+        general:
 	  /* The general case.  */
 	  resultP->X_add_symbol = make_expr_symbol (resultP);
 	  resultP->X_op_symbol = make_expr_symbol (&right);

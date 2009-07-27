@@ -1,6 +1,6 @@
 /* ELF support for BFD.
    Copyright 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000,
-   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008
+   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    Written by Fred Fish @ Cygnus Support, from information published
@@ -236,6 +236,11 @@
 #define EM_MCST_ELBRUS	175	/* MCST Elbrus general purpose hardware architecture */
 #define EM_ECOG16	176	/* Cyan Technology eCOG16 family */
 #define EM_CR16		177	/* National Semiconductor CompactRISC 16-bit processor */
+#define EM_ETPU		178	/* Freescale Extended Time Processing Unit */
+#define EM_SLE9X	179	/* Infineon Technologies SLE9X core */
+#define EM_L1OM		180	/* Intel L1OM */
+#define EM_INTEL181	181	/* Reserved by Intel */
+#define EM_INTEL182	182	/* Reserved by Intel */
 
 /* If it is necessary to assign new unofficial EM_* values, please pick large
    random numbers (0x8523, 0xa7f2, etc.) to minimize the chances of collision
@@ -334,6 +339,11 @@
 
 #define EM_CYGNUS_MEP		0xF00D  /* Toshiba MeP */
 
+#define EM_MOXIE                0xFEED  /* Moxie */
+
+/* Old Sunplus S+core7 backend magic number. Written in the absence of an ABI.  */
+#define EM_SCORE_OLD            95
+
 /* See the above comment before you add a new EM_* value here.  */
 
 /* Values for e_version.  */
@@ -394,6 +404,7 @@
 #define SHT_LOOS	0x60000000	/* First of OS specific semantics */
 #define SHT_HIOS	0x6fffffff	/* Last of OS specific semantics */
 
+#define SHT_GNU_INCREMENTAL_INPUTS 0x6fff4700   /* incremental build data */
 #define SHT_GNU_ATTRIBUTES 0x6ffffff5	/* Object attributes */
 #define SHT_GNU_HASH	0x6ffffff6	/* GNU style symbol hash table */
 #define SHT_GNU_LIBLIST	0x6ffffff7	/* List of prelink dependencies */
@@ -461,6 +472,18 @@
 
 #define NT_NETBSDCORE_PROCINFO	1	/* Has a struct procinfo */
 #define NT_NETBSDCORE_FIRSTMACH	32	/* start of machdep note types */
+
+
+/* Note segments for core files on OpenBSD systems.  Note name is
+   "OpenBSD".  */
+
+#define NT_OPENBSD_PROCINFO	10
+#define NT_OPENBSD_AUXV		11
+#define NT_OPENBSD_REGS		20
+#define NT_OPENBSD_FPREGS	21
+#define NT_OPENBSD_XFPREGS	22
+#define NT_OPENBSD_WCOOKIE	23
+
 
 /* Note segments for core files on SPU systems.  Note name
    must start with "SPU/".  */
@@ -532,9 +555,10 @@
 #define STB_GLOBAL	1		/* Symbol visible outside obj */
 #define STB_WEAK	2		/* Like globals, lower precedence */
 #define STB_LOOS	10		/* OS-specific semantics */
+#define STB_GNU_UNIQUE	10		/* Symbol is unique in namespace */
 #define STB_HIOS	12		/* OS-specific semantics */
-#define STB_LOPROC	13		/* Application-specific semantics */
-#define STB_HIPROC	15		/* Application-specific semantics */
+#define STB_LOPROC	13		/* Processor-specific semantics */
+#define STB_HIPROC	15		/* Processor-specific semantics */
 
 #define STT_NOTYPE	0		/* Symbol type is unspecified */
 #define STT_OBJECT	1		/* Symbol is a data object */
@@ -546,9 +570,10 @@
 #define STT_RELC	8		/* Complex relocation expression */
 #define STT_SRELC	9		/* Signed Complex relocation expression */
 #define STT_LOOS	10		/* OS-specific semantics */
+#define STT_GNU_IFUNC	10		/* Symbol is an indirect code object */
 #define STT_HIOS	12		/* OS-specific semantics */
-#define STT_LOPROC	13		/* Application-specific semantics */
-#define STT_HIPROC	15		/* Application-specific semantics */
+#define STT_LOPROC	13		/* Processor-specific semantics */
+#define STT_HIPROC	15		/* Processor-specific semantics */
 
 /* The following constants control how a symbol may be accessed once it has
    become part of an executable or shared library.  */
@@ -616,10 +641,12 @@
 #define DT_LOPROC	0x70000000
 #define DT_HIPROC	0x7fffffff
 
-/* The next four dynamic tags are used on Solaris.  We support them
-   everywhere.	Note these values lie outside of the (new) range for
-   OS specific values.	This is a deliberate special case and we
-   maintain it for backwards compatability.  */
+/* The next 2 dynamic tag ranges, integer value range (DT_VALRNGLO to
+   DT_VALRNGHI) and virtual address range (DT_ADDRRNGLO to DT_ADDRRNGHI),
+   are used on Solaris.  We support them everywhere.  Note these values
+   lie outside of the (new) range for OS specific values.  This is a
+   deliberate special case and we maintain it for backwards compatability.
+ */
 #define DT_VALRNGLO	0x6ffffd00
 #define DT_GNU_PRELINKED 0x6ffffdf5
 #define DT_GNU_CONFLICTSZ 0x6ffffdf6
@@ -800,6 +827,7 @@
 #define	AT_SECURE	23		/* Boolean, was exec setuid-like?  */
 #define AT_BASE_PLATFORM 24		/* String identifying real platform,
 					   may differ from AT_PLATFORM.  */
+#define AT_RANDOM	25		/* Address of 16 random bytes.  */
 #define AT_EXECFN	31		/* Filename of executable.  */
 /* Pointer to the global system page used for system calls and other
    nice things.  */

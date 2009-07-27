@@ -1,6 +1,6 @@
 /* Handle SOM shared libraries.
 
-   Copyright (C) 2004, 2005, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2004, 2005, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -29,6 +29,7 @@
 #include "hppa-tdep.h"
 #include "solist.h"
 #include "solib.h"
+#include "solib-som.h"
 
 #include <sys/utsname.h>
 #include <string.h>
@@ -110,7 +111,7 @@ dld_cache;
 
 static void
 som_relocate_section_addresses (struct so_list *so,
-				struct section_table *sec)
+				struct target_section *sec)
 {
   flagword aflag = bfd_get_section_flags(so->abfd, sec->the_bfd_section);
 
@@ -183,6 +184,7 @@ struct {
 static void
 som_solib_create_inferior_hook (void)
 {
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
   struct minimal_symbol *msymbol;
   unsigned int dld_flags, status, have_endo;
   asection *shlib_info;
@@ -221,7 +223,7 @@ som_solib_create_inferior_hook (void)
     goto keep_going;
 
   anaddr = SYMBOL_VALUE_ADDRESS (msymbol);
-  store_unsigned_integer (buf, 4, PIDGET (inferior_ptid));
+  store_unsigned_integer (buf, 4, byte_order, PIDGET (inferior_ptid));
   status = target_write_memory (anaddr, buf, 4);
   if (status != 0)
     {
@@ -264,7 +266,7 @@ GDB will be unable to track shl_load/shl_unload calls"));
       anaddr = SYMBOL_VALUE (msymbol);
       dld_cache.hook_stub.address = anaddr;
     }
-  store_unsigned_integer (buf, 4, anaddr);
+  store_unsigned_integer (buf, 4, byte_order, anaddr);
 
   msymbol = lookup_minimal_symbol ("__dld_hook", NULL, symfile_objfile);
   if (msymbol == NULL)
@@ -289,7 +291,8 @@ Suggest linking with /opt/langtools/lib/end.o.\n\
 GDB will be unable to track shl_load/shl_unload calls"));
       goto keep_going;
     }
-  create_solib_event_breakpoint (SYMBOL_VALUE_ADDRESS (msymbol));
+  create_solib_event_breakpoint (target_gdbarch,
+				 SYMBOL_VALUE_ADDRESS (msymbol));
 
   /* We have all the support usually found in end.o, so we can track
      shl_load and shl_unload calls.  */
@@ -311,7 +314,7 @@ keep_going:
   status = target_read_memory (anaddr, buf, 4);
   if (status != 0)
     error (_("Unable to read __dld_flags."));
-  dld_flags = extract_unsigned_integer (buf, 4);
+  dld_flags = extract_unsigned_integer (buf, 4, byte_order);
 
   /* If the libraries were not mapped private on HP-UX 11 and later, warn
      the user.  On HP-UX 10 and earlier, there is no easy way to specify
@@ -331,7 +334,7 @@ keep_going:
     dld_flags |= DLD_FLAGS_MAPPRIVATE;
   if (have_endo)
     dld_flags |= DLD_FLAGS_HOOKVALID;
-  store_unsigned_integer (buf, 4, dld_flags);
+  store_unsigned_integer (buf, 4, byte_order, dld_flags);
   status = target_write_memory (anaddr, buf, 4);
   if (status != 0)
     error (_("Unable to write __dld_flags."));
@@ -352,7 +355,7 @@ keep_going:
   anaddr = SYMBOL_VALUE_ADDRESS (msymbol);
 
   /* Make the breakpoint at "_start" a shared library event breakpoint.  */
-  create_solib_event_breakpoint (anaddr);
+  create_solib_event_breakpoint (target_gdbarch, anaddr);
 
   clear_symtab_users ();
 }
@@ -525,6 +528,7 @@ struct dld_list {
 static CORE_ADDR
 link_map_start (void)
 {
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
   struct minimal_symbol *sym;
   CORE_ADDR addr;
   char buf[4];
@@ -535,7 +539,7 @@ link_map_start (void)
     error (_("Unable to find __dld_flags symbol in object file."));
   addr = SYMBOL_VALUE_ADDRESS (sym);
   read_memory (addr, buf, 4);
-  dld_flags = extract_unsigned_integer (buf, 4);
+  dld_flags = extract_unsigned_integer (buf, 4, byte_order);
   if ((dld_flags & DLD_FLAGS_LISTVALID) == 0)
     error (_("__dld_list is not valid according to __dld_flags."));
 
@@ -556,12 +560,12 @@ link_map_start (void)
     addr = SYMBOL_VALUE_ADDRESS (sym);
 
   read_memory (addr, buf, 4);
-  addr = extract_unsigned_integer (buf, 4);
+  addr = extract_unsigned_integer (buf, 4, byte_order);
   if (addr == 0)
     return 0;
 
   read_memory (addr, buf, 4);
-  return extract_unsigned_integer (buf, 4);
+  return extract_unsigned_integer (buf, 4, byte_order);
 }
 
 /* Does this so's name match the main binary? */
@@ -574,6 +578,7 @@ match_main (const char *name)
 static struct so_list *
 som_current_sos (void)
 {
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
   CORE_ADDR lm;
   struct so_list *head = 0;
   struct so_list **link_ptr = &head;
@@ -598,7 +603,7 @@ som_current_sos (void)
       read_memory (lm, (gdb_byte *)&dbuf, sizeof (struct dld_list));
 
       addr = extract_unsigned_integer ((gdb_byte *)&dbuf.name,
-				       sizeof (dbuf.name));
+				       sizeof (dbuf.name), byte_order);
       target_read_string (addr, &namebuf, SO_NAME_MAX_PATH_SIZE - 1, &errcode);
       if (errcode != 0)
 	warning (_("Can't read pathname for load map: %s."),
@@ -619,7 +624,8 @@ som_current_sos (void)
 	    lmi->lm_addr = lm;
 
 #define EXTRACT(_fld) \
-  extract_unsigned_integer ((gdb_byte *)&dbuf._fld, sizeof (dbuf._fld));
+  extract_unsigned_integer ((gdb_byte *)&dbuf._fld, \
+			    sizeof (dbuf._fld), byte_order);
 
 	    lmi->text_addr = EXTRACT (text_addr);
 	    tmp = EXTRACT (info);
@@ -634,31 +640,32 @@ som_current_sos (void)
 	    lmi->got_value = EXTRACT (got_value);
 	    tmp = EXTRACT (tsd_start_addr_ptr);
 	    read_memory (tmp, tsdbuf, 4);
-	    lmi->tsd_start_addr = extract_unsigned_integer (tsdbuf, 4);
+	    lmi->tsd_start_addr
+	      = extract_unsigned_integer (tsdbuf, 4, byte_order);
 
 #ifdef SOLIB_SOM_DBG
-	    printf ("\n+ library \"%s\" is described at 0x%s\n", new->so_name, 
-	    	    paddr_nz (lm));
+	    printf ("\n+ library \"%s\" is described at %s\n", new->so_name,
+	    	    paddress (target_gdbarch, lm));
 	    printf ("  'version' is %d\n", new->lm_info->struct_version);
 	    printf ("  'bind_mode' is %d\n", new->lm_info->bind_mode);
 	    printf ("  'library_version' is %d\n", 
 	    	    new->lm_info->library_version);
-	    printf ("  'text_addr' is 0x%s\n", 
-	    	    paddr_nz (new->lm_info->text_addr));
-	    printf ("  'text_link_addr' is 0x%s\n", 
-	    	    paddr_nz (new->lm_info->text_link_addr));
-	    printf ("  'text_end' is 0x%s\n", 
-	    	    paddr_nz (new->lm_info->text_end));
-	    printf ("  'data_start' is 0x%s\n", 
-	    	    paddr_nz (new->lm_info->data_start));
-	    printf ("  'bss_start' is 0x%s\n", 
-	    	    paddr_nz (new->lm_info->bss_start));
-	    printf ("  'data_end' is 0x%s\n", 
-	    	    paddr_nz (new->lm_info->data_end));
-	    printf ("  'got_value' is %s\n", 
-	    	    paddr_nz (new->lm_info->got_value));
-	    printf ("  'tsd_start_addr' is 0x%s\n", 
-	    	    paddr_nz (new->lm_info->tsd_start_addr));
+	    printf ("  'text_addr' is %s\n",
+	    	    paddress (target_gdbarch, new->lm_info->text_addr));
+	    printf ("  'text_link_addr' is %s\n",
+	    	    paddress (target_gdbarch, new->lm_info->text_link_addr));
+	    printf ("  'text_end' is %s\n",
+	    	    paddress (target_gdbarch, new->lm_info->text_end));
+	    printf ("  'data_start' is %s\n",
+	    	    paddress (target_gdbarch, new->lm_info->data_start));
+	    printf ("  'bss_start' is %s\n",
+	    	    paddress (target_gdbarch, new->lm_info->bss_start));
+	    printf ("  'data_end' is %s\n",
+	    	    paddress (target_gdbarch, new->lm_info->data_end));
+	    printf ("  'got_value' is %s\n",
+	    	    paddress (target_gdbarch, new->lm_info->got_value));
+	    printf ("  'tsd_start_addr' is %s\n",
+	    	    paddress (target_gdbarch, new->lm_info->tsd_start_addr));
 #endif
 
 	    new->addr_low = lmi->text_addr;
@@ -688,6 +695,7 @@ som_current_sos (void)
 static int
 som_open_symbol_file_object (void *from_ttyp)
 {
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
   CORE_ADDR lm, l_name;
   char *filename;
   int errcode;
@@ -695,7 +703,7 @@ som_open_symbol_file_object (void *from_ttyp)
   char buf[4];
 
   if (symfile_objfile)
-    if (!query ("Attempt to reload symbols from process? "))
+    if (!query (_("Attempt to reload symbols from process? ")))
       return 0;
 
   /* First link map member should be the executable.  */
@@ -707,7 +715,7 @@ som_open_symbol_file_object (void *from_ttyp)
 
   /* Convert the address to host format.  Assume that the address is
      unsigned.  */
-  l_name = extract_unsigned_integer (buf, 4);
+  l_name = extract_unsigned_integer (buf, 4, byte_order);
 
   if (l_name == 0)
     return 0;		/* No filename.  */
@@ -804,9 +812,11 @@ _initialize_som_solib (void)
   som_so_ops.current_sos = som_current_sos;
   som_so_ops.open_symbol_file_object = som_open_symbol_file_object;
   som_so_ops.in_dynsym_resolve_code = som_in_dynsym_resolve_code;
+  som_so_ops.bfd_open = solib_bfd_open;
 }
 
-void som_solib_select (struct gdbarch *gdbarch)
+void
+som_solib_select (struct gdbarch *gdbarch)
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
   set_solib_ops (gdbarch, &som_so_ops);

@@ -1,6 +1,6 @@
 // output.h -- manage the output file for gold   -*- C++ -*-
 
-// Copyright 2006, 2007, 2008 Free Software Foundation, Inc.
+// Copyright 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
 // Written by Ian Lance Taylor <iant@google.com>.
 
 // This file is part of gold.
@@ -329,6 +329,13 @@ class Output_data
   { gold_unreachable(); }
 
   // Functions that child classes may call.
+
+  // Reset the address.  The Output_section class needs this when an
+  // SHF_ALLOC input section is added to an output section which was
+  // formerly not SHF_ALLOC.
+  void
+  mark_address_invalid()
+  { this->is_address_valid_ = false; }
 
   // Set the size of the data.
   void
@@ -1948,22 +1955,9 @@ class Output_section : public Output_data
   flags() const
   { return this->flags_; }
 
-  // Set the section flags.  This may only be used with the Layout
-  // code when it is prepared to move the section to a different
-  // segment.
-  void
-  set_flags(elfcpp::Elf_Xword flags)
-  { this->flags_ = flags; }
-
   // Update the output section flags based on input section flags.
   void
-  update_flags_for_input_section(elfcpp::Elf_Xword flags)
-  {
-    this->flags_ |= (flags
-		     & (elfcpp::SHF_WRITE
-			| elfcpp::SHF_ALLOC
-			| elfcpp::SHF_EXECINSTR));
-  }
+  update_flags_for_input_section(elfcpp::Elf_Xword flags);
 
   // Return the entsize field.
   uint64_t
@@ -2195,6 +2189,33 @@ class Output_section : public Output_data
   set_is_relro_local()
   { this->is_relro_local_ = true; }
 
+  // True if this is a small section: a section which holds small
+  // variables.
+  bool
+  is_small_section() const
+  { return this->is_small_section_; }
+
+  // Record that this is a small section.
+  void
+  set_is_small_section()
+  { this->is_small_section_ = true; }
+
+  // True if this is a large section: a section which holds large
+  // variables.
+  bool
+  is_large_section() const
+  { return this->is_large_section_; }
+
+  // Record that this is a large section.
+  void
+  set_is_large_section()
+  { this->is_large_section_ = true; }
+
+  // True if this is a large data (not BSS) section.
+  bool
+  is_large_data_section()
+  { return this->is_large_section_ && this->type_ != elfcpp::SHT_NOBITS; }
+
   // Return whether this section should be written after all the input
   // sections are complete.
   bool
@@ -2260,12 +2281,14 @@ class Output_section : public Output_data
   output_address(const Relobj* object, unsigned int shndx,
 		 off_t offset) const;
 
-  // Return the output address of the start of the merged section for
-  // input section SHNDX in object OBJECT.  This is not necessarily
-  // the offset corresponding to input offset 0 in the section, since
-  // the section may be mapped arbitrarily.
-  uint64_t
-  starting_output_address(const Relobj* object, unsigned int shndx) const;
+  // Look for the merged section for input section SHNDX in object
+  // OBJECT.  If found, return true, and set *ADDR to the address of
+  // the start of the merged section.  This is not necessary the
+  // output offset corresponding to input offset 0 in the section,
+  // since the section may be mapped arbitrarily.
+  bool
+  find_starting_output_address(const Relobj* object, unsigned int shndx,
+			       uint64_t* addr) const;
 
   // Record that this output section was found in the SECTIONS clause
   // of a linker script.
@@ -2806,6 +2829,10 @@ class Output_section : public Output_data
   bool is_relro_ : 1;
   // True if this section holds relro local data.
   bool is_relro_local_ : 1;
+  // True if this is a small section.
+  bool is_small_section_ : 1;
+  // True if this is a large section.
+  bool is_large_section_ : 1;
   // For SHT_TLS sections, the offset of this section relative to the base
   // of the TLS segment.
   uint64_t tls_offset_;
@@ -2855,6 +2882,17 @@ class Output_segment
   off_t
   offset() const
   { return this->offset_; }
+
+  // Whether this is a segment created to hold large data sections.
+  bool
+  is_large_data_segment() const
+  { return this->is_large_data_segment_; }
+
+  // Record that this is a segment created to hold large data
+  // sections.
+  void
+  set_is_large_data_segment()
+  { this->is_large_data_segment_ = true; }
 
   // Return the maximum alignment of the Output_data.
   uint64_t
@@ -3038,6 +3076,8 @@ class Output_segment
   bool is_max_align_known_ : 1;
   // Whether vaddr and paddr were set by a linker script.
   bool are_addresses_set_ : 1;
+  // Whether this segment holds large data sections.
+  bool is_large_data_segment_ : 1;
 };
 
 // This class represents the output file.
@@ -3113,9 +3153,13 @@ class Output_file
   { }
 
  private:
-  // Map the file into memory and return a pointer to the map.
+  // Map the file into memory.
   void
   map();
+
+  // Allocate anonymous memory for the file.
+  void*
+  map_anonymous();
 
   // Unmap the file from memory (and flush to disk buffers).
   void

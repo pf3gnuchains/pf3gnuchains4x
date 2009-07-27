@@ -1,6 +1,6 @@
 /* Serial interface for local (hardwired) serial ports on Windows systems
 
-   Copyright (C) 2006, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -61,7 +61,7 @@ ser_windows_open (struct serial *scb, const char *name)
       return -1;
     }
 
-  scb->fd = _open_osfhandle ((long) h, O_RDWR);
+  scb->fd = _open_osfhandle ((intptr_t) h, O_RDWR);
   if (scb->fd < 0)
     {
       errno = ENOENT;
@@ -492,8 +492,6 @@ stop_select_thread (struct ser_console_state *state)
   state->thread_state = STS_STOPPED;
 }
 
-static DWORD WINAPI console_select_thread (void *arg) ATTR_NORETURN;
-
 static DWORD WINAPI
 console_select_thread (void *arg)
 {
@@ -575,6 +573,7 @@ console_select_thread (void *arg)
 
       SetEvent(state->have_stopped);
     }
+  return 0;
 }
 
 static int
@@ -594,8 +593,6 @@ fd_is_file (int fd)
   else
     return 0;
 }
-
-static DWORD WINAPI pipe_select_thread (void *arg) ATTR_NORETURN;
 
 static DWORD WINAPI
 pipe_select_thread (void *arg)
@@ -637,9 +634,8 @@ pipe_select_thread (void *arg)
 
       SetEvent (state->have_stopped);
     }
+  return 0;
 }
-
-static DWORD WINAPI file_select_thread (void *arg) ATTR_NORETURN;
 
 static DWORD WINAPI
 file_select_thread (void *arg)
@@ -663,6 +659,7 @@ file_select_thread (void *arg)
 
       SetEvent (state->have_stopped);
     }
+  return 0;
 }
 
 static void
@@ -999,8 +996,6 @@ struct net_windows_state
   
   HANDLE sock_event;
 };
-
-static DWORD WINAPI net_windows_select_thread (void *arg) ATTR_NORETURN;
 
 static DWORD WINAPI
 net_windows_select_thread (void *arg)

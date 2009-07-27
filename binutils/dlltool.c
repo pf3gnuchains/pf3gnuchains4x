@@ -1,6 +1,6 @@
 /* dlltool.c -- tool to generate stuff for PE style DLLs
    Copyright 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008 Free Software Foundation, Inc.
+   2005, 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GNU Binutils.
 
@@ -353,7 +353,36 @@ static int no_idata5;
 static char *exp_name;
 static char *imp_name;
 static char *identify_imp_name;
-static char *identify_dll_name;
+static bfd_boolean identify_strict;
+
+/* Types used to implement a linked list of dllnames associated
+   with the specified import lib. Used by the identify_* code.
+   The head entry is acts as a sentinal node and is always empty
+   (head->dllname is NULL).  */
+typedef struct dll_name_list_node_t
+{
+  char *                        dllname;
+  struct dll_name_list_node_t * next;
+} dll_name_list_node_type;
+typedef struct dll_name_list_t
+{
+  dll_name_list_node_type * head;
+  dll_name_list_node_type * tail;
+} dll_name_list_type; 
+
+/* Types used to pass data to iterator functions.  */
+typedef struct symname_search_data_t
+{
+  const char * symname;
+  bfd_boolean  found;
+} symname_search_data_type;
+typedef struct identify_data_t
+{
+   dll_name_list_type * list;
+   bfd_boolean          ms_style_implib;
+} identify_data_type; 
+
+
 static char *head_label;
 static char *imp_name_lab;
 static char *dll_name;
@@ -371,12 +400,17 @@ static bfd_boolean export_all_symbols;
    exporting all symbols.  */
 static bfd_boolean do_default_excludes = TRUE;
 
+static bfd_boolean use_nul_prefixed_import_tables = FALSE;
+
 /* Default symbols to exclude when exporting all the symbols.  */
 static const char *default_excludes = "DllMain@12,DllEntryPoint@0,impure_ptr";
 
 /* TRUE if we should add __imp_<SYMBOL> to import libraries for backward
    compatibility to old Cygwin releases.  */
 static bfd_boolean create_compat_implib;
+
+/* TRUE if we have to write PE+ import libraries.  */
+static bfd_boolean create_for_pep;
 
 static char *def_file;
 
@@ -726,11 +760,20 @@ static bfd *make_one_lib_file (export_type *, int);
 static bfd *make_head (void);
 static bfd *make_tail (void);
 static void gen_lib_file (void);
+static void dll_name_list_append (dll_name_list_type *, bfd_byte *);
+static int  dll_name_list_count (dll_name_list_type *);
+static void dll_name_list_print (dll_name_list_type *);
+static void dll_name_list_free_contents (dll_name_list_node_type *);
+static void dll_name_list_free (dll_name_list_type *);
+static dll_name_list_type * dll_name_list_create (void);
 static void identify_dll_for_implib (void);
-static void identify_search_archive (bfd*);
-static void identify_search_member (bfd*, bfd*);
-static bfd_boolean identify_process_section_p (asection *);
+static void identify_search_archive
+  (bfd *, void (*) (bfd *, bfd *, void *),  void *);
+static void identify_search_member (bfd *, bfd *, void *);
+static bfd_boolean identify_process_section_p (asection *, bfd_boolean);
 static void identify_search_section (bfd *, asection *, void *);
+static void identify_member_contains_symname (bfd *, bfd  *, void *);
+
 static int pfunc (const void *, const void *);
 static int nfunc (const void *, const void *);
 static void remove_null_names (export_type **);
@@ -739,7 +782,7 @@ static void fill_ordinals (export_type **);
 static void mangle_defs (void);
 static void usage (FILE *, int);
 static void inform (const char *, ...) ATTRIBUTE_PRINTF_1;
-static void set_dll_name_from_def (const char *);
+static void set_dll_name_from_def (const char *name, char is_dll);
 
 static char *
 prefix_encode (char *start, unsigned code)
@@ -958,13 +1001,22 @@ def_exports (const char *name, const char *internal_name, int ordinal,
 }
 
 static void
-set_dll_name_from_def (const char * name)
+set_dll_name_from_def (const char *name, char is_dll)
 {
-  const char* image_basename = lbasename (name);
+  const char *image_basename = lbasename (name);
   if (image_basename != name)
     non_fatal (_("%s: Path components stripped from image name, '%s'."),
 	      def_file, name);
-  dll_name = xstrdup (image_basename);
+  /* Append the default suffix, if none specified.  */ 
+  if (strchr (image_basename, '.') == 0)
+    {
+      const char * suffix = is_dll ? ".dll" : ".exe";
+
+      dll_name = xmalloc (strlen (image_basename) + strlen (suffix) + 1);
+      sprintf (dll_name, "%s%s", image_basename, suffix);
+    }
+  else
+    dll_name = xstrdup (image_basename);
 }
 
 void
@@ -978,8 +1030,8 @@ def_name (const char *name, int base)
 
   /* If --dllname not provided, use the one in the DEF file.
      FIXME: Is this appropriate for executables?  */
-  if (! dll_name)
-    set_dll_name_from_def (name);
+  if (!dll_name)
+    set_dll_name_from_def (name, 0);
   d_is_exe = 1;
 }
 
@@ -993,8 +1045,8 @@ def_library (const char *name, int base)
     non_fatal (_("Can't have LIBRARY and NAME"));
 
   /* If --dllname not provided, use the one in the DEF file.  */
-  if (! dll_name)
-    set_dll_name_from_def (name);
+  if (!dll_name)
+    set_dll_name_from_def (name, 1);
   d_is_dll = 1;
 }
 
@@ -1618,13 +1670,16 @@ flush_page (FILE *f, bfd_vma *need, bfd_vma page_addr, int on_page)
 
       if (needed)
         {
-#ifndef DLLTOOL_MX86_64
-	  /* Relocation via HIGHLOW.  */
-          needed = ((needed - page_addr) | 0x3000) & 0xffff;
-#else
-	  /* Relocation via DIR64.  */
-	  needed = ((needed - page_addr) | 0xa000) & 0xffff;
-#endif
+	  if (!create_for_pep)
+	    {
+	      /* Relocation via HIGHLOW.  */
+	      needed = ((needed - page_addr) | 0x3000) & 0xffff;
+	    }
+	  else
+	    {
+	      /* Relocation via DIR64.  */
+	      needed = ((needed - page_addr) | 0xa000) & 0xffff;
+	    }
 	}
 
       fprintf (f, "\t%s\t0x%lx\n", ASM_SHORT, (long) needed);
@@ -1740,18 +1795,19 @@ generate_idata_ofile (FILE *filvar)
     {
       fprintf (filvar, "listone%d:\n", headindex);
       for (funcindex = 0; funcindex < headptr->nfuncs; funcindex++)
-#ifdef DLLTOOL_MX86_64
-	fprintf (filvar, "\t%sfuncptr%d_%d%s\n%s\t0\n",
-		 ASM_RVA_BEFORE, headindex, funcindex, ASM_RVA_AFTER,ASM_LONG);
-#else
-	fprintf (filvar, "\t%sfuncptr%d_%d%s\n",
-		 ASM_RVA_BEFORE, headindex, funcindex, ASM_RVA_AFTER);
-#endif
-#ifdef DLLTOOL_MX86_64
-      fprintf (filvar, "\t%s\t0\n\t%s\t0\n", ASM_LONG, ASM_LONG); /* NULL terminating list.  */
-#else
-      fprintf (filvar, "\t%s\t0\n", ASM_LONG); /* NULL terminating list.  */
-#endif
+        {
+	  if (create_for_pep)
+	    fprintf (filvar, "\t%sfuncptr%d_%d%s\n%s\t0\n",
+		     ASM_RVA_BEFORE, headindex, funcindex, ASM_RVA_AFTER,
+		     ASM_LONG);
+	  else
+	    fprintf (filvar, "\t%sfuncptr%d_%d%s\n",
+		     ASM_RVA_BEFORE, headindex, funcindex, ASM_RVA_AFTER);
+        }
+      if (create_for_pep)
+	fprintf (filvar, "\t%s\t0\n\t%s\t0\n", ASM_LONG, ASM_LONG);
+      else
+	fprintf (filvar, "\t%s\t0\n", ASM_LONG); /* NULL terminating list.  */
       headindex++;
     }
 
@@ -1761,18 +1817,19 @@ generate_idata_ofile (FILE *filvar)
     {
       fprintf (filvar, "listtwo%d:\n", headindex);
       for (funcindex = 0; funcindex < headptr->nfuncs; funcindex++)
-#ifdef DLLTOOL_MX86_64
-	fprintf (filvar, "\t%sfuncptr%d_%d%s\n%s\t0\n",
-		 ASM_RVA_BEFORE, headindex, funcindex, ASM_RVA_AFTER,ASM_LONG);
-#else
-	fprintf (filvar, "\t%sfuncptr%d_%d%s\n",
-		 ASM_RVA_BEFORE, headindex, funcindex, ASM_RVA_AFTER);
-#endif
-#ifdef DLLTOOL_MX86_64
-      fprintf (filvar, "\t%s\t0\n\t%s\t0\n", ASM_LONG, ASM_LONG); /* NULL terminating list.  */
-#else
-      fprintf (filvar, "\t%s\t0\n", ASM_LONG); /* NULL terminating list.  */
-#endif
+        {
+	  if (create_for_pep)
+	    fprintf (filvar, "\t%sfuncptr%d_%d%s\n%s\t0\n",
+		     ASM_RVA_BEFORE, headindex, funcindex, ASM_RVA_AFTER,
+		     ASM_LONG);
+	  else
+	    fprintf (filvar, "\t%sfuncptr%d_%d%s\n",
+		     ASM_RVA_BEFORE, headindex, funcindex, ASM_RVA_AFTER);
+        }
+      if (create_for_pep)
+	fprintf (filvar, "\t%s\t0\n\t%s\t0\n", ASM_LONG, ASM_LONG);
+      else
+	fprintf (filvar, "\t%s\t0\n", ASM_LONG); /* NULL terminating list.  */
       headindex++;
     }
 
@@ -2083,8 +2140,9 @@ xlate (const char *name)
       char *p;
 
       name += lead_at;
-      p = strchr (name, '@');
-      if (p)
+      /* PR 9766: Look for the last @ sign in the name.  */
+      p = strrchr (name, '@');
+      if (p && ISDIGIT (p[1]))
 	*p = 0;
     }
   return name;
@@ -2452,61 +2510,63 @@ make_one_lib_file (export_type *exp, int i)
 	  /* An idata$4 or idata$5 is one word long, and has an
 	     rva to idata$6.  */
 
-#ifdef DLLTOOL_MX86_64
-	  si->data = xmalloc (8);
-	  si->size = 8;
-
-	  if (exp->noname)
+	  if (create_for_pep)
 	    {
-	      si->data[0] = exp->ordinal ;
-	      si->data[1] = exp->ordinal >> 8;
-	      si->data[2] = exp->ordinal >> 16;
-	      si->data[3] = exp->ordinal >> 24;
-	      si->data[4] = 0;
-	      si->data[5] = 0;
-	      si->data[6] = 0;
-	      si->data[7] = 0x80;
+	      si->data = xmalloc (8);
+	      si->size = 8;
+	      if (exp->noname)
+	        {
+		  si->data[0] = exp->ordinal ;
+		  si->data[1] = exp->ordinal >> 8;
+		  si->data[2] = exp->ordinal >> 16;
+		  si->data[3] = exp->ordinal >> 24;
+		  si->data[4] = 0;
+		  si->data[5] = 0;
+		  si->data[6] = 0;
+		  si->data[7] = 0x80;
+	        }
+	      else
+	        {
+		  sec->reloc_count = 1;
+		  memset (si->data, 0, si->size);
+		  rel = xmalloc (sizeof (arelent));
+		  rpp = xmalloc (sizeof (arelent *) * 2);
+		  rpp[0] = rel;
+		  rpp[1] = 0;
+		  rel->address = 0;
+		  rel->addend = 0;
+		  rel->howto = bfd_reloc_type_lookup (abfd, BFD_RELOC_RVA);
+		  rel->sym_ptr_ptr = secdata[IDATA6].sympp;
+		  sec->orelocation = rpp;
+	        }
 	    }
 	  else
 	    {
-	      sec->reloc_count = 1;
-	      memset (si->data, 0, si->size);
-	      rel = xmalloc (sizeof (arelent));
-	      rpp = xmalloc (sizeof (arelent *) * 2);
-	      rpp[0] = rel;
-	      rpp[1] = 0;
-	      rel->address = 0;
-	      rel->addend = 0;
-	      rel->howto = bfd_reloc_type_lookup (abfd, BFD_RELOC_RVA);
-	      rel->sym_ptr_ptr = secdata[IDATA6].sympp;
-	      sec->orelocation = rpp;
+	      si->data = xmalloc (4);
+	      si->size = 4;
+	      
+	      if (exp->noname)
+	        {
+		  si->data[0] = exp->ordinal ;
+		  si->data[1] = exp->ordinal >> 8;
+		  si->data[2] = exp->ordinal >> 16;
+		  si->data[3] = 0x80;
+	        }
+	      else
+	        {
+		  sec->reloc_count = 1;
+		  memset (si->data, 0, si->size);
+		  rel = xmalloc (sizeof (arelent));
+		  rpp = xmalloc (sizeof (arelent *) * 2);
+		  rpp[0] = rel;
+		  rpp[1] = 0;
+		  rel->address = 0;
+		  rel->addend = 0;
+		  rel->howto = bfd_reloc_type_lookup (abfd, BFD_RELOC_RVA);
+		  rel->sym_ptr_ptr = secdata[IDATA6].sympp;
+		  sec->orelocation = rpp;
+	      }
 	    }
-#else
-	  si->data = xmalloc (4);
-	  si->size = 4;
-
-	  if (exp->noname)
-	    {
-	      si->data[0] = exp->ordinal ;
-	      si->data[1] = exp->ordinal >> 8;
-	      si->data[2] = exp->ordinal >> 16;
-	      si->data[3] = 0x80;
-	    }
-	  else
-	    {
-	      sec->reloc_count = 1;
-	      memset (si->data, 0, si->size);
-	      rel = xmalloc (sizeof (arelent));
-	      rpp = xmalloc (sizeof (arelent *) * 2);
-	      rpp[0] = rel;
-	      rpp[1] = 0;
-	      rel->address = 0;
-	      rel->addend = 0;
-	      rel->howto = bfd_reloc_type_lookup (abfd, BFD_RELOC_RVA);
-	      rel->sym_ptr_ptr = secdata[IDATA6].sympp;
-	      sec->orelocation = rpp;
-	    }
-#endif
 	  break;
 
 	case IDATA6:
@@ -2720,19 +2780,26 @@ make_head (void)
   if (!no_idata5)
     {
       fprintf (f, "\t.section\t.idata$5\n");
-#ifdef DLLTOOL_MX86_64
-      fprintf (f,"\t%s\t0\n\t%s\t0\n", ASM_LONG, ASM_LONG); /* NULL terminating list.  */
-#else
-      fprintf (f,"\t%s\t0\n", ASM_LONG); /* NULL terminating list.  */
-#endif
+      if (use_nul_prefixed_import_tables)
+        {
+	  if (create_for_pep)
+	    fprintf (f,"\t%s\t0\n\t%s\t0\n", ASM_LONG, ASM_LONG);
+	  else
+	    fprintf (f,"\t%s\t0\n", ASM_LONG);
+        }
       fprintf (f, "fthunk:\n");
     }
 
   if (!no_idata4)
     {
       fprintf (f, "\t.section\t.idata$4\n");
-      fprintf (f, "\t%s\t0\n", ASM_LONG);
-      fprintf (f, "\t.section	.idata$4\n");
+      if (use_nul_prefixed_import_tables)
+        {
+	  if (create_for_pep)
+	    fprintf (f,"\t%s\t0\n\t%s\t0\n", ASM_LONG, ASM_LONG);
+	  else
+	    fprintf (f,"\t%s\t0\n", ASM_LONG);
+        }
       fprintf (f, "hname:\n");
     }
 
@@ -2757,21 +2824,19 @@ make_tail (void)
   if (!no_idata4)
     {
       fprintf (f, "\t.section	.idata$4\n");
-#ifdef DLLTOOL_MX86_64
-      fprintf (f,"\t%s\t0\n\t%s\t0\n", ASM_LONG, ASM_LONG); /* NULL terminating list.  */
-#else
-      fprintf (f,"\t%s\t0\n", ASM_LONG); /* NULL terminating list.  */
-#endif
+      if (create_for_pep)
+	fprintf (f,"\t%s\t0\n\t%s\t0\n", ASM_LONG, ASM_LONG);
+      else
+	fprintf (f,"\t%s\t0\n", ASM_LONG); /* NULL terminating list.  */
     }
 
   if (!no_idata5)
     {
       fprintf (f, "\t.section	.idata$5\n");
-#ifdef DLLTOOL_MX86_64
-      fprintf (f,"\t%s\t0\n\t%s\t0\n", ASM_LONG, ASM_LONG); /* NULL terminating list.  */
-#else
-      fprintf (f,"\t%s\t0\n", ASM_LONG); /* NULL terminating list.  */
-#endif
+      if (create_for_pep)
+	fprintf (f,"\t%s\t0\n\t%s\t0\n", ASM_LONG, ASM_LONG);
+      else
+	fprintf (f,"\t%s\t0\n", ASM_LONG); /* NULL terminating list.  */
     }
 
 #ifdef DLLTOOL_PPC
@@ -2926,69 +2991,283 @@ gen_lib_file (void)
   inform (_("Created lib file"));
 }
 
-/* identify_dll_for_implib
+/* Append a copy of data (cast to char *) to list.  */
 
-   This is the main implementation for the --identify option.
-   Given the name of an import library in identify_imp_name,
-   search all archive members for an .idata$7 section
-   (.idata$6 on PPC). This section will consist of a single
-   char* constant, indicating the name of the DLL represented
-   by the import library.
+static void
+dll_name_list_append (dll_name_list_type * list, bfd_byte * data)
+{
+  /* Error checking.  */
+  if (! list || ! list->tail)
+    return;
 
-   It is possible to construct an import library that has
-   two members with a non-empty .idata$7 section, but these
-   are not often seen in normal operation.  In this case,
-   an error is flagged.
-*/   
+  /* Allocate new node.  */
+  dll_name_list_node_type * entry =
+    (dll_name_list_node_type *) xmalloc (sizeof (dll_name_list_node_type));
+
+  /* Initialize its values.  */
+  entry->dllname = xstrdup ((char *) data);
+  entry->next = NULL;
+
+  /* Add to tail, and move tail.  */
+  list->tail->next = entry;
+  list->tail = entry;
+}
+
+/* Count the number of entries in list.  */
+
+static int 
+dll_name_list_count (dll_name_list_type * list)
+{
+  /* Error checking.  */
+  if (! list || ! list->head)
+    return 0;
+
+  int count = 0;
+  dll_name_list_node_type * p = list->head;
+
+  while (p && p->next)
+    {
+      count++;
+      p = p->next;
+    }
+  return count;
+}
+
+/* Print each entry in list to stdout.  */
+
+static void 
+dll_name_list_print (dll_name_list_type * list)
+{
+  /* Error checking.  */
+  if (! list || ! list->head)
+    return;
+
+  dll_name_list_node_type * p = list->head;
+
+  while (p && p->next && p->next->dllname && *(p->next->dllname))
+    {
+      printf ("%s\n", p->next->dllname);
+      p = p->next;
+    }
+}
+
+/* Free all entries in list, and list itself.  */
+
+static void
+dll_name_list_free (dll_name_list_type * list)
+{
+  if (list)
+    {
+      dll_name_list_free_contents (list->head);
+      list->head = NULL;
+      list->tail = NULL;
+      free (list);
+    }
+}
+
+/* Recursive function to free all nodes entry->next->next...
+   as well as entry itself.  */
+
+static void 
+dll_name_list_free_contents (dll_name_list_node_type * entry)
+{
+  if (entry)
+    {
+      if (entry->next)
+        {
+          dll_name_list_free_contents (entry->next);
+          entry->next = NULL;
+        }
+      if (entry->dllname)
+        {
+          free (entry->dllname);
+          entry->dllname = NULL;
+        }
+      free (entry);
+    }
+}
+
+/* Allocate and initialize a dll_name_list_type object,
+   including its sentinel node.  Caller is responsible
+   for calling dll_name_list_free when finished with 
+   the list.  */
+
+static dll_name_list_type *
+dll_name_list_create (void)
+{
+  /* Allocate list.  */
+  dll_name_list_type * list = xmalloc (sizeof (dll_name_list_type));
+
+  /* Allocate and initialize sentinel node.  */
+  list->head = xmalloc (sizeof (dll_name_list_node_type));
+  list->head->dllname = NULL;
+  list->head->next = NULL;
+
+  /* Bookkeeping for empty list.  */
+  list->tail = list->head;
+
+  return list;
+}
+
+/* Search the symbol table of the suppled BFD for a symbol whose name matches
+   OBJ (where obj is cast to const char *).  If found, set global variable
+   identify_member_contains_symname_result TRUE.  It is the caller's
+   responsibility to set the result variable FALSE before iterating with
+   this function.  */   
+
+static void 
+identify_member_contains_symname (bfd  * abfd,
+				  bfd  * archive_bfd ATTRIBUTE_UNUSED,
+				  void * obj)
+{
+  long storage_needed;
+  asymbol ** symbol_table;
+  long number_of_symbols;
+  long i;
+  symname_search_data_type * search_data = (symname_search_data_type *) obj;
+
+  /* If we already found the symbol in a different member,
+     short circuit.  */
+  if (search_data->found)
+    return;
+
+  storage_needed = bfd_get_symtab_upper_bound (abfd);
+  if (storage_needed <= 0)
+    return;
+
+  symbol_table = xmalloc (storage_needed);
+  number_of_symbols = bfd_canonicalize_symtab (abfd, symbol_table);
+  if (number_of_symbols < 0)
+    {
+      free (symbol_table);
+      return;
+    }
+
+  for (i = 0; i < number_of_symbols; i++)
+    {
+      if (strncmp (symbol_table[i]->name,
+                   search_data->symname,
+                   strlen (search_data->symname)) == 0)
+	{
+	  search_data->found = TRUE;
+	  break;
+	}
+    }
+  free (symbol_table);
+}
+
+/* This is the main implementation for the --identify option.
+   Given the name of an import library in identify_imp_name, first determine
+   if the import library is a GNU binutils-style one (where the DLL name is
+   stored in an .idata$7 (.idata$6 on PPC) section, or if it is a MS-style
+   one (where the DLL name, along with much other data, is stored in the
+   .idata$6 section). We determine the style of import library by searching
+   for the DLL-structure symbol inserted by MS tools:
+   __NULL_IMPORT_DESCRIPTOR.
+
+   Once we know which section to search, evaluate each section for the
+   appropriate properties that indicate it may contain the name of the
+   associated DLL (this differs depending on the style).  Add the contents
+   of all sections which meet the criteria to a linked list of dll names.
+
+   Finally, print them all to stdout. (If --identify-strict, an error is
+   reported if more than one match was found).  */   
+
 static void 
 identify_dll_for_implib (void)
 {
-  bfd* abfd = NULL;
+  bfd * abfd = NULL;
+  int count = 0;
+  identify_data_type identify_data;
+  symname_search_data_type search_data;
+
+  /* Initialize identify_data.  */
+  identify_data.list = dll_name_list_create ();
+  identify_data.ms_style_implib = FALSE;
+
+  /* Initialize search_data.  */
+  search_data.symname = "__NULL_IMPORT_DESCRIPTOR";
+  search_data.found = FALSE;
 
   bfd_init ();
 
   abfd = bfd_openr (identify_imp_name, 0);
   if (abfd == NULL)
+    bfd_fatal (identify_imp_name);
+
+  if (! bfd_check_format (abfd, bfd_archive))
     {
-      bfd_fatal (identify_imp_name);
+      if (! bfd_close (abfd))
+        bfd_fatal (identify_imp_name);
+
+      fatal (_("%s is not a library"), identify_imp_name);
     }
+
+  /* Detect if this a Microsoft import library.  */
+  identify_search_archive (abfd,
+			   identify_member_contains_symname,
+			   (void *)(& search_data));
+  if (search_data.found)
+    identify_data.ms_style_implib = TRUE;
+  
+  /* Rewind the bfd.  */
+  if (! bfd_close (abfd))
+    bfd_fatal (identify_imp_name);
+  abfd = bfd_openr (identify_imp_name, 0);
+  if (abfd == NULL)
+    bfd_fatal (identify_imp_name);
+
   if (!bfd_check_format (abfd, bfd_archive))
     {
       if (!bfd_close (abfd))
         bfd_fatal (identify_imp_name);
 
-      fatal ("%s is not a library", identify_imp_name);
+      fatal (_("%s is not a library"), identify_imp_name);
     }
+ 
+  /* Now search for the dll name.  */
+  identify_search_archive (abfd,
+			   identify_search_member,
+			   (void *)(& identify_data));
 
-  identify_search_archive (abfd);
-
-  if (!bfd_close (abfd))
+  if (! bfd_close (abfd))
     bfd_fatal (identify_imp_name);
 
-  if (identify_dll_name && *identify_dll_name)
+  count = dll_name_list_count (identify_data.list);
+  if (count > 0)
     {
-      printf ("%s\n",identify_dll_name);
-      free (identify_dll_name);
-      identify_dll_name = NULL;
+      if (identify_strict && count > 1)
+        {
+          dll_name_list_free (identify_data.list);
+          identify_data.list = NULL;
+          fatal (_("Import library `%s' specifies two or more dlls"),
+		 identify_imp_name);
+        }
+      dll_name_list_print (identify_data.list);
+      dll_name_list_free (identify_data.list);
+      identify_data.list = NULL;
     }
   else
     {
-      fatal ("Unable to determine dll name for %s (not an import library?)", identify_imp_name);
+      dll_name_list_free (identify_data.list);
+      identify_data.list = NULL;
+      fatal (_("Unable to determine dll name for `%s' (not an import library?)"),
+	     identify_imp_name);
     }
 }
 
-/* identify_search_archive
+/* Loop over all members of the archive, applying the supplied function to
+   each member that is a bfd_object.  The function will be called as if:
+      func (member_bfd, abfd, user_storage)  */   
 
-   Loop over all members of the archive, inspecting 
-   each for the presence of an .idata$7 (.idata$6 on PPC)
-   section with non-empty contents.
-*/   
 static void
-identify_search_archive (bfd* abfd)
+identify_search_archive (bfd * abfd, 
+			 void (* operation) (bfd *, bfd *, void *),
+			 void * user_storage)
 {
-  bfd *arfile = NULL;
-  bfd *last_arfile = NULL;
-  char **matching;
+  bfd *   arfile = NULL;
+  bfd *   last_arfile = NULL;
+  char ** matching;
 
   while (1)
     {
@@ -3000,19 +3279,18 @@ identify_search_archive (bfd* abfd)
             bfd_fatal (bfd_get_filename (abfd));
           break;
         }
+
       if (bfd_check_format_matches (arfile, bfd_object, &matching))
-        {
-          identify_search_member (arfile, abfd);
-        }
+	(*operation) (arfile, abfd, user_storage);
       else
         {
           bfd_nonfatal (bfd_get_filename (arfile));
           free (matching);
         }
+
       if (last_arfile != NULL)
-        {
-          bfd_close (last_arfile);
-        }
+	bfd_close (last_arfile);
+
       last_arfile = arfile;
     }
 
@@ -3022,25 +3300,23 @@ identify_search_archive (bfd* abfd)
     }
 }
 
-/* identify_search_member
+/* Call the identify_search_section() function for each section of this
+   archive member.  */   
 
-   Search all sections of an archive member for the 
-   one with section name of .idata$7 (.idata$6 on PPC)
-   and non-empty contents.
-*/   
 static void
-identify_search_member (bfd* abfd, bfd* archive_bfd ATTRIBUTE_UNUSED)
+identify_search_member (bfd  *abfd,
+			bfd  *archive_bfd ATTRIBUTE_UNUSED,
+			void *obj)
 {
-  bfd_map_over_sections (abfd, identify_search_section, NULL);
+  bfd_map_over_sections (abfd, identify_search_section, obj);
 }
 
-/* identify_process_section_p
+/* This predicate returns true if section->name matches the desired value.
+   By default, this is .idata$7 (.idata$6 on PPC, or if the import
+   library is ms-style).  */   
 
-   This predicate returns true if section->name
-   is .idata$7 (.idata$6 on PPC).
-*/   
 static bfd_boolean
-identify_process_section_p (asection * section)
+identify_process_section_p (asection * section, bfd_boolean ms_style_implib)
 {
   static const char * SECTION_NAME =
 #ifdef DLLTOOL_PPC
@@ -3049,66 +3325,72 @@ identify_process_section_p (asection * section)
 #else
   ".idata$7";
 #endif
-
-  if (strcmp (SECTION_NAME, section->name) == 0)
+  static const char * MS_SECTION_NAME = ".idata$6";
+  
+  const char * section_name =
+    (ms_style_implib ? MS_SECTION_NAME : SECTION_NAME);
+  
+  if (strcmp (section_name, section->name) == 0)
     return TRUE;
   return FALSE;
 }
 
-/* identify_search_section
+/* If *section has contents and its name is .idata$7 (.data$6 on PPC or if
+   import lib ms-generated) -- and it satisfies several other constraints
+   -- then add the contents of the section to obj->list.  */
 
-   If *section has contents and its name is .idata$7
-   (.data$6 on PPC) then store the contents in 
-   identify_dll_name as an xmalloc'ed array.
-
-   However, if identify_dll_name already has
-   a value, flag an error. We don't know how to handle
-   import libraries that directly reference more than
-   one DLL. (This is different than forwarded symbols.
-   Such import libraries are not seen in normal operation,
-   and must be specifically constructed.)
-*/   
 static void
-identify_search_section (bfd *abfd, asection *section, void *dummy ATTRIBUTE_UNUSED)
+identify_search_section (bfd * abfd, asection * section, void * obj)
 {
   bfd_byte *data = 0;
   bfd_size_type datasize;
+  identify_data_type * identify_data = (identify_data_type *)obj;
+  bfd_boolean ms_style = identify_data->ms_style_implib;
 
   if ((section->flags & SEC_HAS_CONTENTS) == 0)
     return;
 
-  if (! identify_process_section_p (section))
+  if (! identify_process_section_p (section, ms_style))
+    return;
+
+  /* Binutils import libs seem distinguish the .idata$7 section that contains
+     the DLL name from other .idata$7 sections by the absence of the
+     SEC_RELOC flag.  */
+  if (!ms_style && ((section->flags & SEC_RELOC) == SEC_RELOC))
+    return;
+
+  /* MS import libs seem to distinguish the .idata$6 section
+     that contains the DLL name from other .idata$6 sections
+     by the presence of the SEC_DATA flag.  */
+  if (ms_style && ((section->flags & SEC_DATA) == 0))
     return;
 
   if ((datasize = bfd_section_size (abfd, section)) == 0)
     return;
 
-  data = (bfd_byte*) xmalloc (datasize + 1);
+  data = (bfd_byte *) xmalloc (datasize + 1);
   data[0] = '\0';
 
   bfd_get_section_contents (abfd, section, data, 0, datasize);
   data[datasize] = '\0';
 
-  if (data[0] != '\0')
-    {
-      if (identify_dll_name != NULL)
-        {
-          if (*identify_dll_name != '\0')
-            {
-              /* The import library specifies two different DLLs.
-                 Treat this as an error. */
-              fatal ("Import library `%s' specifies two or more dlls: `%s' and `%s'",
-                     identify_imp_name, identify_dll_name, data);
-            }
-          else
-            {
-              /* For some reason memory was allocated, but the
-                 contents were empty. Free the memory and continue. */
-              free (identify_dll_name);
-            }
-        }
-      identify_dll_name = xstrdup ((char*) data);
-    }
+  /* Use a heuristic to determine if data is a dll name.
+     Possible to defeat this if (a) the library has MANY
+     (more than 0x302f) imports, (b) it is an ms-style 
+     import library, but (c) it is buggy, in that the SEC_DATA
+     flag is set on the "wrong" sections.  This heuristic might
+     also fail to record a valid dll name if the dllname uses
+     a multibyte or unicode character set (is that valid?).
+
+     This heuristic is based on the fact that symbols names in
+     the chosen section -- as opposed to the dll name -- begin
+     at offset 2 in the data. The first two bytes are a 16bit
+     little-endian count, and start at 0x0000. However, the dll
+     name begins at offset 0 in the data. We assume that the
+     dll name does not contain unprintable characters.   */
+  if (data[0] != '\0' && ISPRINT (data[0])
+      && ((datasize < 2) || ISPRINT (data[1])))
+    dll_name_list_append (identify_data->list, data);
 
   free (data);
 }
@@ -3121,6 +3403,7 @@ pfunc (const void *a, const void *b)
 {
   export_type *ap = *(export_type **) a;
   export_type *bp = *(export_type **) b;
+
   if (ap->ordinal == bp->ordinal)
     return 0;
 
@@ -3356,6 +3639,7 @@ usage (FILE *file, int status)
   fprintf (file, _("   -b --base-file <basefile> Read linker generated base file.\n"));
   fprintf (file, _("   -x --no-idata4            Don't generate idata$4 section.\n"));
   fprintf (file, _("   -c --no-idata5            Don't generate idata$5 section.\n"));
+  fprintf (file, _("      --use-nul-prefixed-import-tables Use zero prefixed idata$4 and idata$5.\n"));
   fprintf (file, _("   -U --add-underscore       Add underscores to all symbols in interface library.\n"));
   fprintf (file, _("      --add-stdcall-underscore Add underscores to stdcall symbols in interface library.\n"));
   fprintf (file, _("   -k --kill-at              Kill @<n> from exported names.\n"));
@@ -3367,6 +3651,7 @@ usage (FILE *file, int status)
   fprintf (file, _("   -n --no-delete            Keep temp files (repeat for extra preservation).\n"));
   fprintf (file, _("   -t --temp-prefix <prefix> Use <prefix> to construct temp file names.\n"));
   fprintf (file, _("   -I --identify <implib>    Report the name of the DLL associated with <implib>.\n"));
+  fprintf (file, _("      --identify-strict      Causes --identify to report error when multiple DLLs.\n"));
   fprintf (file, _("   -v --verbose              Be verbose.\n"));
   fprintf (file, _("   -V --version              Display the program version.\n"));
   fprintf (file, _("   -h --help                 Display this information.\n"));
@@ -3386,6 +3671,9 @@ usage (FILE *file, int status)
 #define OPTION_EXCLUDE_SYMS		(OPTION_NO_EXPORT_ALL_SYMS + 1)
 #define OPTION_NO_DEFAULT_EXCLUDES	(OPTION_EXCLUDE_SYMS + 1)
 #define OPTION_ADD_STDCALL_UNDERSCORE	(OPTION_NO_DEFAULT_EXCLUDES + 1)
+#define OPTION_USE_NUL_PREFIXED_IMPORT_TABLES \
+  (OPTION_ADD_STDCALL_UNDERSCORE + 1)
+#define OPTION_IDENTIFY_STRICT		(OPTION_USE_NUL_PREFIXED_IMPORT_TABLES + 1)
 
 static const struct option long_options[] =
 {
@@ -3393,6 +3681,8 @@ static const struct option long_options[] =
   {"dllname", required_argument, NULL, 'D'},
   {"no-idata4", no_argument, NULL, 'x'},
   {"no-idata5", no_argument, NULL, 'c'},
+  {"use-nul-prefixed-import-tables", no_argument, NULL,
+   OPTION_USE_NUL_PREFIXED_IMPORT_TABLES},
   {"output-exp", required_argument, NULL, 'e'},
   {"output-def", required_argument, NULL, 'z'},
   {"export-all-symbols", no_argument, NULL, OPTION_EXPORT_ALL_SYMS},
@@ -3408,6 +3698,7 @@ static const struct option long_options[] =
   {"add-stdcall-alias", no_argument, NULL, 'A'},
   {"ext-prefix-alias", required_argument, NULL, 'p'},
   {"identify", required_argument, NULL, 'I'},
+  {"identify-strict", no_argument, NULL, OPTION_IDENTIFY_STRICT},
   {"verbose", no_argument, NULL, 'v'},
   {"version", no_argument, NULL, 'V'},
   {"help", no_argument, NULL, 'h'},
@@ -3467,8 +3758,14 @@ main (int ac, char **av)
 	case OPTION_NO_DEFAULT_EXCLUDES:
 	  do_default_excludes = FALSE;
 	  break;
+	case OPTION_USE_NUL_PREFIXED_IMPORT_TABLES:
+	  use_nul_prefixed_import_tables = TRUE;
+	  break;
 	case OPTION_ADD_STDCALL_UNDERSCORE:
 	  add_stdcall_underscore = 1;
+	  break;
+	case OPTION_IDENTIFY_STRICT:
+	  identify_strict = 1;
 	  break;
 	case 'x':
 	  no_idata4 = 1;
@@ -3581,6 +3878,9 @@ main (int ac, char **av)
     fatal (_("Machine '%s' not supported"), mname);
 
   machine = i;
+
+  /* Check if we generated PE+.  */
+  create_for_pep = strcmp (mname, "i386:x86-64") == 0;
 
   if (!dll_name && exp_name)
     {

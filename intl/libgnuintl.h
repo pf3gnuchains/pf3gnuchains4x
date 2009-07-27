@@ -126,7 +126,7 @@ static inline char *gettext (const char *__msgid)
 # define gettext libintl_gettext
 #endif
 extern char *gettext _INTL_PARAMS ((const char *__msgid))
-       _INTL_ASM (libintl_gettext)  __attribute__((format_arg(1)));
+       _INTL_ASM (libintl_gettext);
 #endif
 
 /* Look up MSGID in the DOMAINNAME message catalog for the current

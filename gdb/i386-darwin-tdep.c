@@ -1,5 +1,5 @@
 /* Darwin support for GDB, the GNU debugger.
-   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2005, 2008
+   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2005, 2008, 2009
    Free Software Foundation, Inc.
 
    Contributed by Apple Computer, Inc.
@@ -32,13 +32,15 @@
 
 #include "i387-tdep.h"
 #include "i386-tdep.h"
-#include "amd64-tdep.h"
 #include "osabi.h"
 #include "ui-out.h"
 #include "symtab.h"
 #include "frame.h"
 #include "gdb_assert.h"
 #include "i386-darwin-tdep.h"
+#include "solib.h"
+#include "solib-darwin.h"
+#include "dwarf2-frame.h"
 
 /* Offsets into the struct i386_thread_state where we'll find the saved regs.
    From <mach/i386/thread_status.h> and i386-tdep.h.  */
@@ -65,38 +67,47 @@ int i386_darwin_thread_state_reg_offset[] =
 const int i386_darwin_thread_state_num_regs = 
   ARRAY_SIZE (i386_darwin_thread_state_reg_offset);
 
-/* Offsets into the struct x86_thread_state64 where we'll find the saved regs.
-   From <mach/i386/thread_status.h> and amd64-tdep.h.  */
-int amd64_darwin_thread_state_reg_offset[] =
-{
-  0 * 8,			/* %rax */
-  1 * 8,			/* %rbx */
-  2 * 8,			/* %rcx */
-  3 * 8,			/* %rdx */
-  5 * 8,			/* %rsi */
-  4 * 8,			/* %rdi */
-  6 * 8,			/* %rbp */
-  7 * 8,			/* %rsp */
-  8 * 8,			/* %r8 ... */
-  9 * 8,
-  10 * 8,
-  11 * 8,
-  12 * 8,
-  13 * 8,
-  14 * 8,
-  15 * 8,			/* ... %r15 */
-  16 * 8,			/* %rip */
-  17 * 8,			/* %rflags */
-  18 * 8,			/* %cs */
-  -1,				/* %ss */
-  -1,				/* %ds */
-  -1,				/* %es */
-  19 * 8,			/* %fs */
-  20 * 8			/* %gs */
-};
+/* Assuming THIS_FRAME is a Darwin sigtramp routine, return the
+   address of the associated sigcontext structure.  */
 
-const int amd64_darwin_thread_state_num_regs = 
-  ARRAY_SIZE (amd64_darwin_thread_state_reg_offset);
+static CORE_ADDR
+i386_darwin_sigcontext_addr (struct frame_info *this_frame)
+{
+  struct gdbarch *gdbarch = get_frame_arch (this_frame);
+  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
+  CORE_ADDR bp;
+  CORE_ADDR si;
+  gdb_byte buf[4];
+
+  get_frame_register (this_frame, I386_EBP_REGNUM, buf);
+  bp = extract_unsigned_integer (buf, 4, byte_order);
+
+  /* A pointer to the ucontext is passed as the fourth argument
+     to the signal handler.  */
+  read_memory (bp + 24, buf, 4);
+  si = extract_unsigned_integer (buf, 4, byte_order);
+
+  /* The pointer to mcontext is at offset 28.  */
+  read_memory (si + 28, buf, 4);
+
+  /* First register (eax) is at offset 12.  */
+  return extract_unsigned_integer (buf, 4, byte_order) + 12;
+}
+
+/* Return true if the PC of THIS_FRAME is in a signal trampoline which
+   may have DWARF-2 CFI.
+
+   On Darwin, signal trampolines have DWARF-2 CFI but it has only one FDE
+   that covers only the indirect call to the user handler.
+   Without this function, the frame is recognized as a normal frame which is
+   not expected.  */
+
+int
+darwin_dwarf_signal_frame_p (struct gdbarch *gdbarch,
+			     struct frame_info *this_frame)
+{
+  return i386_sigtramp_p (this_frame);
+}
 
 static void
 i386_darwin_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
@@ -107,30 +118,18 @@ i386_darwin_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
   tdep->num_xmm_regs = I386_NUM_XREGS - 1;
   set_gdbarch_num_regs (gdbarch, I386_SSE_NUM_REGS);
 
+  dwarf2_frame_set_signal_frame_p (gdbarch, darwin_dwarf_signal_frame_p);
+
   tdep->struct_return = reg_struct_return;
 
-  tdep->sigcontext_addr = NULL;
+  tdep->sigtramp_p = i386_sigtramp_p;
+  tdep->sigcontext_addr = i386_darwin_sigcontext_addr;
   tdep->sc_reg_offset = i386_darwin_thread_state_reg_offset;
-  tdep->sc_num_regs = 16;
+  tdep->sc_num_regs = i386_darwin_thread_state_num_regs;
 
   tdep->jb_pc_offset = 20;
-}
 
-static void
-x86_darwin_init_abi_64 (struct gdbarch_info info, struct gdbarch *gdbarch)
-{
-  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
-
-  amd64_init_abi (info, gdbarch);
-
-  tdep->struct_return = reg_struct_return;
-
-  /* We don't do signals yet.  */
-  tdep->sigcontext_addr = NULL;
-  tdep->sc_reg_offset = amd64_darwin_thread_state_reg_offset;
-  tdep->sc_num_regs = ARRAY_SIZE (amd64_darwin_thread_state_reg_offset);
-
-  tdep->jb_pc_offset = 148;
+  set_solib_ops (gdbarch, &darwin_so_ops);
 }
 
 static enum gdb_osabi
@@ -153,7 +152,4 @@ _initialize_i386_darwin_tdep (void)
 
   gdbarch_register_osabi (bfd_arch_i386, bfd_mach_i386_i386,
 			  GDB_OSABI_DARWIN, i386_darwin_init_abi);
-
-  gdbarch_register_osabi (bfd_arch_i386, bfd_mach_x86_64,
-                          GDB_OSABI_DARWIN, x86_darwin_init_abi_64);
 }

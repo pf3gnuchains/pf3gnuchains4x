@@ -1,6 +1,6 @@
 /* General utility routines for GDB/Python.
 
-   Copyright (C) 2008 Free Software Foundation, Inc.
+   Copyright (C) 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -46,23 +46,6 @@ make_cleanup_py_decref (PyObject *py)
   return make_cleanup (py_decref, (void *) py);
 }
 
-/* A cleanup function to restore the thread state.  */
-
-static void
-py_gil_restore (void *p)
-{
-  PyGILState_STATE *state = p;
-  PyGILState_Release (*state);
-}
-
-/* Return a new cleanup which will restore the Python GIL state.  */
-
-struct cleanup *
-make_cleanup_py_restore_gil (PyGILState_STATE *state)
-{
-  return make_cleanup (py_gil_restore, state);
-}
-
 /* Converts a Python 8-bit string to a unicode string object.  Assumes the
    8-bit string is in the host charset.  If an error occurs during conversion,
    returns NULL with a python exception set.
@@ -81,7 +64,11 @@ python_string_to_unicode (PyObject *obj)
   /* If obj is already a unicode string, just return it.
      I wish life was always that simple...  */
   if (PyUnicode_Check (obj))
-    unicode_str = obj;
+    {
+      unicode_str = obj;
+      Py_INCREF (obj);
+    }
+  
   else if (PyString_Check (obj))
     unicode_str = PyUnicode_FromEncodedObject (obj, host_charset (), NULL);
   else
@@ -95,6 +82,46 @@ python_string_to_unicode (PyObject *obj)
 }
 
 /* Returns a newly allocated string with the contents of the given unicode
+   string object converted to CHARSET.  If an error occurs during the
+   conversion, NULL will be returned and a python exception will be set.
+
+   The caller is responsible for xfree'ing the string.  */
+static char *
+unicode_to_encoded_string (PyObject *unicode_str, const char *charset)
+{
+  char *result;
+  PyObject *string;
+
+  /* Translate string to named charset.  */
+  string = PyUnicode_AsEncodedString (unicode_str, charset, NULL);
+  if (string == NULL)
+    return NULL;
+
+  result = xstrdup (PyString_AsString (string));
+
+  Py_DECREF (string);
+
+  return result;
+}
+
+/* Returns a PyObject with the contents of the given unicode string
+   object converted to a named charset.  If an error occurs during
+   the conversion, NULL will be returned and a python exception will
+   be set.  */
+static PyObject *
+unicode_to_encoded_python_string (PyObject *unicode_str, const char *charset)
+{
+  PyObject *string;
+
+  /* Translate string to named charset.  */
+  string = PyUnicode_AsEncodedString (unicode_str, charset, NULL);
+  if (string == NULL)
+    return NULL;
+
+  return string;
+}
+
+/* Returns a newly allocated string with the contents of the given unicode
    string object converted to the target's charset.  If an error occurs during
    the conversion, NULL will be returned and a python exception will be set.
 
@@ -102,19 +129,17 @@ python_string_to_unicode (PyObject *obj)
 char *
 unicode_to_target_string (PyObject *unicode_str)
 {
-  char *target_string;
-  PyObject *string;
+  return unicode_to_encoded_string (unicode_str, target_charset ());
+}
 
-  /* Translate string to target's charset.  */
-  string = PyUnicode_AsEncodedString (unicode_str, target_charset (), NULL);
-  if (string == NULL)
-    return NULL;
-
-  target_string = xstrdup (PyString_AsString (string));
-
-  Py_DECREF (string);
-
-  return target_string;
+/* Returns a PyObject with the contents of the given unicode string
+   object converted to the target's charset.  If an error occurs
+   during the conversion, NULL will be returned and a python exception
+   will be set.  */
+PyObject *
+unicode_to_target_python_string (PyObject *unicode_str)
+{
+  return unicode_to_encoded_python_string (unicode_str, target_charset ());
 }
 
 /* Converts a python string (8-bit or unicode) to a target string in
@@ -125,10 +150,72 @@ char *
 python_string_to_target_string (PyObject *obj)
 {
   PyObject *str;
+  char *result;
 
   str = python_string_to_unicode (obj);
   if (str == NULL)
     return NULL;
 
-  return unicode_to_target_string (str);
+  result = unicode_to_target_string (str);
+  Py_DECREF (str);
+  return result;
+}
+
+/* Converts a python string (8-bit or unicode) to a target string in the
+   target's charset.  Returns NULL on error, with a python exception
+   set.  */
+PyObject *
+python_string_to_target_python_string (PyObject *obj)
+{
+  PyObject *str;
+  PyObject *result;
+
+  str = python_string_to_unicode (obj);
+  if (str == NULL)
+    return NULL;
+
+  result = unicode_to_target_python_string (str);
+  Py_DECREF (str);
+  return result;
+}
+
+/* Converts a python string (8-bit or unicode) to a target string in
+   the host's charset.  Returns NULL on error, with a python exception set.
+
+   The caller is responsible for xfree'ing the string.  */
+char *
+python_string_to_host_string (PyObject *obj)
+{
+  PyObject *str;
+  char *result;
+
+  str = python_string_to_unicode (obj);
+  if (str == NULL)
+    return NULL;
+
+  result = unicode_to_encoded_string (str, host_charset ()); 
+  Py_DECREF (str);
+  return result;
+}
+
+/* Converts a target string of LENGTH bytes in the target's charset to a
+   Python Unicode string. If LENGTH is -1, convert until a null byte is found.
+
+   Returns NULL on error, with a python exception set.  */
+PyObject *
+target_string_to_unicode (const gdb_byte *str, int length)
+{
+  if (length == -1)
+    length = strlen (str);
+
+  return PyUnicode_Decode (str, length, target_charset (), NULL);
+}
+
+/* Return true if OBJ is a Python string or unicode object, false
+   otherwise.  */
+
+int
+gdbpy_is_string (PyObject *obj)
+{
+  return PyString_Check (obj) || PyUnicode_Check (obj);
 }

@@ -43,7 +43,7 @@ Contents of section \.tdata:
 Contents of section \.got:
  82138 00000000 00000000 00000000 01000000  .*
  82148 00000000 01000000 80000000 01000000  .*
- 82158 84000000                             .*
+ 82158 84000000   .*
 
 Disassembly of section \.text:
 
@@ -51,8 +51,8 @@ Disassembly of section \.text:
    80094:	41b2                	moveq 1,\$r11
 #...
 00080098 <tlsdsofn>:
-   80098:	5fae 8800           	move\.w 0x88,\$r10
-   8009c:	5fbe 8c00           	move\.w 0x8c,\$r11
+   80098:	5fae f8ff           	move\.w 0xfff8,\$r10
+   8009c:	5fbe fcff           	move\.w 0xfffc,\$r11
 
 000800a0 <tlsdsofn0>:
    800a0:	5fae 1400           	move\.w 0x14,\$r10

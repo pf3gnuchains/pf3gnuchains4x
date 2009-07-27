@@ -396,23 +396,20 @@ md_estimate_size_before_relax (fragS *fragP, segT segment)
 	          || S_IS_WEAK (fragP->fr_symbol)
 	          || S_IS_EXTERNAL (fragP->fr_symbol)))
 	    {
-	      if (p[0] & 0x10)
-		{
-		  if (flag_want_pic)
-		    as_fatal ("PIC reference to %s is indirect.\n",
-			      S_GET_NAME (fragP->fr_symbol));
-		}
+	      /* Indirect references cannot go through the GOT or PLT,
+	         let's hope they'll become local in the final link.  */
+	      if ((ELF_ST_VISIBILITY (S_GET_OTHER (fragP->fr_symbol))
+		   != STV_DEFAULT)
+		  || (p[0] & 0x10))
+		reloc_type = BFD_RELOC_32_PCREL;
+	      else if (((unsigned char *) fragP->fr_opcode)[0] == VAX_CALLS
+		       || ((unsigned char *) fragP->fr_opcode)[0] == VAX_CALLG
+		       || ((unsigned char *) fragP->fr_opcode)[0] == VAX_JSB
+		       || ((unsigned char *) fragP->fr_opcode)[0] == VAX_JMP
+		       || S_IS_FUNCTION (fragP->fr_symbol))
+		reloc_type = BFD_RELOC_32_PLT_PCREL;
 	      else
-		{
-		  if (((unsigned char *) fragP->fr_opcode)[0] == VAX_CALLS
-		      || ((unsigned char *) fragP->fr_opcode)[0] == VAX_CALLG
-		      || ((unsigned char *) fragP->fr_opcode)[0] == VAX_JSB
-		      || ((unsigned char *) fragP->fr_opcode)[0] == VAX_JMP
-		      || S_IS_FUNCTION (fragP->fr_symbol))
-		    reloc_type = BFD_RELOC_32_PLT_PCREL;
-		  else
-		    reloc_type = BFD_RELOC_32_GOT_PCREL;
-		}
+		reloc_type = BFD_RELOC_32_GOT_PCREL;
 	    }
 #endif
 	  switch (RELAX_STATE (fragP->fr_subtype))
@@ -852,6 +849,8 @@ static const struct vot
   {"jbcs",	{"rlvbb?", 0x800000e3}},
   {"jbsc",	{"rlvbb?", 0x800000e4}},
   {"jbcc",	{"rlvbb?", 0x800000e5}},
+  {"jbssi",	{"rlvbb?", 0x800000e6}},
+  {"jbcci",	{"rlvbb?", 0x800000e7}},
   {"jlbs",	{"rlb?", 0x800000e8}},
   {"jlbc",	{"rlb?", 0x800000e9}},
 
@@ -2401,7 +2400,7 @@ tc_gen_reloc (asection *section ATTRIBUTE_UNUSED, fixS *fixp)
 #endif
 
   reloc->howto = bfd_reloc_type_lookup (stdoutput, code);
-  assert (reloc->howto != 0);
+  gas_assert (reloc->howto != 0);
 
   return reloc;
 }
@@ -3152,7 +3151,8 @@ md_assemble (char *instruction_string)
 			  if (flag_want_pic && operandP->vop_mode == 8
 				&& this_add_symbol != NULL)
 			    {
-			      as_warn (_("Symbol used as immediate operand in PIC mode."));
+			      as_warn (_("Symbol %s used as immediate operand in PIC mode."),
+				       S_GET_NAME (this_add_symbol));
 			    }
 #endif
 			  p[0] = (operandP->vop_mode << 4) | 0xF;
@@ -3168,7 +3168,8 @@ md_assemble (char *instruction_string)
 						  min (sizeof (valueT),
 						       (size_t) nbytes));
 			      if ((size_t) nbytes > sizeof (valueT))
-				memset (p + 5, '\0', nbytes - sizeof (valueT));
+				memset (p + 1 + sizeof (valueT),
+				        '\0', nbytes - sizeof (valueT));
 			    }
 			  else
 			    {

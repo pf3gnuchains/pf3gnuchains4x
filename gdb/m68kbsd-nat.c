@@ -1,6 +1,6 @@
 /* Native-dependent code for Motorola 68000 BSD's.
 
-   Copyright (C) 2004, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2004, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -109,7 +109,8 @@ m68kbsd_collect_fpregset (struct regcache *regcache,
    for all registers (including the floating-point registers).  */
 
 static void
-m68kbsd_fetch_inferior_registers (struct regcache *regcache, int regnum)
+m68kbsd_fetch_inferior_registers (struct target_ops *ops,
+				  struct regcache *regcache, int regnum)
 {
   if (regnum == -1 || m68kbsd_gregset_supplies_p (regnum))
     {
@@ -138,7 +139,8 @@ m68kbsd_fetch_inferior_registers (struct regcache *regcache, int regnum)
    this for all registers (including the floating-point registers).  */
 
 static void
-m68kbsd_store_inferior_registers (struct regcache *regcache, int regnum)
+m68kbsd_store_inferior_registers (struct target_ops *ops,
+				  struct regcache *regcache, int regnum)
 {
   if (regnum == -1 || m68kbsd_gregset_supplies_p (regnum))
     {

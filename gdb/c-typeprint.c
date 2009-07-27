@@ -1,6 +1,6 @@
 /* Support for printing C and C++ types for GDB, the GNU debugger.
    Copyright (C) 1986, 1988, 1989, 1991, 1992, 1993, 1994, 1995, 1996, 1998,
-   1999, 2000, 2001, 2002, 2003, 2006, 2007, 2008
+   1999, 2000, 2001, 2002, 2003, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -338,7 +338,8 @@ c_type_print_modifier (struct type *type, struct ui_file *stream,
       did_print_modifier = 1;
     }
 
-  address_space_id = address_space_int_to_name (TYPE_INSTANCE_FLAGS (type));
+  address_space_id = address_space_int_to_name (get_type_arch (type),
+						TYPE_INSTANCE_FLAGS (type));
   if (address_space_id)
     {
       if (did_print_modifier || need_pre_space)

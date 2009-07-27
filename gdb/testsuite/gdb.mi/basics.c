@@ -1,4 +1,4 @@
-/* Copyright 1999, 2000, 2004, 2007, 2008 Free Software Foundation, Inc.
+/* Copyright 1999, 2000, 2004, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -57,13 +57,16 @@ int return_1 ()
   return 1;
 }
 
+void do_nothing (void)
+{
+}
+
 main ()
 {
   callee1 (2, "A string argument.", 3.5);
   callee1 (2, "A string argument.", 3.5);
 
-  sleep (1);
-  printf ("Hello, World!");
+  do_nothing (); /* Hello, World! */
 
   callme (1);
   callme (2);

@@ -1,6 +1,6 @@
 /* objcopy.c -- copy object file from input to output, optionally massaging it.
    Copyright 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000,
-   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008
+   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GNU Binutils.
@@ -32,6 +32,24 @@
 #include "elf-bfd.h"
 #include <sys/stat.h>
 #include "libbfd.h"
+#include "coff/internal.h"
+#include "libcoff.h"
+
+/* FIXME: See bfd/peXXigen.c for why we include an architecture specific
+   header in generic PE code.  */
+#include "coff/i386.h"
+#include "coff/pe.h"
+
+static bfd_vma pe_file_alignment = (bfd_vma) -1;
+static bfd_vma pe_heap_commit = (bfd_vma) -1;
+static bfd_vma pe_heap_reserve = (bfd_vma) -1;
+static bfd_vma pe_image_base = (bfd_vma) -1;
+static bfd_vma pe_section_alignment = (bfd_vma) -1;
+static bfd_vma pe_stack_commit = (bfd_vma) -1;
+static bfd_vma pe_stack_reserve = (bfd_vma) -1;
+static short pe_subsystem = -1;
+static short pe_major_subsystem_version = -1;
+static short pe_minor_subsystem_version = -1;
 
 struct is_specified_symbol_predicate_data
 {
@@ -58,11 +76,6 @@ section_rename;
 
 /* List of sections to be renamed.  */
 static section_rename *section_rename_list;
-
-#define RETURN_NONFATAL(bfd) \
-  do { \
-    status = 1; bfd_nonfatal_message (NULL, bfd, NULL, NULL); return; \
-  } while (0)
 
 static asymbol **isympp = NULL;	/* Input symbols.  */
 static asymbol **osympp = NULL;	/* Output symbols that survive stripping.  */
@@ -221,6 +234,18 @@ static bfd_boolean extract_symbol = FALSE;
    of <reverse_bytes> bytes within each output section.  */
 static int reverse_bytes = 0;
 
+/* For Coff objects, we may want to allow or disallow long section names,
+   or preserve them where found in the inputs.  Debug info relies on them.  */
+enum long_section_name_handling
+  {
+    DISABLE,
+    ENABLE,
+    KEEP
+  };
+
+/* The default long section handling mode is to preserve them.
+   This is also the only behaviour for 'strip'.  */
+static enum long_section_name_handling long_section_names = KEEP;
 
 /* 150 isn't special; it's just an arbitrary non-ASCII char value.  */
 enum command_line_switch
@@ -252,6 +277,7 @@ enum command_line_switch
     OPTION_KEEP_SYMBOLS,
     OPTION_LOCALIZE_HIDDEN,
     OPTION_LOCALIZE_SYMBOLS,
+    OPTION_LONG_SECTION_NAMES,
     OPTION_GLOBALIZE_SYMBOL,
     OPTION_GLOBALIZE_SYMBOLS,
     OPTION_KEEPGLOBAL_SYMBOLS,
@@ -270,7 +296,13 @@ enum command_line_switch
     OPTION_PURE,
     OPTION_IMPURE,
     OPTION_EXTRACT_SYMBOL,
-    OPTION_REVERSE_BYTES
+    OPTION_REVERSE_BYTES,
+    OPTION_FILE_ALIGNMENT,
+    OPTION_HEAP,
+    OPTION_IMAGE_BASE,
+    OPTION_SECTION_ALIGNMENT,
+    OPTION_STACK,
+    OPTION_SUBSYSTEM
   };
 
 /* Options to handle if running as "strip".  */
@@ -345,6 +377,7 @@ static struct option copy_options[] =
   {"localize-hidden", no_argument, 0, OPTION_LOCALIZE_HIDDEN},
   {"localize-symbol", required_argument, 0, 'L'},
   {"localize-symbols", required_argument, 0, OPTION_LOCALIZE_SYMBOLS},
+  {"long-section-names", required_argument, 0, OPTION_LONG_SECTION_NAMES},
   {"no-adjust-warnings", no_argument, 0, OPTION_NO_CHANGE_WARNINGS},
   {"no-change-warnings", no_argument, 0, OPTION_NO_CHANGE_WARNINGS},
   {"only-keep-debug", no_argument, 0, OPTION_ONLY_KEEP_DEBUG},
@@ -383,6 +416,12 @@ static struct option copy_options[] =
   {"weaken-symbols", required_argument, 0, OPTION_WEAKEN_SYMBOLS},
   {"wildcard", no_argument, 0, 'w'},
   {"writable-text", no_argument, 0, OPTION_WRITABLE_TEXT},
+  {"file-alignment", required_argument, 0, OPTION_FILE_ALIGNMENT},
+  {"heap", required_argument, 0, OPTION_HEAP},
+  {"image-base", required_argument, 0 , OPTION_IMAGE_BASE},
+  {"section-alignment", required_argument, 0, OPTION_SECTION_ALIGNMENT},
+  {"stack", required_argument, 0, OPTION_STACK},
+  {"subsystem", required_argument, 0, OPTION_SUBSYSTEM},
   {0, no_argument, 0, 0}
 };
 
@@ -475,6 +514,8 @@ copy_usage (FILE *stream, int exit_status)
                                    Set section <name>'s properties to <flags>\n\
      --add-section <name>=<file>   Add section <name> found in <file> to output\n\
      --rename-section <old>=<new>[,<flags>] Rename section <old> to <new>\n\
+     --long-section-names {enable|disable|keep}\n\
+                                   Handle long section names in Coff objects.\n\
      --change-leading-char         Force output format's leading character style\n\
      --remove-leading-char         Remove leading character from global symbols\n\
      --reverse-bytes=<num>         Reverse <num> bytes at a time, in output sections with content\n\
@@ -502,6 +543,15 @@ copy_usage (FILE *stream, int exit_status)
      --prefix-alloc-sections <prefix>\n\
                                    Add <prefix> to start of every allocatable\n\
                                      section name\n\
+     --file-alignment <num>        Set PE file alignment to <num>\n\
+     --heap <reserve>[,<commit>]   Set PE reserve/commit heap to <reserve>/\n\
+                                   <commit>\n\
+     --image-base <address>        Set PE image base to <address>\n\
+     --section-alignment <num>     Set PE section alignment to <num>\n\
+     --stack <reserve>[,<commit>]  Set PE reserve/commit stack to <reserve>/\n\
+                                   <commit>\n\
+     --subsystem <name>[:<version>]\n\
+                                   Set PE subsystem to <name> [& <version>]\n]\
   -v --verbose                     List all object files modified\n\
   @<file>                          Read options from <file>\n\
   -V --version                     Display this program's version number\n\
@@ -1033,7 +1083,8 @@ filter_symbols (bfd *abfd, bfd *obfd, asymbol **osyms,
 	  used_in_reloc = TRUE;
 	}
       else if (relocatable			/* Relocatable file.  */
-	       && (flags & (BSF_GLOBAL | BSF_WEAK)) != 0)
+	       && ((flags & (BSF_GLOBAL | BSF_WEAK)) != 0
+		   || bfd_is_com_section (bfd_get_section (sym))))
 	keep = TRUE;
       else if (bfd_decode_symclass (sym) == 'I')
 	/* Global symbols in $idata sections need to be retained
@@ -1291,7 +1342,7 @@ copy_unknown_object (bfd *ibfd, bfd *obfd)
 
   if (bfd_stat_arch_elt (ibfd, &buf) != 0)
     {
-      bfd_nonfatal_message (bfd_get_archive_filename (ibfd), NULL, NULL, NULL);
+      bfd_nonfatal_message (NULL, ibfd, NULL, NULL);
       return FALSE;
     }
 
@@ -1324,8 +1375,7 @@ copy_unknown_object (bfd *ibfd, bfd *obfd)
       if (bfd_bread (cbuf, (bfd_size_type) tocopy, ibfd)
 	  != (bfd_size_type) tocopy)
 	{
-	  bfd_nonfatal_message (bfd_get_archive_filename (ibfd),
-				NULL, NULL, NULL);
+	  bfd_nonfatal_message (NULL, ibfd, NULL, NULL);
 	  free (cbuf);
 	  return FALSE;
 	}
@@ -1401,11 +1451,13 @@ copy_object (bfd *ibfd, bfd *obfd)
       flags &= ~bfd_flags_to_clear;
       flags &= bfd_applicable_file_flags (obfd);
 
+      if (strip_symbols == STRIP_ALL)
+	flags &= ~HAS_RELOC;
+
       if (!bfd_set_start_address (obfd, start)
 	  || !bfd_set_file_flags (obfd, flags))
 	{
-	  bfd_nonfatal_message (bfd_get_archive_filename (ibfd),
-				NULL, NULL, NULL);
+	  bfd_nonfatal_message (NULL, ibfd, NULL, NULL);
 	  return FALSE;
 	}
     }
@@ -1429,8 +1481,65 @@ copy_object (bfd *ibfd, bfd *obfd)
 
   if (!bfd_set_format (obfd, bfd_get_format (ibfd)))
     {
-      bfd_nonfatal_message (bfd_get_archive_filename (ibfd), NULL, NULL, NULL);
+      bfd_nonfatal_message (NULL, ibfd, NULL, NULL);
       return FALSE;
+    }
+
+  if (bfd_get_flavour (obfd) == bfd_target_coff_flavour
+      && bfd_pei_p (obfd))
+    {
+      /* Set up PE parameters.  */
+      pe_data_type *pe = pe_data (obfd);
+
+      /* Copy PE parameters before changing them.  */
+      if (ibfd->xvec->flavour == bfd_target_coff_flavour
+	  && bfd_pei_p (ibfd))
+	pe->pe_opthdr = pe_data (ibfd)->pe_opthdr;
+
+      if (pe_file_alignment != (bfd_vma) -1)
+	pe->pe_opthdr.FileAlignment = pe_file_alignment;
+      else
+	pe_file_alignment = PE_DEF_FILE_ALIGNMENT;
+
+      if (pe_heap_commit != (bfd_vma) -1)
+	pe->pe_opthdr.SizeOfHeapCommit = pe_heap_commit;
+
+      if (pe_heap_reserve != (bfd_vma) -1)
+	pe->pe_opthdr.SizeOfHeapCommit = pe_heap_reserve;
+
+      if (pe_image_base != (bfd_vma) -1)
+	pe->pe_opthdr.ImageBase = pe_image_base;
+
+      if (pe_section_alignment != (bfd_vma) -1)
+	pe->pe_opthdr.SectionAlignment = pe_section_alignment;
+      else
+	pe_section_alignment = PE_DEF_SECTION_ALIGNMENT;
+
+      if (pe_stack_commit != (bfd_vma) -1)
+	pe->pe_opthdr.SizeOfStackCommit = pe_stack_commit;
+
+      if (pe_stack_reserve != (bfd_vma) -1)
+	pe->pe_opthdr.SizeOfStackCommit = pe_stack_reserve;
+
+      if (pe_subsystem != -1)
+	pe->pe_opthdr.Subsystem = pe_subsystem;
+
+      if (pe_major_subsystem_version != -1)
+	pe->pe_opthdr.MajorSubsystemVersion = pe_major_subsystem_version;
+
+      if (pe_minor_subsystem_version != -1)
+	pe->pe_opthdr.MinorSubsystemVersion = pe_minor_subsystem_version;
+
+      if (pe_file_alignment > pe_section_alignment)
+	{
+	  char file_alignment[20], section_alignment[20];
+
+	  sprintf_vma (file_alignment, pe_file_alignment);
+	  sprintf_vma (section_alignment, pe_section_alignment);
+	  non_fatal (_("warning: file alignment (0x%s) > section alignment (0x%s)"),
+
+		     file_alignment, section_alignment);
+	}
     }
 
   if (isympp)
@@ -1445,7 +1554,7 @@ copy_object (bfd *ibfd, bfd *obfd)
   symsize = bfd_get_symtab_upper_bound (ibfd);
   if (symsize < 0)
     {
-      bfd_nonfatal_message (bfd_get_archive_filename (ibfd), NULL, NULL, NULL);
+      bfd_nonfatal_message (NULL, ibfd, NULL, NULL);
       return FALSE;
     }
 
@@ -1856,7 +1965,8 @@ copy_archive (bfd *ibfd, bfd *obfd, const char *output_target,
     } *list, *l;
   bfd **ptr = &obfd->archive_head;
   bfd *this_element;
-  char * dir;
+  char *dir;
+  const char *filename;
 
   /* Make a temp directory to hold the contents.  */
   dir = make_tempdir (bfd_get_filename (obfd));
@@ -1872,7 +1982,11 @@ copy_archive (bfd *ibfd, bfd *obfd, const char *output_target,
   this_element = bfd_openr_next_archived_file (ibfd, NULL);
 
   if (!bfd_set_format (obfd, bfd_get_format (ibfd)))
-    RETURN_NONFATAL (obfd);
+    {
+      status = 1;
+      bfd_nonfatal_message (NULL, obfd, NULL, NULL);
+      return;
+    }
 
   while (!status && this_element != NULL)
     {
@@ -1942,7 +2056,7 @@ copy_archive (bfd *ibfd, bfd *obfd, const char *output_target,
 	    {
 	      if (!bfd_close (output_bfd))
 		{
-		  bfd_nonfatal_message (NULL, output_bfd, NULL, NULL);
+		  bfd_nonfatal_message (output_name, NULL, NULL, NULL);
 		  /* Error in new object file. Don't change archive.  */
 		  status = 1;
 		}
@@ -1952,8 +2066,7 @@ copy_archive (bfd *ibfd, bfd *obfd, const char *output_target,
 	}
       else
 	{
-	  bfd_nonfatal_message (bfd_get_archive_filename (this_element),
-				NULL, NULL,
+	  bfd_nonfatal_message (NULL, this_element, NULL,
 				_("Unable to recognise the format of file"));
 
 	  output_bfd = bfd_openw (output_name, output_target);
@@ -1961,7 +2074,7 @@ copy_unknown_element:
 	  delete = !copy_unknown_object (this_element, output_bfd);
 	  if (!bfd_close_all_done (output_bfd))
 	    {
-	      bfd_nonfatal_message (NULL, output_bfd, NULL, NULL);
+	      bfd_nonfatal_message (output_name, NULL, NULL, NULL);
 	      /* Error in new object file. Don't change archive.  */
 	      status = 1;
 	    }
@@ -1994,11 +2107,21 @@ copy_unknown_element:
     }
   *ptr = NULL;
 
+  filename = bfd_get_filename (obfd);
   if (!bfd_close (obfd))
-    RETURN_NONFATAL (obfd);
+    {
+      status = 1;
+      bfd_nonfatal_message (filename, NULL, NULL, NULL);
+      return;
+    }
 
+  filename = bfd_get_filename (ibfd);
   if (!bfd_close (ibfd))
-    RETURN_NONFATAL (obfd);
+    {
+      status = 1;
+      bfd_nonfatal_message (filename, NULL, NULL, NULL);
+      return;
+    }
 
   /* Delete all the files that we opened.  */
   for (l = list; l != NULL; l = l->next)
@@ -2014,6 +2137,19 @@ copy_unknown_element:
   rmdir (dir);
 }
 
+static void
+set_long_section_mode (bfd *output_bfd, bfd *input_bfd, enum long_section_name_handling style)
+{
+  /* This is only relevant to Coff targets.  */
+  if (bfd_get_flavour (output_bfd) == bfd_target_coff_flavour)
+    {
+      if (style == KEEP
+	  && bfd_get_flavour (input_bfd) == bfd_target_coff_flavour)
+	style = bfd_coff_long_section_names (input_bfd) ? ENABLE : DISABLE;
+      bfd_coff_set_long_section_names (output_bfd, style != DISABLE);
+    }
+}
+
 /* The top-level control.  */
 
 static void
@@ -2023,9 +2159,13 @@ copy_file (const char *input_filename, const char *output_filename,
   bfd *ibfd;
   char **obj_matching;
   char **core_matching;
+  off_t size = get_file_size (input_filename);
 
-  if (get_file_size (input_filename) < 1)
+  if (size < 1)
     {
+      if (size == 0)
+	non_fatal (_("error: the input file '%s' is empty"),
+		   input_filename);
       status = 1;
       return;
     }
@@ -2062,6 +2202,8 @@ copy_file (const char *input_filename, const char *output_filename,
 	  status = 1;
 	  return;
 	}
+      /* This is a no-op on non-Coff targets.  */
+      set_long_section_mode (obfd, ibfd, long_section_names);
 
       copy_archive (ibfd, obfd, output_target, force_output_target);
     }
@@ -2082,15 +2224,25 @@ copy_file (const char *input_filename, const char *output_filename,
  	  status = 1;
  	  return;
  	}
+      /* This is a no-op on non-Coff targets.  */
+      set_long_section_mode (obfd, ibfd, long_section_names);
 
       if (! copy_object (ibfd, obfd))
 	status = 1;
 
       if (!bfd_close (obfd))
-	RETURN_NONFATAL (obfd);
+	{
+	  status = 1;
+	  bfd_nonfatal_message (output_filename, NULL, NULL, NULL);
+	  return;
+	}
 
       if (!bfd_close (ibfd))
-	RETURN_NONFATAL (ibfd);
+	{
+	  status = 1;
+	  bfd_nonfatal_message (input_filename, NULL, NULL, NULL);
+	  return;
+	}
     }
   else
     {
@@ -2195,7 +2347,7 @@ setup_bfd_headers (bfd *ibfd, bfd *obfd)
     {
       status = 1;
       bfd_nonfatal_message (NULL, ibfd, NULL,
-			    _("error in private h	eader data"));
+			    _("error in private header data"));
       return;
     }
 
@@ -2875,6 +3027,117 @@ strip_main (int argc, char *argv[])
   return status;
 }
 
+/* Set up PE subsystem.  */
+
+static void
+set_pe_subsystem (const char *s)
+{
+  const char *version, *subsystem;
+  size_t i;
+  static const struct
+    {
+      const char *name;
+      const char set_def;
+      const short value;
+    }
+  v[] =
+    {
+      { "native", 0, IMAGE_SUBSYSTEM_NATIVE },  
+      { "windows", 0, IMAGE_SUBSYSTEM_WINDOWS_GUI },
+      { "console", 0, IMAGE_SUBSYSTEM_WINDOWS_CUI },
+      { "posix", 0, IMAGE_SUBSYSTEM_POSIX_CUI },
+      { "wince", 0, IMAGE_SUBSYSTEM_WINDOWS_CE_GUI },
+      { "efi-app", 1, IMAGE_SUBSYSTEM_EFI_APPLICATION },
+      { "efi-bsd", 1, IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER },
+      { "efi-rtd", 1, IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER },
+      { "sal-rtd", 1, IMAGE_SUBSYSTEM_SAL_RUNTIME_DRIVER },
+      { "xbox", 0, IMAGE_SUBSYSTEM_XBOX }
+    };
+  short value;
+  char *copy;
+  int set_def = -1;
+
+  /* Check for the presence of a version number.  */
+  version = strchr (s, ':');
+  if (version == NULL)
+    subsystem = s;
+  else
+    {
+      int len = version - s;
+      copy = xstrdup (s);
+      subsystem = copy;
+      copy[len] = '\0';
+      version = copy + 1 + len;
+      pe_major_subsystem_version = strtoul (version, &copy, 0);
+      if (*copy == '.')
+	pe_minor_subsystem_version = strtoul (copy + 1, &copy, 0);
+      if (*copy != '\0')
+	non_fatal (_("%s: bad version in PE subsystem"), s);
+    }
+
+  /* Check for numeric subsystem.  */
+  value = (short) strtol (subsystem, &copy, 0);
+  if (*copy == '\0')
+    {
+      for (i = 0; i < ARRAY_SIZE (v); i++)
+	if (v[i].value == value)
+	  {
+	    pe_subsystem = value;
+	    set_def = v[i].set_def;
+	    break;
+	  }
+    }
+  else
+    {
+      /* Search for subsystem by name.  */
+      for (i = 0; i < ARRAY_SIZE (v); i++)
+	if (strcmp (subsystem, v[i].name) == 0)
+	  {
+	    pe_subsystem = v[i].value;
+	    set_def = v[i].set_def;
+	    break;
+	  }
+    }
+
+  switch (set_def)
+    {
+    case -1:
+      fatal (_("unknown PE subsystem: %s"), s);
+      break;
+    case 0:
+      break;
+    default:
+      if (pe_file_alignment == (bfd_vma) -1)
+	pe_file_alignment = PE_DEF_FILE_ALIGNMENT;
+      if (pe_section_alignment == (bfd_vma) -1)
+	pe_section_alignment = PE_DEF_SECTION_ALIGNMENT;
+      break;
+    }
+}
+
+/* Convert EFI target to PEI target.  */
+
+static void
+convert_efi_target (char *efi)
+{
+  efi[0] = 'p';
+  efi[1] = 'e';
+  efi[2] = 'i';
+
+  if (strcmp (efi + 4, "ia32") == 0)
+    {
+      /* Change ia32 to i386.  */
+      efi[5]= '3';
+      efi[6]= '8';
+      efi[7]= '6';
+    }
+  else if (strcmp (efi + 4, "x86_64") == 0)
+    {
+      /* Change x86_64 to x86-64.  */
+      efi[7] = '-';
+    }
+}
+
 static int
 copy_main (int argc, char *argv[])
 {
@@ -3334,6 +3597,17 @@ copy_main (int argc, char *argv[])
 	  add_specific_symbols (optarg, localize_specific_htab);
 	  break;
 
+	case OPTION_LONG_SECTION_NAMES:
+	  if (!strcmp ("enable", optarg))
+	    long_section_names = ENABLE;
+	  else if (!strcmp ("disable", optarg))
+	    long_section_names = DISABLE;
+	  else if (!strcmp ("keep", optarg))
+	    long_section_names = KEEP;
+	  else
+	    fatal (_("unknown long section names option '%s'"), optarg);
+	  break;
+
 	case OPTION_GLOBALIZE_SYMBOLS:
 	  add_specific_symbols (optarg, globalize_specific_htab);
 	  break;
@@ -3402,6 +3676,59 @@ copy_main (int argc, char *argv[])
             break;
           }
 
+	case OPTION_FILE_ALIGNMENT:
+	  pe_file_alignment = parse_vma (optarg, "--file-alignment");
+	  break;
+	
+	case OPTION_HEAP:
+	    {
+	      char *end;
+	      pe_heap_reserve = strtoul (optarg, &end, 0);
+	      if (end == optarg
+		  || (*end != '.' && *end != '\0'))
+		non_fatal (_("%s: invalid reserve value for --heap"),
+			   optarg);
+	      else if (*end != '\0')
+		{
+		  pe_heap_commit = strtoul (end + 1, &end, 0);
+		  if (*end != '\0')
+		    non_fatal (_("%s: invalid commit value for --heap"),
+			       optarg);
+		}
+	    }
+	  break;
+	
+	case OPTION_IMAGE_BASE:
+	  pe_image_base = parse_vma (optarg, "--image-base");
+	  break;
+	
+	case OPTION_SECTION_ALIGNMENT:
+	  pe_section_alignment = parse_vma (optarg,
+					    "--section-alignment");
+	  break;
+	
+	case OPTION_SUBSYSTEM:
+	  set_pe_subsystem (optarg);
+	  break;
+	
+	case OPTION_STACK:
+	    {
+	      char *end;
+	      pe_stack_reserve = strtoul (optarg, &end, 0);
+	      if (end == optarg
+		  || (*end != '.' && *end != '\0'))
+		non_fatal (_("%s: invalid reserve value for --stack"),
+			   optarg);
+	      else if (*end != '\0')
+		{
+		  pe_stack_commit = strtoul (end + 1, &end, 0);
+		  if (*end != '\0')
+		    non_fatal (_("%s: invalid commit value for --stack"),
+			       optarg);
+		}
+	    }
+	  break;
+	
 	case 0:
 	  /* We've been given a long option.  */
 	  break;
@@ -3440,6 +3767,59 @@ copy_main (int argc, char *argv[])
 
   if (output_target == NULL)
     output_target = input_target;
+
+  /* Convert input EFI target to PEI target.  */
+  if (input_target != NULL
+      && strncmp (input_target, "efi-", 4) == 0)
+    {
+      char *efi;
+
+      efi = xstrdup (output_target + 4);
+      if (strncmp (efi, "bsdrv-", 6) == 0
+	  || strncmp (efi, "rtdrv-", 6) == 0)
+	efi += 2;
+      else if (strncmp (efi, "app-", 4) != 0)
+	fatal (_("unknown input EFI target: %s"), input_target);
+
+      input_target = efi;
+      convert_efi_target (efi);
+    }
+
+  /* Convert output EFI target to PEI target.  */
+  if (output_target != NULL
+      && strncmp (output_target, "efi-", 4) == 0)
+    {
+      char *efi;
+
+      efi = xstrdup (output_target + 4);
+      if (strncmp (efi, "app-", 4) == 0)
+	{
+	  if (pe_subsystem == -1)
+	    pe_subsystem = IMAGE_SUBSYSTEM_EFI_APPLICATION;
+	}
+      else if (strncmp (efi, "bsdrv-", 6) == 0)
+	{
+	  if (pe_subsystem == -1)
+	    pe_subsystem = IMAGE_SUBSYSTEM_EFI_BOOT_SERVICE_DRIVER;
+	  efi += 2;
+	}
+      else if (strncmp (efi, "rtdrv-", 6) == 0)
+	{
+	  if (pe_subsystem == -1)
+	    pe_subsystem = IMAGE_SUBSYSTEM_EFI_RUNTIME_DRIVER;
+	  efi += 2;
+	}
+      else
+	fatal (_("unknown output EFI target: %s"), output_target);
+
+      if (pe_file_alignment == (bfd_vma) -1)
+	pe_file_alignment = PE_DEF_FILE_ALIGNMENT;
+      if (pe_section_alignment == (bfd_vma) -1)
+	pe_section_alignment = PE_DEF_SECTION_ALIGNMENT;
+
+      output_target = efi;
+      convert_efi_target (efi);
+    }
 
   if (binary_architecture != NULL)
     {

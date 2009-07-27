@@ -1,5 +1,5 @@
 /* Helper routines for C++ support in GDB.
-   Copyright (C) 2002, 2003, 2004, 2005, 2007, 2008
+   Copyright (C) 2002, 2003, 2004, 2005, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    Contributed by MontaVista Software.
@@ -716,10 +716,10 @@ make_symbol_overload_list_using (const char *func_name,
        current != NULL;
        current = current->next)
     {
-      if (strcmp (namespace, current->outer) == 0)
+      if (strcmp (namespace, current->import_dest) == 0)
 	{
 	  make_symbol_overload_list_using (func_name,
-					   current->inner);
+					   current->import_src);
 	}
     }
 

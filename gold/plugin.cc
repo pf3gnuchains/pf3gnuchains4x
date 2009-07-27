@@ -1,6 +1,6 @@
-// plugin.c -- plugin manager for gold      -*- C++ -*-
+// plugin.cc -- plugin manager for gold      -*- C++ -*-
 
-// Copyright 2008 Free Software Foundation, Inc.
+// Copyright 2008, 2009 Free Software Foundation, Inc.
 // Written by Cary Coutant <ccoutant@google.com>.
 
 // This file is part of gold.
@@ -62,6 +62,12 @@ static enum ld_plugin_status
 add_symbols(void *handle, int nsyms, const struct ld_plugin_symbol *syms);
 
 static enum ld_plugin_status
+get_input_file(const void *handle, struct ld_plugin_input_file *file);
+
+static enum ld_plugin_status
+release_input_file(const void *handle);
+
+static enum ld_plugin_status
 get_symbols(const void *handle, int nsyms, struct ld_plugin_symbol *syms);
 
 static enum ld_plugin_status
@@ -75,7 +81,7 @@ message(int level, const char *format, ...);
 #endif // ENABLE_PLUGINS
 
 static Pluginobj* make_sized_plugin_object(Input_file* input_file,
-                                           off_t offset);
+                                           off_t offset, off_t filesize);
 
 // Plugin methods.
 
@@ -112,7 +118,7 @@ Plugin::load()
   sscanf(ver, "%d.%d", &major, &minor);
 
   // Allocate and populate a transfer vector.
-  const int tv_fixed_size = 11;
+  const int tv_fixed_size = 13;
   int tv_size = this->args_.size() + tv_fixed_size;
   ld_plugin_tv *tv = new ld_plugin_tv[tv_size];
 
@@ -161,6 +167,14 @@ Plugin::load()
   ++i;
   tv[i].tv_tag = LDPT_ADD_SYMBOLS;
   tv[i].tv_u.tv_add_symbols = add_symbols;
+
+  ++i;
+  tv[i].tv_tag = LDPT_GET_INPUT_FILE;
+  tv[i].tv_u.tv_get_input_file = get_input_file;
+
+  ++i;
+  tv[i].tv_tag = LDPT_RELEASE_INPUT_FILE;
+  tv[i].tv_u.tv_release_input_file = release_input_file;
 
   ++i;
   tv[i].tv_tag = LDPT_GET_SYMBOLS;
@@ -283,7 +297,7 @@ Plugin_manager::claim_file(Input_file* input_file, off_t offset,
 // Call the all-symbols-read handlers.
 
 void
-Plugin_manager::all_symbols_read(Workqueue* workqueue,
+Plugin_manager::all_symbols_read(Workqueue* workqueue, Task* task,
                                  Input_objects* input_objects,
 	                         Symbol_table* symtab, Layout* layout,
 	                         Dirsearch* dirpath, Mapfile* mapfile,
@@ -291,6 +305,7 @@ Plugin_manager::all_symbols_read(Workqueue* workqueue,
 {
   this->in_replacement_phase_ = true;
   this->workqueue_ = workqueue;
+  this->task_ = task;
   this->input_objects_ = input_objects;
   this->symtab_ = symtab;
   this->layout_ = layout;
@@ -306,10 +321,10 @@ Plugin_manager::all_symbols_read(Workqueue* workqueue,
   *last_blocker = this->this_blocker_;
 }
 
-// Layout deferred sections and call the cleanup handlers.
+// Layout deferred objects.
 
 void
-Plugin_manager::finish()
+Plugin_manager::layout_deferred_objects()
 {
   Deferred_layout_list::iterator obj;
 
@@ -317,11 +332,20 @@ Plugin_manager::finish()
        obj != this->deferred_layout_objects_.end();
        ++obj)
     (*obj)->layout_deferred_sections(this->layout_);
+}
 
+// Call the cleanup handlers.
+
+void
+Plugin_manager::cleanup()
+{
+  if (this->cleanup_done_)
+    return;
   for (this->current_ = this->plugins_.begin();
        this->current_ != this->plugins_.end();
        ++this->current_)
     (*this->current_)->cleanup();
+  this->cleanup_done_ = true;
 }
 
 // Make a new Pluginobj object.  This is called when the plugin calls
@@ -335,9 +359,43 @@ Plugin_manager::make_plugin_object(unsigned int handle)
     return NULL;
 
   Pluginobj* obj = make_sized_plugin_object(this->input_file_,
-                                            this->plugin_input_file_.offset);
+                                            this->plugin_input_file_.offset,
+                                            this->plugin_input_file_.filesize);
   this->objects_.push_back(obj);
   return obj;
+}
+
+// Get the input file information with an open (possibly re-opened)
+// file descriptor.
+
+ld_plugin_status
+Plugin_manager::get_input_file(unsigned int handle,
+                               struct ld_plugin_input_file *file)
+{
+  Pluginobj* obj = this->object(handle);
+  if (obj == NULL)
+    return LDPS_BAD_HANDLE;
+
+  obj->lock(this->task_);
+  file->name = obj->filename().c_str();
+  file->fd = obj->descriptor();
+  file->offset = obj->offset();
+  file->filesize = obj->filesize();
+  file->handle = reinterpret_cast<void*>(handle);
+  return LDPS_OK;
+}
+
+// Release the input file.
+
+ld_plugin_status
+Plugin_manager::release_input_file(unsigned int handle)
+{
+  Pluginobj* obj = this->object(handle);
+  if (obj == NULL)
+    return LDPS_BAD_HANDLE;
+
+  obj->unlock(this->task_);
+  return LDPS_OK;
 }
 
 // Add a new input file.
@@ -349,11 +407,14 @@ Plugin_manager::add_input_file(char *pathname)
   Input_argument* input_argument = new Input_argument(file);
   Task_token* next_blocker = new Task_token(true);
   next_blocker->add_blocker();
-  this->workqueue_->queue_soon(new Read_symbols(this->options_,
-                                                this->input_objects_,
+  if (this->layout_->incremental_inputs())
+    gold_error(_("Input files added by plug-ins in --incremental mode not "
+		 "supported yet.\n"));
+  this->workqueue_->queue_soon(new Read_symbols(this->input_objects_,
                                                 this->symtab_,
                                                 this->layout_,
                                                 this->dirpath_,
+						0,
                                                 this->mapfile_,
                                                 input_argument,
                                                 NULL,
@@ -366,10 +427,25 @@ Plugin_manager::add_input_file(char *pathname)
 // Class Pluginobj.
 
 Pluginobj::Pluginobj(const std::string& name, Input_file* input_file,
-                     off_t offset)
+                     off_t offset, off_t filesize)
   : Object(name, input_file, false, offset),
-    nsyms_(0), syms_(NULL), symbols_(), comdat_map_()
+    nsyms_(0), syms_(NULL), symbols_(), filesize_(filesize), comdat_map_()
 {
+}
+
+// Return TRUE if a defined symbol might be reachable from outside the
+// universe of claimed objects.
+
+static inline bool
+is_visible_from_outside(Symbol* lsym)
+{
+  if (lsym->in_real_elf())
+    return true;
+  if (parameters->options().relocatable())
+    return true;
+  if (parameters->options().export_dynamic() || parameters->options().shared())
+    return lsym->is_externally_visible();
+  return false;
 }
 
 // Get symbol resolution info.
@@ -408,7 +484,7 @@ Pluginobj::get_symbol_resolution_info(int nsyms, ld_plugin_symbol* syms) const
           if (lsym->source() != Symbol::FROM_OBJECT)
             res = LDPR_PREEMPTED_REG;
           else if (lsym->object() == static_cast<const Object*>(this))
-            res = (lsym->in_real_elf()
+            res = (is_visible_from_outside(lsym)
                    ? LDPR_PREVAILING_DEF
                    : LDPR_PREVAILING_DEF_IRONLY);
           else
@@ -433,7 +509,9 @@ Pluginobj::include_comdat_group(std::string comdat_key, Layout* layout)
   // If this is the first time we've seen this comdat key, ask the
   // layout object whether it should be included.
   if (ins.second)
-    ins.first->second = layout->add_comdat(NULL, 1, comdat_key, true);
+    ins.first->second = layout->find_or_add_kept_section(comdat_key,
+							 NULL, 0, true,
+							 true, NULL);
 
   return ins.first->second;
 }
@@ -444,8 +522,9 @@ template<int size, bool big_endian>
 Sized_pluginobj<size, big_endian>::Sized_pluginobj(
     const std::string& name,
     Input_file* input_file,
-    off_t offset)
-  : Pluginobj(name, input_file, offset)
+    off_t offset,
+    off_t filesize)
+  : Pluginobj(name, input_file, offset, filesize)
 {
 }
 
@@ -472,15 +551,8 @@ Sized_pluginobj<size, big_endian>::do_layout(Symbol_table*, Layout*,
 
 template<int size, bool big_endian>
 void
-Sized_pluginobj<size, big_endian>::do_add_symbols(Symbol_table*,
-                                                  Read_symbols_data*)
-{
-  gold_unreachable();
-}
-
-template<int size, bool big_endian>
-void
 Sized_pluginobj<size, big_endian>::do_add_symbols(Symbol_table* symtab,
+                                                  Read_symbols_data*,
                                                   Layout* layout)
 {
   const int sym_size = elfcpp::Elf_sizes<size>::sym_size;
@@ -682,47 +754,8 @@ Sized_pluginobj<size, big_endian>::do_get_global_symbol_counts(const Symbol_tabl
   gold_unreachable();
 }
 
-// Class Add_plugin_symbols.
-
-Add_plugin_symbols::~Add_plugin_symbols()
-{
-  if (this->this_blocker_ != NULL)
-    delete this->this_blocker_;
-  // next_blocker_ is deleted by the task associated with the next
-  // input file.
-}
-
-// We are blocked by this_blocker_.  We block next_blocker_.  We also
-// lock the file.
-
-Task_token*
-Add_plugin_symbols::is_runnable()
-{
-  if (this->this_blocker_ != NULL && this->this_blocker_->is_blocked())
-    return this->this_blocker_;
-  if (this->obj_->is_locked())
-    return this->obj_->token();
-  return NULL;
-}
-
-void
-Add_plugin_symbols::locks(Task_locker* tl)
-{
-  tl->add(this, this->next_blocker_);
-  tl->add(this, this->obj_->token());
-}
-
-// Add the symbols in the object to the symbol table.
-
-void
-Add_plugin_symbols::run(Workqueue*)
-{
-  this->obj_->add_symbols(this->symtab_, this->layout_);
-}
-
 // Class Plugin_finish.  This task runs after all replacement files have
-// been added.  It calls Layout::layout for any deferred sections and
-// calls each plugin's cleanup handler.
+// been added.  It calls each plugin's cleanup handler.
 
 class Plugin_finish : public Task
 {
@@ -751,7 +784,11 @@ class Plugin_finish : public Task
 
   void
   run(Workqueue*)
-  { parameters->options().plugins()->finish(); }
+  {
+    Plugin_manager* plugins = parameters->options().plugins();
+    gold_assert(plugins != NULL);
+    plugins->cleanup();
+  }
 
   std::string
   get_name() const
@@ -793,6 +830,7 @@ Plugin_hook::run(Workqueue* workqueue)
 {
   gold_assert(this->options_.has_plugins());
   this->options_.plugins()->all_symbols_read(workqueue,
+                                             this,
                                              this->input_objects_,
                                              this->symtab_,
                                              this->layout_,
@@ -851,6 +889,29 @@ add_symbols(void* handle, int nsyms, const ld_plugin_symbol *syms)
   return LDPS_OK;
 }
 
+// Get the input file information with an open (possibly re-opened)
+// file descriptor.
+
+static enum ld_plugin_status
+get_input_file(const void *handle, struct ld_plugin_input_file *file)
+{
+  gold_assert(parameters->options().has_plugins());
+  unsigned int obj_index =
+      static_cast<unsigned int>(reinterpret_cast<intptr_t>(handle));
+  return parameters->options().plugins()->get_input_file(obj_index, file);
+}
+
+// Release the input file.
+
+static enum ld_plugin_status
+release_input_file(const void *handle)
+{
+  gold_assert(parameters->options().has_plugins());
+  unsigned int obj_index =
+      static_cast<unsigned int>(reinterpret_cast<intptr_t>(handle));
+  return parameters->options().plugins()->release_input_file(obj_index);
+}
+
 // Get the symbol resolution info for a plugin-claimed input file.
 
 static enum ld_plugin_status
@@ -907,7 +968,7 @@ message(int level, const char * format, ...)
 // Allocate a Pluginobj object of the appropriate size and endianness.
 
 static Pluginobj*
-make_sized_plugin_object(Input_file* input_file, off_t offset)
+make_sized_plugin_object(Input_file* input_file, off_t offset, off_t filesize)
 {
   Target* target;
   Pluginobj* obj = NULL;
@@ -922,7 +983,7 @@ make_sized_plugin_object(Input_file* input_file, off_t offset)
       if (target->is_big_endian())
 #ifdef HAVE_TARGET_32_BIG
         obj = new Sized_pluginobj<32, true>(input_file->filename(),
-                                            input_file, offset);
+                                            input_file, offset, filesize);
 #else
         gold_error(_("%s: not configured to support "
 		     "32-bit big-endian object"),
@@ -931,7 +992,7 @@ make_sized_plugin_object(Input_file* input_file, off_t offset)
       else
 #ifdef HAVE_TARGET_32_LITTLE
         obj = new Sized_pluginobj<32, false>(input_file->filename(),
-                                             input_file, offset);
+                                             input_file, offset, filesize);
 #else
         gold_error(_("%s: not configured to support "
 		     "32-bit little-endian object"),
@@ -943,7 +1004,7 @@ make_sized_plugin_object(Input_file* input_file, off_t offset)
       if (target->is_big_endian())
 #ifdef HAVE_TARGET_64_BIG
         obj = new Sized_pluginobj<64, true>(input_file->filename(),
-                                            input_file, offset);
+                                            input_file, offset, filesize);
 #else
         gold_error(_("%s: not configured to support "
 		     "64-bit big-endian object"),
@@ -952,7 +1013,7 @@ make_sized_plugin_object(Input_file* input_file, off_t offset)
       else
 #ifdef HAVE_TARGET_64_LITTLE
         obj = new Sized_pluginobj<64, false>(input_file->filename(),
-                                             input_file, offset);
+                                             input_file, offset, filesize);
 #else
         gold_error(_("%s: not configured to support "
 		     "64-bit little-endian object"),

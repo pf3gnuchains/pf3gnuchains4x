@@ -1,8 +1,8 @@
 /* Print values for GDB, the GNU debugger.
 
    Copyright (C) 1986, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996,
-   1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008
-   Free Software Foundation, Inc.
+   1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008,
+   2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -34,6 +34,7 @@
 #include "doublest.h"
 #include "exceptions.h"
 #include "dfp.h"
+#include "python/python.h"
 
 #include <errno.h>
 
@@ -80,7 +81,9 @@ struct value_print_options user_print_options =
   0,				/* print_array_indexes */
   0,				/* deref_ref */
   1,				/* static_field_print */
-  1				/* pascal_static_field_print */
+  1,				/* pascal_static_field_print */
+  0,				/* raw */
+  0				/* summary */
 };
 
 /* Initialize *OPTS to be a copy of the user print options.  */
@@ -214,6 +217,33 @@ show_addressprint (struct ui_file *file, int from_tty,
 }
 
 
+/* A helper function for val_print.  When printing in "summary" mode,
+   we want to print scalar arguments, but not aggregate arguments.
+   This function distinguishes between the two.  */
+
+static int
+scalar_type_p (struct type *type)
+{
+  CHECK_TYPEDEF (type);
+  while (TYPE_CODE (type) == TYPE_CODE_REF)
+    {
+      type = TYPE_TARGET_TYPE (type);
+      CHECK_TYPEDEF (type);
+    }
+  switch (TYPE_CODE (type))
+    {
+    case TYPE_CODE_ARRAY:
+    case TYPE_CODE_STRUCT:
+    case TYPE_CODE_UNION:
+    case TYPE_CODE_SET:
+    case TYPE_CODE_STRING:
+    case TYPE_CODE_BITSTRING:
+      return 0;
+    default:
+      return 1;
+    }
+}
+
 /* Print using the given LANGUAGE the data of type TYPE located at VALADDR
    (within GDB), which came from the inferior at address ADDRESS, onto
    stdio stream STREAM according to OPTIONS.
@@ -257,6 +287,23 @@ val_print (struct type *type, const gdb_byte *valaddr, int embedded_offset,
       return (0);
     }
 
+  if (!options->raw)
+    {
+      ret = apply_val_pretty_printer (type, valaddr, embedded_offset,
+				      address, stream, recurse, options,
+				      language);
+      if (ret)
+	return ret;
+    }
+
+  /* Handle summary mode.  If the value is a scalar, print it;
+     otherwise, print an ellipsis.  */
+  if (options->summary && !scalar_type_p (type))
+    {
+      fprintf_filtered (stream, "...");
+      return 0;
+    }
+
   TRY_CATCH (except, RETURN_MASK_ERROR)
     {
       ret = language->la_val_print (type, valaddr, embedded_offset, address,
@@ -287,6 +334,13 @@ value_check_printable (struct value *val, struct ui_file *stream)
       return 0;
     }
 
+  if (TYPE_CODE (value_type (val)) == TYPE_CODE_INTERNAL_FUNCTION)
+    {
+      fprintf_filtered (stream, _("<internal function %s>"),
+			value_internal_function_name (val));
+      return 0;
+    }
+
   return 1;
 }
 
@@ -308,7 +362,7 @@ common_val_print (struct value *val, struct ui_file *stream, int recurse,
     return 0;
 
   return val_print (value_type (val), value_contents_all (val),
-		    value_embedded_offset (val), VALUE_ADDRESS (val),
+		    value_embedded_offset (val), value_address (val),
 		    stream, recurse, options, language);
 }
 
@@ -324,6 +378,18 @@ value_print (struct value *val, struct ui_file *stream,
   if (!value_check_printable (val, stream))
     return 0;
 
+  if (!options->raw)
+    {
+      int r = apply_val_pretty_printer (value_type (val),
+					value_contents_all (val),
+					value_embedded_offset (val),
+					value_address (val),
+					stream, 0, options,
+					current_language);
+      if (r)
+	return r;
+    }
+
   return LA_VALUE_PRINT (val, stream, options);
 }
 
@@ -335,7 +401,7 @@ void
 val_print_type_code_int (struct type *type, const gdb_byte *valaddr,
 			 struct ui_file *stream)
 {
-  enum bfd_endian byte_order = gdbarch_byte_order (current_gdbarch);
+  enum bfd_endian byte_order = gdbarch_byte_order (get_type_arch (type));
 
   if (TYPE_LENGTH (type) > sizeof (LONGEST))
     {
@@ -343,7 +409,7 @@ val_print_type_code_int (struct type *type, const gdb_byte *valaddr,
 
       if (TYPE_UNSIGNED (type)
 	  && extract_long_unsigned_integer (valaddr, TYPE_LENGTH (type),
-					    &val))
+					    byte_order, &val))
 	{
 	  print_longest (stream, 'u', 0, val);
 	}
@@ -539,10 +605,11 @@ void
 print_decimal_floating (const gdb_byte *valaddr, struct type *type,
 			struct ui_file *stream)
 {
+  enum bfd_endian byte_order = gdbarch_byte_order (get_type_arch (type));
   char decstr[MAX_DECIMAL_STRING];
   unsigned len = TYPE_LENGTH (type);
 
-  decimal_to_string (valaddr, len, decstr);
+  decimal_to_string (valaddr, len, byte_order, decstr);
   fputs_filtered (decstr, stream);
   return;
 }
@@ -919,7 +986,8 @@ print_hex_chars (struct ui_file *stream, const gdb_byte *valaddr,
    Omit any leading zero chars.  */
 
 void
-print_char_chars (struct ui_file *stream, const gdb_byte *valaddr,
+print_char_chars (struct ui_file *stream, struct type *type,
+		  const gdb_byte *valaddr,
 		  unsigned len, enum bfd_endian byte_order)
 {
   const gdb_byte *p;
@@ -932,7 +1000,7 @@ print_char_chars (struct ui_file *stream, const gdb_byte *valaddr,
 
       while (p < valaddr + len)
 	{
-	  LA_EMIT_CHAR (*p, stream, '\'');
+	  LA_EMIT_CHAR (*p, type, stream, '\'');
 	  ++p;
 	}
     }
@@ -944,7 +1012,7 @@ print_char_chars (struct ui_file *stream, const gdb_byte *valaddr,
 
       while (p >= valaddr)
 	{
-	  LA_EMIT_CHAR (*p, stream, '\'');
+	  LA_EMIT_CHAR (*p, type, stream, '\'');
 	  --p;
 	}
     }
@@ -1177,43 +1245,44 @@ partial_memory_read (CORE_ADDR memaddr, gdb_byte *myaddr, int len, int *errnoptr
   return (nread);
 }
 
-/*  Print a string from the inferior, starting at ADDR and printing up to LEN
-   characters, of WIDTH bytes a piece, to STREAM.  If LEN is -1, printing
-   stops at the first null byte, otherwise printing proceeds (including null
-   bytes) until either print_max or LEN characters have been printed,
-   whichever is smaller. */
+/* Read a string from the inferior, at ADDR, with LEN characters of WIDTH bytes
+   each.  Fetch at most FETCHLIMIT characters.  BUFFER will be set to a newly
+   allocated buffer containing the string, which the caller is responsible to
+   free, and BYTES_READ will be set to the number of bytes read.  Returns 0 on
+   success, or errno on failure.
 
-/* FIXME: Use target_read_string.  */
+   If LEN > 0, reads exactly LEN characters (including eventual NULs in
+   the middle or end of the string).  If LEN is -1, stops at the first
+   null character (not necessarily the first null byte) up to a maximum
+   of FETCHLIMIT characters.  Set FETCHLIMIT to UINT_MAX to read as many
+   characters as possible from the string.
+
+   Unless an exception is thrown, BUFFER will always be allocated, even on
+   failure.  In this case, some characters might have been read before the
+   failure happened.  Check BYTES_READ to recognize this situation.
+
+   Note: There was a FIXME asking to make this code use target_read_string,
+   but this function is more general (can read past null characters, up to
+   given LEN). Besides, it is used much more often than target_read_string
+   so it is more tested.  Perhaps callers of target_read_string should use
+   this function instead?  */
 
 int
-val_print_string (CORE_ADDR addr, int len, int width, struct ui_file *stream,
-		  const struct value_print_options *options)
+read_string (CORE_ADDR addr, int len, int width, unsigned int fetchlimit,
+	     enum bfd_endian byte_order, gdb_byte **buffer, int *bytes_read)
 {
-  int force_ellipsis = 0;	/* Force ellipsis to be printed if nonzero. */
-  int errcode;			/* Errno returned from bad reads. */
-  unsigned int fetchlimit;	/* Maximum number of chars to print. */
-  unsigned int nfetch;		/* Chars to fetch / chars fetched. */
-  unsigned int chunksize;	/* Size of each fetch, in chars. */
-  gdb_byte *buffer = NULL;	/* Dynamically growable fetch buffer. */
-  gdb_byte *bufptr;		/* Pointer to next available byte in buffer. */
-  gdb_byte *limit;		/* First location past end of fetch buffer. */
-  struct cleanup *old_chain = NULL;	/* Top of the old cleanup chain. */
-  int found_nul;		/* Non-zero if we found the nul char */
+  int found_nul;		/* Non-zero if we found the nul char.  */
+  int errcode;			/* Errno returned from bad reads.  */
+  unsigned int nfetch;		/* Chars to fetch / chars fetched.  */
+  unsigned int chunksize;	/* Size of each fetch, in chars.  */
+  gdb_byte *bufptr;		/* Pointer to next available byte in buffer.  */
+  gdb_byte *limit;		/* First location past end of fetch buffer.  */
+  struct cleanup *old_chain = NULL;	/* Top of the old cleanup chain.  */
 
-  /* First we need to figure out the limit on the number of characters we are
-     going to attempt to fetch and print.  This is actually pretty simple.  If
-     LEN >= zero, then the limit is the minimum of LEN and print_max.  If
-     LEN is -1, then the limit is print_max.  This is true regardless of
-     whether print_max is zero, UINT_MAX (unlimited), or something in between,
-     because finding the null byte (or available memory) is what actually
-     limits the fetch. */
-
-  fetchlimit = (len == -1 ? options->print_max : min (len, options->print_max));
-
-  /* Now decide how large of chunks to try to read in one operation.  This
+  /* Decide how large of chunks to try to read in one operation.  This
      is also pretty simple.  If LEN >= zero, then we want fetchlimit chars,
      so we might as well read them all in one operation.  If LEN is -1, we
-     are looking for a null terminator to end the fetching, so we might as
+     are looking for a NUL terminator to end the fetching, so we might as
      well read in blocks that are large enough to be efficient, but not so
      large as to be slow if fetchlimit happens to be large.  So we choose the
      minimum of 8 and fetchlimit.  We used to use 200 instead of 8 but
@@ -1221,17 +1290,18 @@ val_print_string (CORE_ADDR addr, int len, int width, struct ui_file *stream,
 
   chunksize = (len == -1 ? min (8, fetchlimit) : fetchlimit);
 
-  /* Loop until we either have all the characters to print, or we encounter
-     some error, such as bumping into the end of the address space. */
+  /* Loop until we either have all the characters, or we encounter
+     some error, such as bumping into the end of the address space.  */
 
   found_nul = 0;
-  old_chain = make_cleanup (null_cleanup, 0);
+  *buffer = NULL;
+
+  old_chain = make_cleanup (free_current_contents, buffer);
 
   if (len > 0)
     {
-      buffer = (gdb_byte *) xmalloc (len * width);
-      bufptr = buffer;
-      old_chain = make_cleanup (xfree, buffer);
+      *buffer = (gdb_byte *) xmalloc (len * width);
+      bufptr = *buffer;
 
       nfetch = partial_memory_read (addr, bufptr, len * width, &errcode)
 	/ width;
@@ -1241,45 +1311,43 @@ val_print_string (CORE_ADDR addr, int len, int width, struct ui_file *stream,
   else if (len == -1)
     {
       unsigned long bufsize = 0;
+
       do
 	{
 	  QUIT;
 	  nfetch = min (chunksize, fetchlimit - bufsize);
 
-	  if (buffer == NULL)
-	    buffer = (gdb_byte *) xmalloc (nfetch * width);
+	  if (*buffer == NULL)
+	    *buffer = (gdb_byte *) xmalloc (nfetch * width);
 	  else
-	    {
-	      discard_cleanups (old_chain);
-	      buffer = (gdb_byte *) xrealloc (buffer, (nfetch + bufsize) * width);
-	    }
+	    *buffer = (gdb_byte *) xrealloc (*buffer,
+					     (nfetch + bufsize) * width);
 
-	  old_chain = make_cleanup (xfree, buffer);
-	  bufptr = buffer + bufsize * width;
+	  bufptr = *buffer + bufsize * width;
 	  bufsize += nfetch;
 
-	  /* Read as much as we can. */
+	  /* Read as much as we can.  */
 	  nfetch = partial_memory_read (addr, bufptr, nfetch * width, &errcode)
-	    / width;
+		    / width;
 
-	  /* Scan this chunk for the null byte that terminates the string
+	  /* Scan this chunk for the null character that terminates the string
 	     to print.  If found, we don't need to fetch any more.  Note
 	     that bufptr is explicitly left pointing at the next character
-	     after the null byte, or at the next character after the end of
-	     the buffer. */
+	     after the null character, or at the next character after the end
+	     of the buffer.  */
 
 	  limit = bufptr + nfetch * width;
 	  while (bufptr < limit)
 	    {
 	      unsigned long c;
 
-	      c = extract_unsigned_integer (bufptr, width);
+	      c = extract_unsigned_integer (bufptr, width, byte_order);
 	      addr += width;
 	      bufptr += width;
 	      if (c == 0)
 		{
 		  /* We don't care about any error which happened after
-		     the NULL terminator.  */
+		     the NUL terminator.  */
 		  errcode = 0;
 		  found_nul = 1;
 		  break;
@@ -1287,55 +1355,103 @@ val_print_string (CORE_ADDR addr, int len, int width, struct ui_file *stream,
 	    }
 	}
       while (errcode == 0	/* no error */
-	     && bufptr - buffer < fetchlimit * width	/* no overrun */
-	     && !found_nul);	/* haven't found nul yet */
+	     && bufptr - *buffer < fetchlimit * width	/* no overrun */
+	     && !found_nul);	/* haven't found NUL yet */
     }
   else
-    {				/* length of string is really 0! */
-      buffer = bufptr = NULL;
+    {				/* Length of string is really 0!  */
+      /* We always allocate *buffer.  */
+      *buffer = bufptr = xmalloc (1);
       errcode = 0;
     }
 
   /* bufptr and addr now point immediately beyond the last byte which we
      consider part of the string (including a '\0' which ends the string).  */
+  *bytes_read = bufptr - *buffer;
+
+  QUIT;
+
+  discard_cleanups (old_chain);
+
+  return errcode;
+}
+
+/* Print a string from the inferior, starting at ADDR and printing up to LEN
+   characters, of WIDTH bytes a piece, to STREAM.  If LEN is -1, printing
+   stops at the first null byte, otherwise printing proceeds (including null
+   bytes) until either print_max or LEN characters have been printed,
+   whichever is smaller.  */
+
+int
+val_print_string (struct type *elttype, CORE_ADDR addr, int len,
+		  struct ui_file *stream,
+		  const struct value_print_options *options)
+{
+  int force_ellipsis = 0;	/* Force ellipsis to be printed if nonzero.  */
+  int errcode;			/* Errno returned from bad reads.  */
+  int found_nul;		/* Non-zero if we found the nul char */
+  unsigned int fetchlimit;	/* Maximum number of chars to print.  */
+  int bytes_read;
+  gdb_byte *buffer = NULL;	/* Dynamically growable fetch buffer.  */
+  struct cleanup *old_chain = NULL;	/* Top of the old cleanup chain.  */
+  struct gdbarch *gdbarch = get_type_arch (elttype);
+  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
+  int width = TYPE_LENGTH (elttype);
+
+  /* First we need to figure out the limit on the number of characters we are
+     going to attempt to fetch and print.  This is actually pretty simple.  If
+     LEN >= zero, then the limit is the minimum of LEN and print_max.  If
+     LEN is -1, then the limit is print_max.  This is true regardless of
+     whether print_max is zero, UINT_MAX (unlimited), or something in between,
+     because finding the null byte (or available memory) is what actually
+     limits the fetch.  */
+
+  fetchlimit = (len == -1 ? options->print_max : min (len, options->print_max));
+
+  errcode = read_string (addr, len, width, fetchlimit, byte_order,
+			 &buffer, &bytes_read);
+  old_chain = make_cleanup (xfree, buffer);
+
+  addr += bytes_read;
 
   /* We now have either successfully filled the buffer to fetchlimit, or
-     terminated early due to an error or finding a null char when LEN is -1. */
+     terminated early due to an error or finding a null char when LEN is -1.  */
 
+  /* Determine found_nul by looking at the last character read.  */
+  found_nul = extract_unsigned_integer (buffer + bytes_read - width, width,
+					byte_order) == 0;
   if (len == -1 && !found_nul)
     {
       gdb_byte *peekbuf;
 
-      /* We didn't find a null terminator we were looking for.  Attempt
+      /* We didn't find a NUL terminator we were looking for.  Attempt
          to peek at the next character.  If not successful, or it is not
          a null byte, then force ellipsis to be printed.  */
 
       peekbuf = (gdb_byte *) alloca (width);
 
       if (target_read_memory (addr, peekbuf, width) == 0
-	  && extract_unsigned_integer (peekbuf, width) != 0)
+	  && extract_unsigned_integer (peekbuf, width, byte_order) != 0)
 	force_ellipsis = 1;
     }
-  else if ((len >= 0 && errcode != 0) || (len > (bufptr - buffer) / width))
+  else if ((len >= 0 && errcode != 0) || (len > bytes_read / width))
     {
       /* Getting an error when we have a requested length, or fetching less
          than the number of characters actually requested, always make us
-         print ellipsis. */
+         print ellipsis.  */
       force_ellipsis = 1;
     }
-
-  QUIT;
 
   /* If we get an error before fetching anything, don't print a string.
      But if we fetch something and then get an error, print the string
      and then the error message.  */
-  if (errcode == 0 || bufptr > buffer)
+  if (errcode == 0 || bytes_read > 0)
     {
       if (options->addressprint)
 	{
 	  fputs_filtered (" ", stream);
 	}
-      LA_PRINT_STRING (stream, buffer, (bufptr - buffer) / width, width, force_ellipsis, options);
+      LA_PRINT_STRING (stream, elttype, buffer, bytes_read / width, force_ellipsis, options);
     }
 
   if (errcode != 0)
@@ -1343,21 +1459,29 @@ val_print_string (CORE_ADDR addr, int len, int width, struct ui_file *stream,
       if (errcode == EIO)
 	{
 	  fprintf_filtered (stream, " <Address ");
-	  fputs_filtered (paddress (addr), stream);
+	  fputs_filtered (paddress (gdbarch, addr), stream);
 	  fprintf_filtered (stream, " out of bounds>");
 	}
       else
 	{
 	  fprintf_filtered (stream, " <Error reading address ");
-	  fputs_filtered (paddress (addr), stream);
+	  fputs_filtered (paddress (gdbarch, addr), stream);
 	  fprintf_filtered (stream, ": %s>", safe_strerror (errcode));
 	}
     }
+
   gdb_flush (stream);
   do_cleanups (old_chain);
-  return ((bufptr - buffer) / width);
+
+  return (bytes_read / width);
 }
 
+
+/* The 'set input-radix' command writes to this auxiliary variable.
+   If the requested radix is valid, INPUT_RADIX is updated; otherwise,
+   it is left unchanged.  */
+
+static unsigned input_radix_1 = 10;
 
 /* Validate an input or output radix setting, and make sure the user
    knows what they really did here.  Radix setting is confusing, e.g.
@@ -1366,7 +1490,7 @@ val_print_string (CORE_ADDR addr, int len, int width, struct ui_file *stream,
 static void
 set_input_radix (char *args, int from_tty, struct cmd_list_element *c)
 {
-  set_input_radix_1 (from_tty, input_radix);
+  set_input_radix_1 (from_tty, input_radix_1);
 }
 
 static void
@@ -1381,12 +1505,11 @@ set_input_radix_1 (int from_tty, unsigned radix)
 
   if (radix < 2)
     {
-      /* FIXME: cagney/2002-03-17: This needs to revert the bad radix
-         value.  */
+      input_radix_1 = input_radix;
       error (_("Nonsense input radix ``decimal %u''; input radix unchanged."),
 	     radix);
     }
-  input_radix = radix;
+  input_radix_1 = input_radix = radix;
   if (from_tty)
     {
       printf_filtered (_("Input radix now set to decimal %u, hex %x, octal %o.\n"),
@@ -1394,10 +1517,16 @@ set_input_radix_1 (int from_tty, unsigned radix)
     }
 }
 
+/* The 'set output-radix' command writes to this auxiliary variable.
+   If the requested radix is valid, OUTPUT_RADIX is updated,
+   otherwise, it is left unchanged.  */
+
+static unsigned output_radix_1 = 10;
+
 static void
 set_output_radix (char *args, int from_tty, struct cmd_list_element *c)
 {
-  set_output_radix_1 (from_tty, output_radix);
+  set_output_radix_1 (from_tty, output_radix_1);
 }
 
 static void
@@ -1417,12 +1546,11 @@ set_output_radix_1 (int from_tty, unsigned radix)
       user_print_options.output_format = 'o';	/* octal */
       break;
     default:
-      /* FIXME: cagney/2002-03-17: This needs to revert the bad radix
-         value.  */
+      output_radix_1 = output_radix;
       error (_("Unsupported output radix ``decimal %u''; output radix unchanged."),
 	     radix);
     }
-  output_radix = radix;
+  output_radix_1 = output_radix = radix;
   if (from_tty)
     {
       printf_filtered (_("Output radix now set to decimal %u, hex %x, octal %o.\n"),
@@ -1566,19 +1694,21 @@ Show printing of addresses."), NULL,
 			   show_addressprint,
 			   &setprintlist, &showprintlist);
 
-  add_setshow_uinteger_cmd ("input-radix", class_support, &input_radix, _("\
+  add_setshow_zuinteger_cmd ("input-radix", class_support, &input_radix_1,
+			     _("\
 Set default input radix for entering numbers."), _("\
 Show default input radix for entering numbers."), NULL,
-			    set_input_radix,
-			    show_input_radix,
-			    &setlist, &showlist);
+			     set_input_radix,
+			     show_input_radix,
+			     &setlist, &showlist);
 
-  add_setshow_uinteger_cmd ("output-radix", class_support, &output_radix, _("\
+  add_setshow_zuinteger_cmd ("output-radix", class_support, &output_radix_1,
+			     _("\
 Set default output radix for printing of values."), _("\
 Show default output radix for printing of values."), NULL,
-			    set_output_radix,
-			    show_output_radix,
-			    &setlist, &showlist);
+			     set_output_radix,
+			     show_output_radix,
+			     &setlist, &showlist);
 
   /* The "set radix" and "show radix" commands are special in that
      they are like normal set and show commands but allow two normally

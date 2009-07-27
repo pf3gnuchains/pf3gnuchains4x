@@ -221,6 +221,8 @@ enum demangle_component_type
   /* A template parameter.  This holds a number, which is the template
      parameter index.  */
   DEMANGLE_COMPONENT_TEMPLATE_PARAM,
+  /* A function parameter.  This holds a number, which is the index.  */
+  DEMANGLE_COMPONENT_FUNCTION_PARAM,
   /* A constructor.  This holds a name and the kind of
      constructor.  */
   DEMANGLE_COMPONENT_CTOR,
@@ -375,6 +377,10 @@ enum demangle_component_type
   DEMANGLE_COMPONENT_CHARACTER,
   /* A decltype type.  */
   DEMANGLE_COMPONENT_DECLTYPE,
+  /* Global constructors keyed to name.  */
+  DEMANGLE_COMPONENT_GLOBAL_CONSTRUCTORS,
+  /* Global destructors keyed to name.  */
+  DEMANGLE_COMPONENT_GLOBAL_DESTRUCTORS,
   /* A pack expansion.  */
   DEMANGLE_COMPONENT_PACK_EXPANSION
 };
@@ -466,10 +472,10 @@ struct demangle_component
       int len;
     } s_string;
 
-    /* For DEMANGLE_COMPONENT_TEMPLATE_PARAM.  */
+    /* For DEMANGLE_COMPONENT_*_PARAM.  */
     struct
     {
-      /* Template parameter index.  */
+      /* Parameter index.  */
       long number;
     } s_number;
 

@@ -1,7 +1,7 @@
 /* Remote debugging interface for boot monitors, for GDB.
 
    Copyright (C) 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999,
-   2000, 2001, 2002, 2006, 2007, 2008 Free Software Foundation, Inc.
+   2000, 2001, 2002, 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    Contributed by Cygnus Support.  Written by Rob Savoye for Cygnus.
    Resurrected from the ashes by Stu Grossman.
@@ -214,9 +214,13 @@ monitor_error (char *function, char *message,
   monitor_printable_string (safe_string, string, real_len);
 
   if (final_char)
-    error (_("%s (0x%s): %s: %s%c"), function, paddr_nz (memaddr), message, safe_string, final_char);
+    error (_("%s (%s): %s: %s%c"),
+	   function, paddress (target_gdbarch, memaddr),
+	   message, safe_string, final_char);
   else
-    error (_("%s (0x%s): %s: %s"), function, paddr_nz (memaddr), message, safe_string);
+    error (_("%s (%s): %s: %s"),
+	   function, paddress (target_gdbarch, memaddr),
+	   message, safe_string);
 }
 
 /* Convert hex digit A to a number.  */
@@ -251,6 +255,7 @@ fromhex (int a)
 static void
 monitor_vsprintf (char *sndbuf, char *pattern, va_list args)
 {
+  int addr_bit = gdbarch_addr_bit (target_gdbarch);
   char format[10];
   char fmt;
   char *p;
@@ -279,7 +284,7 @@ monitor_vsprintf (char *sndbuf, char *pattern, va_list args)
 	      break;
 	    case 'A':
 	      arg_addr = va_arg (args, CORE_ADDR);
-	      strcpy (sndbuf, paddr_nz (arg_addr));
+	      strcpy (sndbuf, phex_nz (arg_addr, addr_bit / 8));
 	      break;
 	    case 's':
 	      arg_string = va_arg (args, char *);
@@ -865,6 +870,8 @@ monitor_detach (struct target_ops *ops, char *args, int from_tty)
 char *
 monitor_supply_register (struct regcache *regcache, int regno, char *valstr)
 {
+  struct gdbarch *gdbarch = get_regcache_arch (regcache);
+  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   ULONGEST val;
   unsigned char regbuf[MAX_REGISTER_SIZE];
   char *p;
@@ -900,8 +907,7 @@ monitor_supply_register (struct regcache *regcache, int regno, char *valstr)
 
   /* supply register stores in target byte order, so swap here */
 
-  store_unsigned_integer (regbuf,
-			  register_size (get_regcache_arch (regcache), regno),
+  store_unsigned_integer (regbuf, register_size (gdbarch, regno), byte_order,
 			  val);
 
   regcache_raw_supply (regcache, regno, regbuf);
@@ -912,7 +918,8 @@ monitor_supply_register (struct regcache *regcache, int regno, char *valstr)
 /* Tell the remote machine to resume.  */
 
 static void
-monitor_resume (ptid_t ptid, int step, enum target_signal sig)
+monitor_resume (struct target_ops *ops,
+		ptid_t ptid, int step, enum target_signal sig)
 {
   /* Some monitors require a different command when starting a program */
   monitor_debug ("MON resume\n");
@@ -1007,8 +1014,8 @@ monitor_interrupt_query (void)
 {
   target_terminal_ours ();
 
-  if (query ("Interrupted while waiting for the program.\n\
-Give up (and stop debugging it)? "))
+  if (query (_("Interrupted while waiting for the program.\n\
+Give up (and stop debugging it)? ")))
     {
       target_mourn_inferior ();
       deprecated_throw_reason (RETURN_QUIT);
@@ -1063,7 +1070,8 @@ monitor_wait_filter (char *buf,
    status just as `wait' would.  */
 
 static ptid_t
-monitor_wait (ptid_t ptid, struct target_waitstatus *status)
+monitor_wait (struct target_ops *ops,
+	      ptid_t ptid, struct target_waitstatus *status, int options)
 {
   int old_timeout = timeout;
   char buf[TARGET_BUF_SIZE];
@@ -1285,7 +1293,8 @@ monitor_dump_regs (struct regcache *regcache)
 }
 
 static void
-monitor_fetch_registers (struct regcache *regcache, int regno)
+monitor_fetch_registers (struct target_ops *ops,
+			 struct regcache *regcache, int regno)
 {
   monitor_debug ("MON fetchregs\n");
   if (current_monitor->getreg.cmd)
@@ -1311,6 +1320,7 @@ monitor_fetch_registers (struct regcache *regcache, int regno)
 static void
 monitor_store_register (struct regcache *regcache, int regno)
 {
+  int reg_size = register_size (get_regcache_arch (regcache), regno);
   const char *name;
   ULONGEST val;
   
@@ -1326,9 +1336,7 @@ monitor_store_register (struct regcache *regcache, int regno)
     }
 
   regcache_cooked_read_unsigned (regcache, regno, &val);
-  monitor_debug ("MON storeg %d %s\n", regno,
-		 phex (val,
-		       register_size (get_regcache_arch (regcache), regno)));
+  monitor_debug ("MON storeg %d %s\n", regno, phex (val, reg_size));
 
   /* send the register deposit command */
 
@@ -1344,14 +1352,14 @@ monitor_store_register (struct regcache *regcache, int regno)
       monitor_debug ("EXP setreg.resp_delim\n");
       monitor_expect_regexp (&setreg_resp_delim_pattern, NULL, 0);
       if (current_monitor->flags & MO_SETREG_INTERACTIVE)
-	monitor_printf ("%s\r", paddr_nz (val));
+	monitor_printf ("%s\r", phex_nz (val, reg_size));
     }
   if (current_monitor->setreg.term)
     {
       monitor_debug ("EXP setreg.term\n");
       monitor_expect (current_monitor->setreg.term, NULL, 0);
       if (current_monitor->flags & MO_SETREG_INTERACTIVE)
-	monitor_printf ("%s\r", paddr_nz (val));
+	monitor_printf ("%s\r", phex_nz (val, reg_size));
       monitor_expect_prompt (NULL, 0);
     }
   else
@@ -1367,7 +1375,8 @@ monitor_store_register (struct regcache *regcache, int regno)
 /* Store the remote registers.  */
 
 static void
-monitor_store_registers (struct regcache *regcache, int regno)
+monitor_store_registers (struct target_ops *ops,
+			 struct regcache *regcache, int regno)
 {
   if (regno >= 0)
     {
@@ -1401,14 +1410,15 @@ monitor_files_info (struct target_ops *ops)
 static int
 monitor_write_memory (CORE_ADDR memaddr, char *myaddr, int len)
 {
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
   unsigned int val, hostval;
   char *cmd;
   int i;
 
-  monitor_debug ("MON write %d %s\n", len, paddr (memaddr));
+  monitor_debug ("MON write %d %s\n", len, paddress (target_gdbarch, memaddr));
 
   if (current_monitor->flags & MO_ADDR_BITS_REMOVE)
-    memaddr = gdbarch_addr_bits_remove (current_gdbarch, memaddr);
+    memaddr = gdbarch_addr_bits_remove (target_gdbarch, memaddr);
 
   /* Use memory fill command for leading 0 bytes.  */
 
@@ -1457,7 +1467,7 @@ monitor_write_memory (CORE_ADDR memaddr, char *myaddr, int len)
       cmd = current_monitor->setmem.cmdb;
     }
 
-  val = extract_unsigned_integer (myaddr, len);
+  val = extract_unsigned_integer (myaddr, len, byte_order);
 
   if (len == 4)
     {
@@ -1662,6 +1672,7 @@ monitor_write_memory_block (CORE_ADDR memaddr, char *myaddr, int len)
 static int
 monitor_read_memory_single (CORE_ADDR memaddr, char *myaddr, int len)
 {
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
   unsigned int val;
   char membuf[sizeof (int) * 2 + 1];
   char *p;
@@ -1778,7 +1789,7 @@ monitor_read_memory_single (CORE_ADDR memaddr, char *myaddr, int len)
 
   /* supply register stores in target byte order, so swap here */
 
-  store_unsigned_integer (myaddr, len, val);
+  store_unsigned_integer (myaddr, len, byte_order, val);
 
   return len;
 }
@@ -1804,10 +1815,10 @@ monitor_read_memory (CORE_ADDR memaddr, char *myaddr, int len)
     }
 
   monitor_debug ("MON read block ta(%s) ha(%lx) %d\n",
-		 paddr_nz (memaddr), (long) myaddr, len);
+		 paddress (target_gdbarch, memaddr), (long) myaddr, len);
 
   if (current_monitor->flags & MO_ADDR_BITS_REMOVE)
-    memaddr = gdbarch_addr_bits_remove (current_gdbarch, memaddr);
+    memaddr = gdbarch_addr_bits_remove (target_gdbarch, memaddr);
 
   if (current_monitor->flags & MO_GETMEM_READ_SINGLE)
     return monitor_read_memory_single (memaddr, myaddr, len);
@@ -1987,7 +1998,7 @@ monitor_xfer_memory (CORE_ADDR memaddr, gdb_byte *myaddr, int len, int write,
 }
 
 static void
-monitor_kill (void)
+monitor_kill (struct target_ops *ops)
 {
   return;			/* ignore attempts to kill target system */
 }
@@ -2003,7 +2014,8 @@ monitor_create_inferior (struct target_ops *ops, char *exec_file,
 
   first_time = 1;
   clear_proceed_status ();
-  write_pc (bfd_get_start_address (exec_bfd));
+  regcache_write_pc (get_current_regcache (),
+		     bfd_get_start_address (exec_bfd));
 }
 
 /* Clean up when a program exits.
@@ -2022,21 +2034,22 @@ monitor_mourn_inferior (struct target_ops *ops)
 /* Tell the monitor to add a breakpoint.  */
 
 static int
-monitor_insert_breakpoint (struct bp_target_info *bp_tgt)
+monitor_insert_breakpoint (struct gdbarch *gdbarch,
+			   struct bp_target_info *bp_tgt)
 {
   CORE_ADDR addr = bp_tgt->placed_address;
   int i;
   int bplen;
 
-  monitor_debug ("MON inst bkpt %s\n", paddr (addr));
+  monitor_debug ("MON inst bkpt %s\n", paddress (gdbarch, addr));
   if (current_monitor->set_break == NULL)
     error (_("No set_break defined for this monitor"));
 
   if (current_monitor->flags & MO_ADDR_BITS_REMOVE)
-    addr = gdbarch_addr_bits_remove (current_gdbarch, addr);
+    addr = gdbarch_addr_bits_remove (gdbarch, addr);
 
   /* Determine appropriate breakpoint size for this address.  */
-  gdbarch_breakpoint_from_pc (current_gdbarch, &addr, &bplen);
+  gdbarch_breakpoint_from_pc (gdbarch, &addr, &bplen);
   bp_tgt->placed_address = addr;
   bp_tgt->placed_size = bplen;
 
@@ -2057,12 +2070,13 @@ monitor_insert_breakpoint (struct bp_target_info *bp_tgt)
 /* Tell the monitor to remove a breakpoint.  */
 
 static int
-monitor_remove_breakpoint (struct bp_target_info *bp_tgt)
+monitor_remove_breakpoint (struct gdbarch *gdbarch,
+			   struct bp_target_info *bp_tgt)
 {
   CORE_ADDR addr = bp_tgt->placed_address;
   int i;
 
-  monitor_debug ("MON rmbkpt %s\n", paddr (addr));
+  monitor_debug ("MON rmbkpt %s\n", paddress (gdbarch, addr));
   if (current_monitor->clr_break == NULL)
     error (_("No clr_break defined for this monitor"));
 
@@ -2083,8 +2097,8 @@ monitor_remove_breakpoint (struct bp_target_info *bp_tgt)
 	}
     }
   fprintf_unfiltered (gdb_stderr,
-		      "Can't find breakpoint associated with 0x%s\n",
-		      paddr_nz (addr));
+		      "Can't find breakpoint associated with %s\n",
+		      paddress (gdbarch, addr));
   return 1;
 }
 
@@ -2151,7 +2165,8 @@ monitor_load (char *file, int from_tty)
 
   /* Finally, make the PC point at the start address */
   if (exec_bfd)
-    write_pc (bfd_get_start_address (exec_bfd));
+    regcache_write_pc (get_current_regcache (),
+		       bfd_get_start_address (exec_bfd));
 
   /* There used to be code here which would clear inferior_ptid and
      call clear_symtab_users.  None of that should be necessary:
@@ -2231,7 +2246,7 @@ monitor_get_dev_name (void)
 /* Check to see if a thread is still alive.  */
 
 static int
-monitor_thread_alive (ptid_t ptid)
+monitor_thread_alive (struct target_ops *ops, ptid_t ptid)
 {
   if (ptid_equal (ptid, monitor_ptid))
     /* The monitor's task is always alive.  */
@@ -2244,7 +2259,7 @@ monitor_thread_alive (ptid_t ptid)
    buffer.  */
 
 static char *
-monitor_pid_to_str (ptid_t ptid)
+monitor_pid_to_str (struct target_ops *ops, ptid_t ptid)
 {
   static char buf[64];
 
@@ -2283,11 +2298,11 @@ init_base_monitor_ops (void)
   monitor_ops.to_thread_alive = monitor_thread_alive;
   monitor_ops.to_pid_to_str = monitor_pid_to_str;
   monitor_ops.to_stratum = process_stratum;
-  monitor_ops.to_has_all_memory = 1;
-  monitor_ops.to_has_memory = 1;
-  monitor_ops.to_has_stack = 1;
-  monitor_ops.to_has_registers = 1;
-  monitor_ops.to_has_execution = 1;
+  monitor_ops.to_has_all_memory = default_child_has_all_memory;
+  monitor_ops.to_has_memory = default_child_has_memory;
+  monitor_ops.to_has_stack = default_child_has_stack;
+  monitor_ops.to_has_registers = default_child_has_registers;
+  monitor_ops.to_has_execution = default_child_has_execution;
   monitor_ops.to_magic = OPS_MAGIC;
 }				/* init_base_monitor_ops */
 

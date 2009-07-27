@@ -1,6 +1,6 @@
 // target.h -- target support for gold   -*- C++ -*-
 
-// Copyright 2006, 2007, 2008 Free Software Foundation, Inc.
+// Copyright 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
 // Written by Ian Lance Taylor <iant@google.com>.
 
 // This file is part of gold.
@@ -141,6 +141,43 @@ class Target
   wrap_char() const
   { return this->pti_->wrap_char; }
 
+  // Return the special section index which indicates a small common
+  // symbol.  This will return SHN_UNDEF if there are no small common
+  // symbols.
+  elfcpp::Elf_Half
+  small_common_shndx() const
+  { return this->pti_->small_common_shndx; }
+
+  // Return values to add to the section flags for the section holding
+  // small common symbols.
+  elfcpp::Elf_Xword
+  small_common_section_flags() const
+  {
+    gold_assert(this->pti_->small_common_shndx != elfcpp::SHN_UNDEF);
+    return this->pti_->small_common_section_flags;
+  }
+
+  // Return the special section index which indicates a large common
+  // symbol.  This will return SHN_UNDEF if there are no large common
+  // symbols.
+  elfcpp::Elf_Half
+  large_common_shndx() const
+  { return this->pti_->large_common_shndx; }
+
+  // Return values to add to the section flags for the section holding
+  // large common symbols.
+  elfcpp::Elf_Xword
+  large_common_section_flags() const
+  {
+    gold_assert(this->pti_->large_common_shndx != elfcpp::SHN_UNDEF);
+    return this->pti_->large_common_section_flags;
+  }
+
+  // This hook is called when an output section is created.
+  void
+  new_output_section(Output_section* os) const
+  { this->do_new_output_section(os); }
+
   // This is called to tell the target to complete any sections it is
   // handling.  After this all sections must have their final size.
   void
@@ -166,6 +203,18 @@ class Target
   bool
   is_defined_by_abi(const Symbol* sym) const
   { return this->do_is_defined_by_abi(sym); }
+
+  // Adjust the output file header before it is written out.  VIEW
+  // points to the header in external form.  LEN is the length.
+  void
+  adjust_elf_header(unsigned char* view, int len) const
+  { return this->do_adjust_elf_header(view, len); }
+
+  // Return whether NAME is a local label name.  This is used to implement the
+  // --discard-locals options.
+  bool
+  is_local_label_name(const char* name) const
+  { return this->do_is_local_label_name(name); }
 
  protected:
   // This struct holds the constant information for a child class.  We
@@ -198,10 +247,25 @@ class Target
     uint64_t abi_pagesize;
     // The common page size used by actual implementations.
     uint64_t common_pagesize;
+    // The special section index for small common symbols; SHN_UNDEF
+    // if none.
+    elfcpp::Elf_Half small_common_shndx;
+    // The special section index for large common symbols; SHN_UNDEF
+    // if none.
+    elfcpp::Elf_Half large_common_shndx;
+    // Section flags for small common section.
+    elfcpp::Elf_Xword small_common_section_flags;
+    // Section flags for large common section.
+    elfcpp::Elf_Xword large_common_section_flags;
   };
 
   Target(const Target_info* pti)
     : pti_(pti)
+  { }
+
+  // Virtual function which may be implemented by the child class.
+  virtual void
+  do_new_output_section(Output_section*) const
   { }
 
   // Virtual function which may be implemented by the child class.
@@ -224,6 +288,18 @@ class Target
   virtual bool
   do_is_defined_by_abi(const Symbol*) const
   { return false; }
+
+  // Adjust the output file header before it is written out.  VIEW
+  // points to the header in external form.  LEN is the length, and
+  // will be one of the values of elfcpp::Elf_sizes<size>::ehdr_size.
+  // By default, we do nothing.
+  virtual void
+  do_adjust_elf_header(unsigned char*, int) const
+  { }
+
+  // Virtual function which may be overriden by the child class.
+  virtual bool
+  do_is_local_label_name(const char*) const;
 
  private:
   Target(const Target&);
@@ -258,6 +334,24 @@ class Sized_target : public Target
   resolve(Symbol*, const elfcpp::Sym<size, big_endian>&, Object*,
 	  const char*)
   { gold_unreachable(); }
+
+  // Process the relocs for a section, and record information of the
+  // mapping from source to destination sections. This mapping is later
+  // used to determine unreferenced garbage sections. This procedure is
+  // only called during garbage collection.
+  virtual void
+  gc_process_relocs(const General_options& options,
+	      Symbol_table* symtab,
+	      Layout* layout,
+	      Sized_relobj<size, big_endian>* object,
+	      unsigned int data_shndx,
+	      unsigned int sh_type,
+	      const unsigned char* prelocs,
+	      size_t reloc_count,
+	      Output_section* output_section,
+	      bool needs_special_offset_handling,
+	      size_t local_symbol_count,
+	      const unsigned char* plocal_symbols) = 0;
 
   // Scan the relocs for a section, and record any information
   // required for the symbol.  OPTIONS is the command line options.

@@ -1,6 +1,6 @@
 /* ELF object file format
    Copyright 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000,
-   2001, 2002, 2003, 2004, 2005, 2006, 2007
+   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2009
    Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
@@ -260,9 +260,20 @@ elf_file_symbol (const char *s, int appfile)
       || (symbol_rootP->bsym->flags & BSF_FILE) == 0)
     {
       symbolS *sym;
+      unsigned int name_length;
 
       sym = symbol_new (s, absolute_section, 0, NULL);
       symbol_set_frag (sym, &zero_address_frag);
+
+      name_length = strlen (s);
+      if (name_length > strlen (S_GET_NAME (sym)))
+	{
+	  obstack_grow (&notes, s, name_length + 1);
+	  S_SET_NAME (sym, obstack_finish (&notes));
+	}
+      else
+	strcpy ((char *) S_GET_NAME (sym), s);
+
       symbol_get_bfdsym (sym)->flags |= BSF_FILE;
 
       if (symbol_rootP != sym)
@@ -459,7 +470,7 @@ obj_elf_visibility (int visibility)
       bfdsym = symbol_get_bfdsym (symbolP);
       elfsym = elf_symbol_from (bfd_asymbol_bfd (bfdsym), bfdsym);
 
-      assert (elfsym);
+      gas_assert (elfsym);
 
       elfsym->internal_elf_sym.st_other &= ~3;
       elfsym->internal_elf_sym.st_other |= visibility;
@@ -496,7 +507,7 @@ get_section (bfd *abfd ATTRIBUTE_UNUSED, asection *sec, void *inf)
 {
   const char *gname = inf;
   const char *group_name = elf_group_name (sec);
-  
+
   return (group_name == gname
 	  || (group_name != NULL
 	      && gname != NULL
@@ -524,7 +535,7 @@ get_section (bfd *abfd ATTRIBUTE_UNUSED, asection *sec, void *inf)
 void
 obj_elf_change_section (const char *name,
 			int type,
-			int attr,
+			bfd_vma attr,
 			int entsize,
 			const char *group_name,
 			int linkonce,
@@ -720,10 +731,10 @@ obj_elf_change_section (const char *name,
 #endif
 }
 
-static int
+static bfd_vma
 obj_elf_parse_section_letters (char *str, size_t len)
 {
-  int attr = 0;
+  bfd_vma attr = 0;
 
   while (len > 0)
     {
@@ -766,8 +777,8 @@ obj_elf_parse_section_letters (char *str, size_t len)
 	  {
 	    char *bad_msg = _("unrecognized .section attribute: want a,w,x,M,S,G,T");
 #ifdef md_elf_section_letter
-	    int md_attr = md_elf_section_letter (*str, &bad_msg);
-	    if (md_attr >= 0)
+	    bfd_vma md_attr = md_elf_section_letter (*str, &bad_msg);
+	    if (md_attr > 0)
 	      attr |= md_attr;
 	    else
 #endif
@@ -810,7 +821,7 @@ obj_elf_section_type (char *str, size_t len, bfd_boolean warn)
   return 0;
 }
 
-static int
+static bfd_vma
 obj_elf_section_word (char *str, size_t len, int *type)
 {
   int ret;
@@ -826,8 +837,8 @@ obj_elf_section_word (char *str, size_t len, int *type)
 
 #ifdef md_elf_section_word
   {
-    int md_attr = md_elf_section_word (str, len);
-    if (md_attr >= 0)
+    bfd_vma md_attr = md_elf_section_word (str, len);
+    if (md_attr > 0)
       return md_attr;
   }
 #endif
@@ -888,7 +899,8 @@ void
 obj_elf_section (int push)
 {
   char *name, *group_name, *beg;
-  int type, attr, dummy;
+  int type, dummy;
+  bfd_vma attr;
   int entsize;
   int linkonce;
   subsegT new_subsection = -1;
@@ -1345,7 +1357,7 @@ obj_elf_vtable_inherit (int ignore ATTRIBUTE_UNUSED)
   if (bad)
     return NULL;
 
-  assert (symbol_get_value_expression (csym)->X_op == O_constant);
+  gas_assert (symbol_get_value_expression (csym)->X_op == O_constant);
   return fix_new (symbol_get_frag (csym),
 		  symbol_get_value_expression (csym)->X_add_number,
 		  0, psym, 0, 0, BFD_RELOC_VTABLE_INHERIT);
@@ -1663,6 +1675,32 @@ obj_elf_type (int ignore ATTRIBUTE_UNUSED)
 	    }
 	}
     }
+  else if (strcmp (typename, "gnu_indirect_function") == 0
+	   || strcmp (typename, "10") == 0
+	   || strcmp (typename, "STT_GNU_IFUNC") == 0)
+    {
+      const struct elf_backend_data *bed;
+
+      bed = get_elf_backend_data (stdoutput);
+      if (!(bed->elf_osabi == ELFOSABI_LINUX
+	    /* GNU/Linux is still using the default value 0.  */
+	    || bed->elf_osabi == ELFOSABI_NONE))
+	as_bad (_("symbol type \"%s\" is supported only by GNU targets"),
+		typename);
+      type = BSF_FUNCTION | BSF_GNU_INDIRECT_FUNCTION;
+    }
+  else if (strcmp (typename, "gnu_unique_object") == 0)
+    {
+      const struct elf_backend_data *bed;
+
+      bed = get_elf_backend_data (stdoutput);
+      if (!(bed->elf_osabi == ELFOSABI_LINUX
+	    /* GNU/Linux is still using the default value 0.  */
+	    || bed->elf_osabi == ELFOSABI_NONE))
+	as_bad (_("symbol type \"%s\" is supported only by GNU targets"),
+		typename);
+      type = BSF_OBJECT | BSF_GNU_UNIQUE;
+    }
 #ifdef md_elf_symbol_type
   else if ((type = md_elf_symbol_type (typename, sym, elfsym)) != -1)
     ;
@@ -1696,7 +1734,9 @@ obj_elf_ident (int ignore ATTRIBUTE_UNUSED)
       char *p;
       comment_section = subseg_new (".comment", 0);
       bfd_set_section_flags (stdoutput, comment_section,
-			     SEC_READONLY | SEC_HAS_CONTENTS);
+			     SEC_READONLY | SEC_HAS_CONTENTS
+			     | SEC_MERGE | SEC_STRINGS);
+      comment_section->entsize = 1;
       p = frag_more (1);
       *p = 0;
     }
@@ -1764,7 +1804,7 @@ adjust_stab_sections (bfd *abfd, asection *sec, void *xxx ATTRIBUTE_UNUSED)
   nsyms = bfd_section_size (abfd, sec) / 12 - 1;
 
   p = seg_info (sec)->stabu.p;
-  assert (p != 0);
+  gas_assert (p != 0);
 
   bfd_h_put_16 (abfd, nsyms, p + 6);
   bfd_h_put_32 (abfd, strsz, p + 8);
@@ -2175,7 +2215,7 @@ elf_frob_file_after_relocs (void)
 		  bfd_errmsg (bfd_get_error ()));
 
       sec = bfd_get_section_by_name (stdoutput, ".mdebug");
-      assert (sec != NULL);
+      gas_assert (sec != NULL);
 
       know (!stdoutput->output_has_begun);
 

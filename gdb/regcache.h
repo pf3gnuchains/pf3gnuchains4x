@@ -1,7 +1,7 @@
 /* Cache and manage the values of registers for GDB, the GNU debugger.
 
    Copyright (C) 1986, 1987, 1989, 1991, 1994, 1995, 1996, 1998, 2000, 2001,
-   2002, 2007, 2008 Free Software Foundation, Inc.
+   2002, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -26,6 +26,7 @@ struct gdbarch;
 
 extern struct regcache *get_current_regcache (void);
 extern struct regcache *get_thread_regcache (ptid_t ptid);
+extern struct regcache *get_thread_arch_regcache (ptid_t, struct gdbarch *);
 
 void regcache_xfree (struct regcache *regcache);
 struct cleanup *make_cleanup_regcache_xfree (struct regcache *regcache);

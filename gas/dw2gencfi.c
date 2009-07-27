@@ -1,5 +1,6 @@
 /* dw2gencfi.c - Support for generating Dwarf2 CFI information.
-   Copyright 2003, 2004, 2005, 2006, 2007, 2008 Free Software Foundation, Inc.
+   Copyright 2003, 2004, 2005, 2006, 2007, 2008, 2009
+   Free Software Foundation, Inc.
    Contributed by Michal Ludvig <mludvig@suse.cz>
 
    This file is part of GAS, the GNU Assembler.
@@ -284,7 +285,7 @@ cfi_add_CFA_offset (unsigned regno, offsetT offset)
 {
   unsigned int abs_data_align;
 
-  assert (DWARF2_CIE_DATA_ALIGNMENT != 0);
+  gas_assert (DWARF2_CIE_DATA_ALIGNMENT != 0);
   cfi_add_CFA_insn_reg_offset (DW_CFA_offset, regno, offset);
 
   abs_data_align = (DWARF2_CIE_DATA_ALIGNMENT < 0
@@ -1001,7 +1002,7 @@ output_cfi_insn (struct cfi_insn_data *insn)
 	       is already allocated to the frag.  This comes from the way
 	       that it scans the .eh_frame section looking first for the
 	       .byte DW_CFA_advance_loc4.  */
-	    frag_more (1);
+	    *frag_more (1) = DW_CFA_advance_loc4;
 
 	    frag_var (rs_cfa, 4, 0, DWARF2_LINE_MIN_INSN_LENGTH << 3,
 		      make_expr_symbol (&exp), frag_now_fix () - 1,

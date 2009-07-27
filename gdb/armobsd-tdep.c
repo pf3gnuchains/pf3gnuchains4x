@@ -1,6 +1,6 @@
 /* Target-dependent code for OpenBSD/arm.
 
-   Copyright (C) 2006, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -126,6 +126,9 @@ armobsd_core_osabi_sniffer (bfd *abfd)
 
   return GDB_OSABI_UNKNOWN;
 }
+
+/* Provide a prototype to silence -Wmissing-prototypes.  */
+extern initialize_file_ftype _initialize_armobsd_tdep;
 
 void
 _initialize_armobsd_tdep (void)

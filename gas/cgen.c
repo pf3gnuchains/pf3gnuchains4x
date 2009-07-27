@@ -452,9 +452,10 @@ gas_cgen_parse_operand (cd, want, strP, opindex, opinfo, resultP, valueP)
 	  if (exp.X_op == O_symbol
 	      && reloc_type == BFD_RELOC_RELC
 	      && exp.X_add_symbol->sy_value.X_op == O_constant
-	      && exp.X_add_symbol->bsym->section != expr_section
-	      && exp.X_add_symbol->bsym->section != absolute_section
-	      && exp.X_add_symbol->bsym->section != undefined_section)
+	      && (!exp.X_add_symbol->bsym
+		  || (exp.X_add_symbol->bsym->section != expr_section
+		      && exp.X_add_symbol->bsym->section != absolute_section
+		      && exp.X_add_symbol->bsym->section != undefined_section)))
 	    {
 	      /* Local labels will have been (eagerly) turned into constants
 		 by now, due to the inappropriately deep insight of the
@@ -1034,7 +1035,7 @@ gas_cgen_tc_gen_reloc (section, fixP)
       return NULL;
     }
 
-  assert (!fixP->fx_pcrel == !reloc->howto->pc_relative);
+  gas_assert (!fixP->fx_pcrel == !reloc->howto->pc_relative);
 
   reloc->sym_ptr_ptr = (asymbol **) xmalloc (sizeof (asymbol *));
   *reloc->sym_ptr_ptr = symbol_get_bfdsym (fixP->fx_addsy);
@@ -1061,4 +1062,3 @@ gas_cgen_begin ()
   else
     cgen_clear_signed_overflow_ok (gas_cgen_cpu_desc);
 }
-

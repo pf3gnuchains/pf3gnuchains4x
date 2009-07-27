@@ -125,7 +125,8 @@ char lex_type[256] = {
 };
 
 /* In: a character.
-   Out: 1 if this character ends a line.  */
+   Out: 1 if this character ends a line.
+	2 if this character is a line separator.  */
 char is_end_of_line[256] = {
 #ifdef CR_EOL
   1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0,	/* @abcdefghijklmno */
@@ -239,7 +240,7 @@ read_begin (void)
 
   /* Use machine dependent syntax.  */
   for (p = line_separator_chars; *p; p++)
-    is_end_of_line[(unsigned char) *p] = 1;
+    is_end_of_line[(unsigned char) *p] = 2;
   /* Use more.  FIXME-SOMEDAY.  */
 
   if (flag_mri)
@@ -1920,6 +1921,10 @@ s_fill (int ignore ATTRIBUTE_UNUSED)
   md_flush_pending_output ();
 #endif
 
+#ifdef md_cons_align
+  md_cons_align (1);
+#endif
+
   get_known_segmented_expression (&rep_exp);
   if (*input_line_pointer == ',')
     {
@@ -2060,8 +2065,9 @@ skip_past_char (char ** str, char c)
 }
 #define skip_past_comma(str) skip_past_char (str, ',')
 
-/* Parse an attribute directive for VENDOR.  */
-void
+/* Parse an attribute directive for VENDOR.
+   Returns the attribute number read, or zero on error.  */
+int
 s_vendor_attribute (int vendor)
 {
   expressionS exp;
@@ -2069,13 +2075,45 @@ s_vendor_attribute (int vendor)
   int tag;
   unsigned int i = 0;
   char *s = NULL;
-  char saved_char;
 
-  expression (& exp);
-  if (exp.X_op != O_constant)
-    goto bad;
+  /* Read the first number or name.  */
+  skip_whitespace (input_line_pointer);
+  s = input_line_pointer;
+  if (ISDIGIT (*input_line_pointer))
+    {
+      expression (& exp);
+      if (exp.X_op != O_constant)
+	goto bad;
+      tag = exp.X_add_number;
+    }
+  else
+    {
+      char *name;
 
-  tag = exp.X_add_number;
+      /* A name may contain '_', but no other punctuation.  */
+      for (; ISALNUM (*input_line_pointer) || *input_line_pointer == '_';
+	   ++input_line_pointer)
+	i++;
+      if (i == 0)
+	goto bad;
+
+      name = alloca (i + 1);
+      memcpy (name, s, i);
+      name[i] = '\0';
+
+#ifndef CONVERT_SYMBOLIC_ATTRIBUTE
+#define CONVERT_SYMBOLIC_ATTRIBUTE(a) -1
+#endif
+
+      tag = CONVERT_SYMBOLIC_ATTRIBUTE (name);
+      if (tag == -1)
+	{
+	  as_bad (_("Attribute name not recognised: %s"), name);
+	  ignore_rest_of_line ();
+	  return 0;
+	}
+    }
+
   type = _bfd_elf_obj_attrs_arg_type (stdoutput, vendor, tag);
 
   if (skip_past_comma (&input_line_pointer) == -1)
@@ -2087,41 +2125,31 @@ s_vendor_attribute (int vendor)
 	{
 	  as_bad (_("expected numeric constant"));
 	  ignore_rest_of_line ();
-	  return;
+	  return 0;
 	}
       i = exp.X_add_number;
     }
-  if (type == 3
+  if ((type & 3) == 3
       && skip_past_comma (&input_line_pointer) == -1)
     {
       as_bad (_("expected comma"));
       ignore_rest_of_line ();
-      return;
+      return 0;
     }
   if (type & 2)
     {
-      skip_whitespace(input_line_pointer);
+      int len;
+
+      skip_whitespace (input_line_pointer);
       if (*input_line_pointer != '"')
 	goto bad_string;
-      input_line_pointer++;
-      s = input_line_pointer;
-      while (*input_line_pointer && *input_line_pointer != '"')
-	input_line_pointer++;
-      if (*input_line_pointer != '"')
-	goto bad_string;
-      saved_char = *input_line_pointer;
-      *input_line_pointer = 0;
-    }
-  else
-    {
-      s = NULL;
-      saved_char = 0;
+      s = demand_copy_C_string (&len);
     }
 
-  switch (type)
+  switch (type & 3)
     {
     case 3:
-      bfd_elf_add_obj_attr_compat (stdoutput, vendor, i, s);
+      bfd_elf_add_obj_attr_int_string (stdoutput, vendor, tag, i, s);
       break;
     case 2:
       bfd_elf_add_obj_attr_string (stdoutput, vendor, tag, s);
@@ -2133,20 +2161,16 @@ s_vendor_attribute (int vendor)
       abort ();
     }
 
-  if (s)
-    {
-      *input_line_pointer = saved_char;
-      input_line_pointer++;
-    }
   demand_empty_rest_of_line ();
-  return;
+  return tag;
 bad_string:
   as_bad (_("bad string constant"));
   ignore_rest_of_line ();
-  return;
+  return 0;
 bad:
   as_bad (_("expected <tag> , <value>"));
   ignore_rest_of_line ();
+  return 0;
 }
 
 /* Parse a .gnu_attribute directive.  */
@@ -3100,6 +3124,10 @@ s_space (int mult)
   md_flush_pending_output ();
 #endif
 
+#ifdef md_cons_align
+  md_cons_align (1);
+#endif
+
   if (flag_mri)
     stop = mri_comment_field (&stopc);
 
@@ -3270,6 +3298,10 @@ s_float_space (int float_type)
   char temp[MAXIMUM_NUMBER_OF_CHARS_FOR_FLOAT];
   char *stop = NULL;
   char stopc = 0;
+
+#ifdef md_cons_align
+  md_cons_align (1);
+#endif
 
   if (flag_mri)
     stop = mri_comment_field (&stopc);
@@ -3457,7 +3489,7 @@ s_weakref (int ignore ATTRIBUTE_UNUSED)
 	{
 	  expressionS *expP = symbol_get_value_expression (symp);
 
-	  assert (expP->X_op == O_symbol
+	  gas_assert (expP->X_op == O_symbol
 		  && expP->X_add_number == 0);
 	  symp = expP->X_add_symbol;
 	}
@@ -4612,6 +4644,10 @@ float_cons (/* Clobbers input_line-pointer, checks end-of-line.  */
   md_flush_pending_output ();
 #endif
 
+#ifdef md_cons_align
+  md_cons_align (1);
+#endif
+
   do
     {
       /* input_line_pointer->1st char of a flonum (we hope!).  */
@@ -5056,6 +5092,10 @@ stringer (int bits_appendzero)
   md_flush_pending_output ();
 #endif
 
+#ifdef md_cons_align
+  md_cons_align (1);
+#endif
+
   /* The following awkward logic is to parse ZERO or more strings,
      comma separated. Recall a string expression includes spaces
      before the opening '\"' and spaces after the closing '\"'.
@@ -5432,6 +5472,10 @@ s_incbin (int x ATTRIBUTE_UNUSED)
 
 #ifdef md_flush_pending_output
   md_flush_pending_output ();
+#endif
+
+#ifdef md_cons_align
+  md_cons_align (1);
 #endif
 
   SKIP_WHITESPACE ();

@@ -1,6 +1,7 @@
 /* Manages interpreters for GDB, the GNU debugger.
 
-   Copyright (C) 2000, 2002, 2003, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2000, 2002, 2003, 2007, 2008, 2009
+   Free Software Foundation, Inc.
 
    Written by Jim Ingham <jingham@apple.com> of Apple Computer, Inc.
 
@@ -70,7 +71,8 @@ struct interp
 
 /* Functions local to this file. */
 static void initialize_interps (void);
-static char **interpreter_completer (char *text, char *word);
+static char **interpreter_completer (struct cmd_list_element *cmd,
+				     char *text, char *word);
 
 /* The magic initialization routine for this module. */
 
@@ -345,7 +347,6 @@ clear_interpreter_hooks (void)
   deprecated_context_hook = 0;
   deprecated_target_wait_hook = 0;
   deprecated_call_command_hook = 0;
-  deprecated_error_hook = 0;
   deprecated_error_begin_hook = 0;
   deprecated_command_loop_hook = 0;
 }
@@ -416,7 +417,7 @@ interpreter_exec_cmd (char *args, int from_tty)
 
 /* List the possible interpreters which could complete the given text. */
 static char **
-interpreter_completer (char *text, char *word)
+interpreter_completer (struct cmd_list_element *ignore, char *text, char *word)
 {
   int alloced = 0;
   int textlen;

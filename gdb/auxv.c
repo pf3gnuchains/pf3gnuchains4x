@@ -1,6 +1,7 @@
 /* Auxiliary vector support for GDB, the GNU debugger.
 
-   Copyright (C) 2004, 2005, 2006, 2007, 2008 Free Software Foundation, Inc.
+   Copyright (C) 2004, 2005, 2006, 2007, 2008, 2009
+   Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -32,16 +33,13 @@
 #include <fcntl.h>
 
 
-/* This function is called like a to_xfer_partial hook,
-   but must be called with TARGET_OBJECT_AUXV.
-   It handles access via /proc/PID/auxv, which is the common method.
-   This function is appropriate for doing:
-	   #define NATIVE_XFER_AUXV	procfs_xfer_auxv
-   for a native target that uses inftarg.c's child_xfer_partial hook.  */
+/* This function is called like a to_xfer_partial hook, but must be
+   called with TARGET_OBJECT_AUXV.  It handles access via
+   /proc/PID/auxv, which is a common method for native targets.  */
 
 LONGEST
 procfs_xfer_auxv (struct target_ops *ops,
-		  int /* enum target_object */ object,
+		  enum target_object object,
 		  const char *annex,
 		  gdb_byte *readbuf,
 		  const gdb_byte *writebuf,
@@ -78,12 +76,13 @@ procfs_xfer_auxv (struct target_ops *ops,
    Return 0 if *READPTR is already at the end of the buffer.
    Return -1 if there is insufficient buffer for a whole entry.
    Return 1 if an entry was read into *TYPEP and *VALP.  */
-int
+static int
 default_auxv_parse (struct target_ops *ops, gdb_byte **readptr,
 		   gdb_byte *endptr, CORE_ADDR *typep, CORE_ADDR *valp)
 {
   const int sizeof_auxv_field = gdbarch_ptr_bit (target_gdbarch)
 				/ TARGET_CHAR_BIT;
+  const enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
   gdb_byte *ptr = *readptr;
 
   if (endptr == ptr)
@@ -92,9 +91,9 @@ default_auxv_parse (struct target_ops *ops, gdb_byte **readptr,
   if (endptr - ptr < sizeof_auxv_field * 2)
     return -1;
 
-  *typep = extract_unsigned_integer (ptr, sizeof_auxv_field);
+  *typep = extract_unsigned_integer (ptr, sizeof_auxv_field, byte_order);
   ptr += sizeof_auxv_field;
-  *valp = extract_unsigned_integer (ptr, sizeof_auxv_field);
+  *valp = extract_unsigned_integer (ptr, sizeof_auxv_field, byte_order);
   ptr += sizeof_auxv_field;
 
   *readptr = ptr;
@@ -204,6 +203,7 @@ fprint_target_auxv (struct ui_file *file, struct target_ops *ops)
 	  TAG (AT_UCACHEBSIZE, _("Unified cache block size"), dec);
 	  TAG (AT_IGNOREPPC, _("Entry should be ignored"), dec);
 	  TAG (AT_BASE_PLATFORM, _("String identifying base platform"), str);
+	  TAG (AT_RANDOM, _("Address of 16 random bytes"), hex);
 	  TAG (AT_EXECFN, _("File name of executable"), str);
 	  TAG (AT_SECURE, _("Boolean, was exec setuid-like?"), dec);
 	  TAG (AT_SYSINFO, _("Special system info/entry points"), hex);
@@ -238,15 +238,16 @@ fprint_target_auxv (struct ui_file *file, struct target_ops *ops)
 	  fprintf_filtered (file, "%s\n", plongest (val));
 	  break;
 	case hex:
-	  fprintf_filtered (file, "0x%s\n", paddr_nz (val));
+	  fprintf_filtered (file, "%s\n", paddress (target_gdbarch, val));
 	  break;
 	case str:
 	  {
 	    struct value_print_options opts;
 	    get_user_print_options (&opts);
 	    if (opts.addressprint)
-	      fprintf_filtered (file, "0x%s", paddr_nz (val));
-	    val_print_string (val, -1, 1, file, &opts);
+	      fprintf_filtered (file, "%s", paddress (target_gdbarch, val));
+	    val_print_string (builtin_type (target_gdbarch)->builtin_char,
+			      val, -1, file, &opts);
 	    fprintf_filtered (file, "\n");
 	  }
 	  break;

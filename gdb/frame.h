@@ -1,7 +1,7 @@
 /* Definitions for dealing with stack frames, for GDB, the GNU debugger.
 
    Copyright (C) 1986, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1996, 1997,
-   1998, 1999, 2000, 2001, 2002, 2003, 2004, 2007, 2008
+   1998, 1999, 2000, 2001, 2002, 2003, 2004, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -33,6 +33,14 @@
 
    frame_unwind_WHAT...(): Unwind THIS frame's WHAT from the NEXT
    frame.
+
+   frame_unwind_caller_WHAT...(): Unwind WHAT for NEXT stack frame's
+   real caller.  Any inlined functions in NEXT's stack frame are
+   skipped.  Use these to ignore any potentially inlined functions,
+   e.g. inlined into the first instruction of a library trampoline.
+
+   get_stack_frame_WHAT...(): Get WHAT for THIS frame, but if THIS is
+   inlined, skip to the containing stack frame.
 
    put_frame_WHAT...(): Put a value into this frame (unsafe, need to
    invalidate the frame / regcache afterwards) (better name more
@@ -101,6 +109,10 @@ struct frame_id
      Typically, it is set to the address of the entry point of the
      frame's function (as returned by get_frame_func).
 
+     For inlined functions (INLINE_DEPTH != 0), this is the address of
+     the first executed instruction in the block corresponding to the
+     inlined function.
+
      This field is valid only if code_addr_p is true.  Otherwise, this
      frame is considered to have a wildcard code address, i.e. one that
      matches every address value in frame comparisons.  */
@@ -122,6 +134,10 @@ struct frame_id
   unsigned int stack_addr_p : 1;
   unsigned int code_addr_p : 1;
   unsigned int special_addr_p : 1;
+
+  /* The inline depth of this frame.  A frame representing a "called"
+     inlined function will have this set to a nonzero value.  */
+  int inline_depth;
 };
 
 /* Methods for constructing and comparing Frame IDs.  */
@@ -157,6 +173,10 @@ extern struct frame_id frame_id_build_wild (CORE_ADDR stack_addr);
    non-zero .base).  */
 extern int frame_id_p (struct frame_id l);
 
+/* Returns non-zero when L is a valid frame representing an inlined
+   function.  */
+extern int frame_id_inlined_p (struct frame_id l);
+
 /* Returns non-zero when L and R identify the same frame, or, if
    either L or R have a zero .func, then the same frame base.  */
 extern int frame_id_eq (struct frame_id l, struct frame_id r);
@@ -177,9 +197,14 @@ enum frame_type
   /* A fake frame, created by GDB when performing an inferior function
      call.  */
   DUMMY_FRAME,
+  /* A frame representing an inlined function, associated with an
+     upcoming (next, inner, younger) NORMAL_FRAME.  */
+  INLINE_FRAME,
   /* In a signal handler, various OSs handle this in various ways.
      The main thing is that the frame may be far from normal.  */
   SIGTRAMP_FRAME,
+  /* Fake frame representing a cross-architecture call.  */
+  ARCH_FRAME,
   /* Sentinel or registers frame.  This frame obtains register values
      direct from the inferior's registers.  */
   SENTINEL_FRAME
@@ -203,6 +228,11 @@ enum frame_type
    the inferior.  If the inner most frame can't be created, throw an
    error.  */
 extern struct frame_info *get_current_frame (void);
+
+/* Does the current target interface have enough state to be able to
+   query the current inferior for frame info, and is the inferior in a
+   state where that is possible?  */
+extern int has_stack_frames (void);
 
 /* Invalidates the frame cache (this function should have been called
    invalidate_cached_frames).
@@ -340,7 +370,8 @@ extern CORE_ADDR get_frame_base (struct frame_info *);
 
    instead, since that avoids the bug.  */
 extern struct frame_id get_frame_id (struct frame_info *fi);
-extern struct frame_id frame_unwind_id (struct frame_info *next_frame);
+extern struct frame_id get_stack_frame_id (struct frame_info *fi);
+extern struct frame_id frame_unwind_caller_id (struct frame_info *next_frame);
 
 /* Assuming that a frame is `normal', return its base-address, or 0 if
    the information isn't available.  NOTE: This address is really only
@@ -484,7 +515,7 @@ extern void put_frame_register_bytes (struct frame_info *frame, int regnum,
    calling frame.  For GDB, `pc' is the resume address and not a
    specific register.  */
 
-extern CORE_ADDR frame_pc_unwind (struct frame_info *frame);
+extern CORE_ADDR frame_unwind_caller_pc (struct frame_info *frame);
 
 /* Discard the specified frame.  Restoring the registers to the state
    of the caller.  */
@@ -516,8 +547,13 @@ extern int safe_frame_unwind_memory (struct frame_info *this_frame,
 				     CORE_ADDR addr, gdb_byte *buf, int len);
 
 /* Return this frame's architecture.  */
-
 extern struct gdbarch *get_frame_arch (struct frame_info *this_frame);
+
+/* Return the previous frame's architecture.  */
+extern struct gdbarch *frame_unwind_arch (struct frame_info *frame);
+
+/* Return the previous frame's architecture, skipping inline functions.  */
+extern struct gdbarch *frame_unwind_caller_arch (struct frame_info *frame);
 
 
 /* Values for the source flag to be used in print_frame_info_base().  */
@@ -593,7 +629,7 @@ extern void print_frame_info (struct frame_info *, int print_level,
 
 extern struct frame_info *block_innermost_frame (struct block *);
 
-extern int deprecated_pc_in_call_dummy (CORE_ADDR pc);
+extern int deprecated_pc_in_call_dummy (struct gdbarch *gdbarch, CORE_ADDR pc);
 
 /* FIXME: cagney/2003-02-02: Should be deprecated or replaced with a
    function called get_frame_register_p().  This slightly weird (and
@@ -659,23 +695,5 @@ extern struct frame_info *deprecated_safe_get_selected_frame (void);
 /* Create a frame using the specified BASE and PC.  */
 
 extern struct frame_info *create_new_frame (CORE_ADDR base, CORE_ADDR pc);
-
-/* FIXME: cagney/2002-12-06: Has the PC in the current frame changed?
-   "infrun.c", Thanks to gdbarch_decr_pc_after_break, can change the PC after
-   the initial frame create.  This puts things back in sync.
-
-   This replaced: frame->pc = ....; */
-extern void deprecated_update_frame_pc_hack (struct frame_info *frame,
-					     CORE_ADDR pc);
-
-/* FIXME: cagney/2002-12-18: Has the frame's base changed?  Or to be
-   more exact, was that initial guess at the frame's base as returned
-   by the deleted read_fp() wrong?  If it was, fix it.  This shouldn't
-   be necessary since the code should be getting the frame's base
-   correct from the outset.
-
-   This replaced: frame->frame = ....; */
-extern void deprecated_update_frame_base_hack (struct frame_info *frame,
-					       CORE_ADDR base);
 
 #endif /* !defined (FRAME_H)  */

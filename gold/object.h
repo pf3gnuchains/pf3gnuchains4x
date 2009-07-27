@@ -1,6 +1,6 @@
 // object.h -- support for an object file for linking in gold  -*- C++ -*-
 
-// Copyright 2006, 2007, 2008 Free Software Foundation, Inc.
+// Copyright 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
 // Written by Ian Lance Taylor <iant@google.com>.
 
 // This file is part of gold.
@@ -46,6 +46,7 @@ class Pluginobj;
 class Dynobj;
 class Object_merge_map;
 class Relocatable_relocs;
+class Symbols_data;
 
 template<typename Stringpool_char>
 class Stringpool_template;
@@ -194,7 +195,7 @@ class Object
   Object(const std::string& name, Input_file* input_file, bool is_dynamic,
 	 off_t offset = 0)
     : name_(name), input_file_(input_file), offset_(offset), shnum_(-1U),
-      is_dynamic_(is_dynamic), target_(NULL), xindex_(NULL)
+      is_dynamic_(is_dynamic), target_(NULL), xindex_(NULL), no_export_(false)
   { input_file->file().add_object(); }
 
   virtual ~Object()
@@ -225,6 +226,15 @@ class Object
   Target*
   target() const
   { return this->target_; }
+
+  // Get the file.  We pass on const-ness.
+  Input_file*
+  input_file()
+  { return this->input_file_; }
+
+  const Input_file*
+  input_file() const
+  { return this->input_file_; }
 
   // Lock the underlying file.
   void
@@ -349,8 +359,8 @@ class Object
 
   // Add symbol information to the global symbol table.
   void
-  add_symbols(Symbol_table* symtab, Read_symbols_data* sd)
-  { this->do_add_symbols(symtab, sd); }
+  add_symbols(Symbol_table* symtab, Read_symbols_data* sd, Layout *layout)
+  { this->do_add_symbols(symtab, sd, layout); }
 
   // Functions and types for the elfcpp::Elf_file interface.  This
   // permit us to use Object as the File template parameter for
@@ -443,6 +453,24 @@ class Object
   set_target(Target* target)
   { this->target_ = target; }
 
+  // Return whether this object was found in a system directory.
+  bool
+  is_in_system_directory() const
+  { return this->input_file()->is_in_system_directory(); }
+
+  // Return whether we found this object by searching a directory.
+  bool
+  searched_for() const
+  { return this->input_file()->will_search_for(); }
+
+  bool
+  no_export() const
+  { return this->no_export_; }
+
+  void
+  set_no_export(bool value)
+  { this->no_export_ = value; }
+
  protected:
   // Returns NULL for Objects that are not plugin objects.  This method
   // is overridden in the Pluginobj class.
@@ -461,7 +489,7 @@ class Object
   // Add symbol information to the global symbol table--implemented by
   // child class.
   virtual void
-  do_add_symbols(Symbol_table*, Read_symbols_data*) = 0;
+  do_add_symbols(Symbol_table*, Read_symbols_data*, Layout*) = 0;
 
   // Return the location of the contents of a section.  Implemented by
   // child class.
@@ -507,15 +535,6 @@ class Object
   // Implement get_global_symbol_counts--implemented by child class.
   virtual void
   do_get_global_symbol_counts(const Symbol_table*, size_t*, size_t*) const = 0;
-
-  // Get the file.  We pass on const-ness.
-  Input_file*
-  input_file()
-  { return this->input_file_; }
-
-  const Input_file*
-  input_file() const
-  { return this->input_file_; }
 
   // Set the target.
   void
@@ -570,6 +589,9 @@ class Object
   Target* target_;
   // Many sections for objects with more than SHN_LORESERVE sections.
   Xindex* xindex_;
+  // True if exclude this object from automatic symbol export.
+  // This is used only for archive objects.
+  bool no_export_;
 };
 
 // Implement sized_target inline for efficiency.  This approach breaks
@@ -598,10 +620,51 @@ class Relobj : public Object
       relocs_must_follow_section_writes_(false)
   { }
 
+  // During garbage collection, the Read_symbols_data pass for 
+  // each object is stored as layout needs to be done after 
+  // reloc processing.
+  Symbols_data* 
+  get_symbols_data()
+  { return this->sd_; }
+
+  // Decides which section names have to be included in the worklist
+  // as roots.
+  bool
+  is_section_name_included(const char *name);
+ 
+  void
+  copy_symbols_data(Symbols_data* gc_sd, Read_symbols_data* sd,
+                    unsigned int section_header_size);
+
+  void
+  set_symbols_data(Symbols_data* sd)
+  { this->sd_ = sd; }
+
+  // During garbage collection, the Read_relocs pass for all objects 
+  // is done before scanning the relocs.  In that case, this->rd_ is
+  // used to store the information from Read_relocs for each object.
+  // This data is also used to compute the list of relevant sections.
+  Read_relocs_data*
+  get_relocs_data()
+  { return this->rd_; }
+
+  void
+  set_relocs_data(Read_relocs_data* rd)
+  { this->rd_ = rd; }
+
+  virtual bool
+  is_output_section_offset_invalid(unsigned int shndx) const = 0;
+
   // Read the relocs.
   void
   read_relocs(Read_relocs_data* rd)
   { return this->do_read_relocs(rd); }
+
+  // Process the relocs, during garbage collection only.
+  void
+  gc_process_relocs(const General_options& options, Symbol_table* symtab,
+	            Layout* layout, Read_relocs_data* rd)
+  { return this->do_gc_process_relocs(options, symtab, layout, rd); }
 
   // Scan the relocs and adjust the symbol table.
   void
@@ -728,6 +791,11 @@ class Relobj : public Object
   virtual void
   do_read_relocs(Read_relocs_data*) = 0;
 
+  // Process the relocs--implemented by child class.
+  virtual void
+  do_gc_process_relocs(const General_options&, Symbol_table*, Layout*,
+		 Read_relocs_data*) = 0;
+
   // Scan the relocs--implemented by child class.
   virtual void
   do_scan_relocs(const General_options&, Symbol_table*, Layout*,
@@ -810,6 +878,13 @@ class Relobj : public Object
   // Whether we need to wait for output sections to be written before
   // we can apply relocations.
   bool relocs_must_follow_section_writes_;
+  // Used to store the relocs data computed by the Read_relocs pass. 
+  // Used during garbage collection of unused sections.
+  Read_relocs_data* rd_;
+  // Used to store the symbols data computed by the Read_symbols pass.
+  // Again used during garbage collection when laying out referenced
+  // sections.
+  gold::Symbols_data *sd_;
 };
 
 // This class is used to handle relocations against a section symbol
@@ -1220,6 +1295,12 @@ class Sized_relobj : public Relobj
 
   ~Sized_relobj();
 
+  // Checks if the offset of input section SHNDX within its output
+  // section is invalid. 
+  bool
+  is_output_section_offset_invalid(unsigned int shndx) const
+  { return this->get_output_section_offset(shndx) == invalid_address; }
+
   // Set up the object file based on the ELF header.
   void
   setup(const typename elfcpp::Ehdr<size, big_endian>&);
@@ -1386,11 +1467,17 @@ class Sized_relobj : public Relobj
 
   // Add the symbols to the symbol table.
   void
-  do_add_symbols(Symbol_table*, Read_symbols_data*);
+  do_add_symbols(Symbol_table*, Read_symbols_data*, Layout*);
 
   // Read the relocs.
   void
   do_read_relocs(Read_relocs_data*);
+
+  // Process the relocs to find list of referenced sections. Used only
+  // during garbage collection.
+  void
+  do_gc_process_relocs(const General_options&, Symbol_table*, Layout*,
+		       Read_relocs_data*);
 
   // Scan the relocs and adjust the symbol table.
   void
@@ -1503,41 +1590,14 @@ class Sized_relobj : public Relobj
   // kept section.
   struct Kept_comdat_section
   {
-    Kept_comdat_section(Sized_relobj<size, big_endian>* object,
-                        unsigned int shndx)
-      : object_(object), shndx_(shndx)
+    Kept_comdat_section(Relobj* a_object, unsigned int a_shndx)
+      : object(a_object), shndx(a_shndx)
     { }
-    Sized_relobj<size, big_endian>* object_;
-    unsigned int shndx_;
+    Relobj* object;
+    unsigned int shndx;
   };
-  typedef std::map<unsigned int, Kept_comdat_section*>
+  typedef std::map<unsigned int, Kept_comdat_section>
       Kept_comdat_section_table;
-
-  // Information needed to keep track of kept comdat groups.  This is
-  // simply a map from the section name to its section index.  This may
-  // not be a one-to-one mapping, but we ignore that possibility since
-  // this is used only to attempt to handle stray relocations from
-  // non-comdat debug sections that refer to comdat loadable sections.
-  typedef Unordered_map<std::string, unsigned int> Comdat_group;
-
-  // A map from group section index to the table of group members.
-  typedef std::map<unsigned int, Comdat_group*> Comdat_group_table;
-
-  // Find a comdat group table given its group section SHNDX.
-  Comdat_group*
-  find_comdat_group(unsigned int shndx) const
-  {
-    Comdat_group_table::const_iterator p =
-      this->comdat_groups_.find(shndx);
-    if (p != this->comdat_groups_.end())
-      return p->second;
-    return NULL;
-  }
-
-  // Record a new comdat group whose group section index is SHNDX.
-  void
-  add_comdat_group(unsigned int shndx, Comdat_group* group)
-  { this->comdat_groups_[shndx] = group; }
 
   // Adjust a section index if necessary.
   unsigned int
@@ -1668,20 +1728,26 @@ class Sized_relobj : public Relobj
   // Record a mapping from discarded section SHNDX to the corresponding
   // kept section.
   void
-  set_kept_comdat_section(unsigned int shndx, Kept_comdat_section* kept)
+  set_kept_comdat_section(unsigned int shndx, Relobj* kept_object,
+			  unsigned int kept_shndx)
   {
-    this->kept_comdat_sections_[shndx] = kept;
+    Kept_comdat_section kept(kept_object, kept_shndx);
+    this->kept_comdat_sections_.insert(std::make_pair(shndx, kept));
   }
 
-  // Find the kept section corresponding to the discarded section SHNDX.
-  Kept_comdat_section*
-  get_kept_comdat_section(unsigned int shndx) const
+  // Find the kept section corresponding to the discarded section
+  // SHNDX.  Return true if found.
+  bool
+  get_kept_comdat_section(unsigned int shndx, Relobj** kept_object,
+			  unsigned int* kept_shndx) const
   {
     typename Kept_comdat_section_table::const_iterator p =
       this->kept_comdat_sections_.find(shndx);
     if (p == this->kept_comdat_sections_.end())
-      return NULL;
-    return p->second;
+      return false;
+    *kept_object = p->second.object;
+    *kept_shndx = p->second.shndx;
+    return true;
   }
 
   // The GOT offsets of local symbols. This map also stores GOT offsets
@@ -1752,10 +1818,11 @@ class Sized_relobj : public Relobj
   std::vector<Address> section_offsets_;
   // Table mapping discarded comdat sections to corresponding kept sections.
   Kept_comdat_section_table kept_comdat_sections_;
-  // Table of kept comdat groups.
-  Comdat_group_table comdat_groups_;
   // Whether this object has a GNU style .eh_frame section.
   bool has_eh_frame_;
+  // If this object has a GNU style .eh_frame section that is discarded in
+  // output, record the index here.  Otherwise it is -1U.
+  unsigned int discarded_eh_frame_shndx_;
   // The list of sections whose layout was deferred.
   std::vector<Deferred_layout> deferred_layout_;
 };
@@ -1766,8 +1833,7 @@ class Input_objects
 {
  public:
   Input_objects()
-    : relobj_list_(), dynobj_list_(), sonames_(), system_library_directory_(),
-      cref_(NULL)
+    : relobj_list_(), dynobj_list_(), sonames_(), cref_(NULL)
   { }
 
   // The type of the list of input relocateable objects.
@@ -1845,8 +1911,6 @@ class Input_objects
   Dynobj_list dynobj_list_;
   // SONAMEs that we have seen.
   Unordered_set<std::string> sonames_;
-  // The directory in which we find the libc.so.
-  std::string system_library_directory_;
   // Manage cross-references if requested.
   Cref* cref_;
 };
@@ -1876,13 +1940,24 @@ struct Relocate_info
   location(size_t relnum, off_t reloffset) const;
 };
 
+// Return whether INPUT_FILE contains an ELF object start at file
+// offset OFFSET.  This sets *START to point to a view of the start of
+// the file.  It sets *READ_SIZE to the number of bytes in the view.
+
+extern bool
+is_elf_object(Input_file* input_file, off_t offset,
+	      const unsigned char** start, int *read_size);
+
 // Return an Object appropriate for the input file.  P is BYTES long,
-// and holds the ELF header.
+// and holds the ELF header.  If PUNCONFIGURED is not NULL, then if
+// this sees an object the linker is not configured to support, it
+// sets *PUNCONFIGURED to true and returns NULL without giving an
+// error message.
 
 extern Object*
 make_elf_object(const std::string& name, Input_file*,
 		off_t offset, const unsigned char* p,
-		section_offset_type bytes);
+		section_offset_type bytes, bool* punconfigured);
 
 } // end namespace gold
 

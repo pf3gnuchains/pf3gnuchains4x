@@ -3213,7 +3213,7 @@ md_parse_option (int c, char *arg ATTRIBUTE_UNUSED)
 	    }
 	  
 	  if (!preset_target_arch)
-	    as_bad ("Invalid argument to --isa option: %s", arg);
+	    as_bad (_("Invalid argument to --isa option: %s"), arg);
 	}
       break;
 
@@ -3234,7 +3234,7 @@ md_parse_option (int c, char *arg ATTRIBUTE_UNUSED)
 	  sh64_abi = sh64_abi_64;
 	}
       else
-	as_bad ("Invalid argument to --abi option: %s", arg);
+	as_bad (_("Invalid argument to --abi option: %s"), arg);
       break;
 
     case OPTION_NO_MIX:
@@ -4375,7 +4375,7 @@ tc_gen_reloc (asection *section ATTRIBUTE_UNUSED, fixS *fixp)
 		    bfd_get_reloc_code_name (r_type));
       /* Set howto to a garbage value so that we can keep going.  */
       rel->howto = bfd_reloc_type_lookup (stdoutput, BFD_RELOC_32);
-      assert (rel->howto != NULL);
+      gas_assert (rel->howto != NULL);
     }
 #ifdef OBJ_ELF
   else if (rel->howto->type == R_SH_IND12W)

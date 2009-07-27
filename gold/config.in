@@ -16,14 +16,64 @@
 /* Default machine code */
 #undef GOLD_DEFAULT_MACHINE
 
+/* Default OSABI code */
+#undef GOLD_DEFAULT_OSABI
+
 /* Default size (32 or 64) */
 #undef GOLD_DEFAULT_SIZE
+
+/* Define to 1 if you have the <byteswap.h> header file. */
+#undef HAVE_BYTESWAP_H
+
+/* Define to 1 if you have the `chsize' function. */
+#undef HAVE_CHSIZE
+
+/* Define to 1 if you have the declaration of `asprintf', and to 0 if you
+   don't. */
+#undef HAVE_DECL_ASPRINTF
+
+/* Define to 1 if you have the declaration of `basename', and to 0 if you
+   don't. */
+#undef HAVE_DECL_BASENAME
+
+/* Define to 1 if you have the declaration of `ffs', and to 0 if you don't. */
+#undef HAVE_DECL_FFS
+
+/* Define to 1 if you have the declaration of `memmem', and to 0 if you
+   don't. */
+#undef HAVE_DECL_MEMMEM
+
+/* Define to 1 if you have the declaration of `snprintf', and to 0 if you
+   don't. */
+#undef HAVE_DECL_SNPRINTF
+
+/* Define to 1 if you have the declaration of `strndup', and to 0 if you
+   don't. */
+#undef HAVE_DECL_STRNDUP
+
+/* Define to 1 if you have the declaration of `strverscmp', and to 0 if you
+   don't. */
+#undef HAVE_DECL_STRVERSCMP
+
+/* Define to 1 if you have the declaration of `vasprintf', and to 0 if you
+   don't. */
+#undef HAVE_DECL_VASPRINTF
+
+/* Define to 1 if you have the declaration of `vsnprintf', and to 0 if you
+   don't. */
+#undef HAVE_DECL_VSNPRINTF
 
 /* Define to 1 if you have the <ext/hash_map> header file. */
 #undef HAVE_EXT_HASH_MAP
 
 /* Define to 1 if you have the <ext/hash_set> header file. */
 #undef HAVE_EXT_HASH_SET
+
+/* Define to 1 if you have the `ffsll' function. */
+#undef HAVE_FFSLL
+
+/* Define to 1 if you have the `ftruncate' function. */
+#undef HAVE_FTRUNCATE
 
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
@@ -34,8 +84,14 @@
 /* Define to 1 if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H
 
+/* Define to 1 if you have the `mremap' function. */
+#undef HAVE_MREMAP
+
 /* Define if compiler supports #pragma omp threadprivate */
 #undef HAVE_OMP_SUPPORT
+
+/* Define to 1 if you have the `posix_fallocate' function. */
+#undef HAVE_POSIX_FALLOCATE
 
 /* Define to 1 if you have the `pread' function. */
 #undef HAVE_PREAD
@@ -75,6 +131,9 @@
 
 /* Define to 1 if you have the <tr1/unordered_map> header file. */
 #undef HAVE_TR1_UNORDERED_MAP
+
+/* Define if ::std::tr1::unordered_map::rehash is usable */
+#undef HAVE_TR1_UNORDERED_MAP_REHASH
 
 /* Define to 1 if you have the <tr1/unordered_set> header file. */
 #undef HAVE_TR1_UNORDERED_SET

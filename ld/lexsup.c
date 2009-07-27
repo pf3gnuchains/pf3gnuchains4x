@@ -77,6 +77,7 @@ enum option_values
   OPTION_EL,
   OPTION_EMBEDDED_RELOCS,
   OPTION_EXPORT_DYNAMIC,
+  OPTION_NO_EXPORT_DYNAMIC,
   OPTION_HELP,
   OPTION_IGNORE,
   OPTION_MAP,
@@ -103,6 +104,7 @@ enum option_values
   OPTION_TBSS,
   OPTION_TDATA,
   OPTION_TTEXT,
+  OPTION_TTEXT_SEGMENT,
   OPTION_TRADITIONAL_FORMAT,
   OPTION_UR,
   OPTION_VERBOSE,
@@ -162,6 +164,7 @@ enum option_values
   OPTION_WARN_UNRESOLVED_SYMBOLS,
   OPTION_ERROR_UNRESOLVED_SYMBOLS,
   OPTION_WARN_SHARED_TEXTREL,
+  OPTION_WARN_ALTERNATE_EM,
   OPTION_REDUCE_MEMORY_OVERHEADS,
   OPTION_DEFAULT_SCRIPT
 };
@@ -220,6 +223,8 @@ static const struct ld_option ld_options[] =
     'e', N_("ADDRESS"), N_("Set start address"), TWO_DASHES },
   { {"export-dynamic", no_argument, NULL, OPTION_EXPORT_DYNAMIC},
     'E', NULL, N_("Export all dynamic symbols"), TWO_DASHES },
+  { {"no-export-dynamic", no_argument, NULL, OPTION_NO_EXPORT_DYNAMIC},
+    '\0', NULL, N_("Undo the effect of --export-dynamic"), TWO_DASHES },
   { {"EB", no_argument, NULL, OPTION_EB},
     '\0', NULL, N_("Link big-endian objects"), ONE_DASH },
   { {"EL", no_argument, NULL, OPTION_EL},
@@ -512,6 +517,8 @@ static const struct ld_option ld_options[] =
     '\0', N_("ADDRESS"), N_("Set address of .data section"), ONE_DASH },
   { {"Ttext", required_argument, NULL, OPTION_TTEXT},
     '\0', N_("ADDRESS"), N_("Set address of .text section"), ONE_DASH },
+  { {"Ttext-segment", required_argument, NULL, OPTION_TTEXT_SEGMENT},
+    '\0', N_("ADDRESS"), N_("Set address of text segment"), ONE_DASH },
   { {"unresolved-symbols=<method>", required_argument, NULL,
      OPTION_UNRESOLVED_SYMBOLS},
     '\0', NULL, N_("How to handle unresolved symbols.  <method> is:\n"
@@ -551,6 +558,9 @@ static const struct ld_option ld_options[] =
     TWO_DASHES },
   { {"warn-shared-textrel", no_argument, NULL, OPTION_WARN_SHARED_TEXTREL},
     '\0', NULL, N_("Warn if shared object has DT_TEXTREL"),
+    TWO_DASHES },
+  { {"warn-alternate-em", no_argument, NULL, OPTION_WARN_ALTERNATE_EM},
+    '\0', NULL, N_("Warn if an object has alternate ELF machine code"),
     TWO_DASHES },
   { {"warn-unresolved-symbols", no_argument, NULL,
      OPTION_WARN_UNRESOLVED_SYMBOLS},
@@ -813,8 +823,12 @@ parse_args (unsigned argc, char **argv)
 	case 'E': /* HP/UX compatibility.  */
 	  link_info.export_dynamic = TRUE;
 	  break;
+	case OPTION_NO_EXPORT_DYNAMIC:
+	  link_info.export_dynamic = FALSE;
+	  break;
 	case 'e':
 	  lang_add_entry (optarg, TRUE);
+	  ldlang_add_undef (optarg);
 	  break;
 	case 'f':
 	  if (command_line.auxiliary_filters == NULL)
@@ -1231,6 +1245,9 @@ parse_args (unsigned argc, char **argv)
 	case OPTION_TTEXT:
 	  set_segment_start (".text", optarg);
 	  break;
+	case OPTION_TTEXT_SEGMENT:
+	  set_segment_start (".text-segment", optarg);
+	  break;
 	case OPTION_TRADITIONAL_FORMAT:
 	  link_info.traditional_format = TRUE;
 	  break;
@@ -1352,6 +1369,9 @@ parse_args (unsigned argc, char **argv)
 	case OPTION_WARN_SHARED_TEXTREL:
 	  link_info.warn_shared_textrel = TRUE;
 	  break;
+	case OPTION_WARN_ALTERNATE_EM:
+	  link_info.warn_alternate_em = TRUE;
+	  break;
 	case OPTION_WHOLE_ARCHIVE:
 	  whole_archive = TRUE;
 	  break;
@@ -1405,10 +1425,10 @@ parse_args (unsigned argc, char **argv)
 	    config.split_by_file = 1;
 	  break;
 	case OPTION_CHECK_SECTIONS:
-	  command_line.check_section_addresses = TRUE;
+	  command_line.check_section_addresses = 1;
 	  break;
 	case OPTION_NO_CHECK_SECTIONS:
-	  command_line.check_section_addresses = FALSE;
+	  command_line.check_section_addresses = 0;
 	  break;
 	case OPTION_ACCEPT_UNKNOWN_INPUT_ARCH:
 	  command_line.accept_unknown_input_arch = TRUE;

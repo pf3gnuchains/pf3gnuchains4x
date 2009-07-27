@@ -1,4 +1,5 @@
-# Copyright 2002, 2003, 2004, 2005, 2007, 2008 Free Software Foundation, Inc.
+# Copyright 2002, 2003, 2004, 2005, 2007, 2008, 2009
+# Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -29,7 +30,7 @@ if [mi_gdb_start] {
 
 set testfile "basics"
 set srcfile ${testfile}.c
-set binfile ${objdir}/${subdir}/${testfile}
+set binfile ${objdir}/${subdir}/mi2-cli
 if  { [gdb_compile "${srcdir}/${subdir}/${srcfile}" "${binfile}" executable {debug additional_flags=-DFAKEARGV}] != "" } {
      untested mi2-cli.exp
      return -1
@@ -57,7 +58,7 @@ mi_gdb_test "-interpreter-exec console bogus" \
 #   {(=.*)+\^done} \
 #   "-interpreter-exec console \"file \$binfile\""
 mi_gdb_test "-interpreter-exec console \"file $binfile\"" \
-  {~"Reading symbols from .*basics...".*\^done} \
+  {~"Reading symbols from .*mi2-cli...".*\^done} \
   "-interpreter-exec console \"file \$binfile\""
 
 mi_run_to_main
