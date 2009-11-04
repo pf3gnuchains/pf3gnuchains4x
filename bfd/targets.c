@@ -1,6 +1,6 @@
 /* Generic target-file-type support for the BFD library.
    Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999,
-   2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008
+   2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
    Written by Cygnus Support.
 
@@ -625,6 +625,7 @@ extern const bfd_target bfd_elf32_mcore_big_vec;
 extern const bfd_target bfd_elf32_mcore_little_vec;
 extern const bfd_target bfd_elf32_mep_vec;
 extern const bfd_target bfd_elf32_mep_little_vec;
+extern const bfd_target bfd_elf32_microblaze_vec;
 extern const bfd_target bfd_elf32_mn10200_vec;
 extern const bfd_target bfd_elf32_mn10300_vec;
 extern const bfd_target bfd_elf32_mt_vec;
@@ -640,6 +641,8 @@ extern const bfd_target bfd_elf32_pjl_vec;
 extern const bfd_target bfd_elf32_powerpc_vec;
 extern const bfd_target bfd_elf32_powerpcle_vec;
 extern const bfd_target bfd_elf32_powerpc_vxworks_vec;
+extern const bfd_target bfd_elf32_rx_le_vec;
+extern const bfd_target bfd_elf32_rx_be_vec;
 extern const bfd_target bfd_elf32_s390_vec;
 extern const bfd_target bfd_elf32_bigscore_vec;
 extern const bfd_target bfd_elf32_littlescore_vec;
@@ -959,6 +962,7 @@ static const bfd_target * const _bfd_target_vector[] =
 	&bfd_elf32_mcore_big_vec,
 	&bfd_elf32_mcore_little_vec,
 	&bfd_elf32_mep_vec,
+	&bfd_elf32_microblaze_vec,
 	&bfd_elf32_mn10200_vec,
 	&bfd_elf32_mn10300_vec,
 	&bfd_elf32_mt_vec,
@@ -976,6 +980,8 @@ static const bfd_target * const _bfd_target_vector[] =
 	&bfd_elf32_powerpc_vec,
 	&bfd_elf32_powerpc_vxworks_vec,
 	&bfd_elf32_powerpcle_vec,
+	&bfd_elf32_rx_be_vec,
+	&bfd_elf32_rx_le_vec,
 	&bfd_elf32_s390_vec,
 #ifdef BFD64
 	&bfd_elf32_bigscore_vec,
@@ -1453,7 +1459,7 @@ bfd_target_list (void)
     vec_length++;
 
   amt = (vec_length + 1) * sizeof (char **);
-  name_ptr = name_list = bfd_malloc (amt);
+  name_ptr = name_list = (const  char **) bfd_malloc (amt);
 
   if (name_list == NULL)
     return NULL;

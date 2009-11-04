@@ -140,7 +140,14 @@ START_RELOC_NUMBERS (elf_ppc64_reloc_type)
   RELOC_NUMBER (R_PPC64_TLSLD,		   108)
 
 /* Support STT_GNU_IFUNC plt calls.  */
+  RELOC_NUMBER (R_PPC64_JMP_IREL,	   247)
   RELOC_NUMBER (R_PPC64_IRELATIVE,	   248)
+
+/* These are GNU extensions used in PIC code sequences.  */
+  RELOC_NUMBER (R_PPC64_REL16,		   249)
+  RELOC_NUMBER (R_PPC64_REL16_LO,	   250)
+  RELOC_NUMBER (R_PPC64_REL16_HI,	   251)
+  RELOC_NUMBER (R_PPC64_REL16_HA,	   252)
 
   /* These are GNU extensions to enable C++ vtable garbage collection.  */
   RELOC_NUMBER (R_PPC64_GNU_VTINHERIT,	   253)
@@ -157,5 +164,8 @@ END_RELOC_NUMBERS (R_PPC64_max)
 /* Specify the start and size of the .opd section.  */
 #define DT_PPC64_OPD		(DT_LOPROC + 1)
 #define DT_PPC64_OPDSZ		(DT_LOPROC + 2)
+
+/* Specify that tls descriptors should be optimized.  */
+#define DT_PPC64_TLSOPT		(DT_LOPROC + 3)
 
 #endif /* _ELF_PPC64_H */

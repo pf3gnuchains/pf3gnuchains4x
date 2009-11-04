@@ -1,3 +1,130 @@
+2009-11-03  Nathan Sidwell  <nathan@codesourcery.com>
+
+	* configure.ac (i[34567]86-*): Check if we're targetting x86-64
+	with an i686 compiler.
+	* configure.srv (i[34567]86-*-linux*): Pull in x86-64 handling if
+	needed.
+	* configure: Rebuilt.
+
+2009-10-29  Sandra Loosemore  <sandra@codesourcery.com>
+
+	PR gdb/10783
+
+	* server.c (handle_search_memory_1): Correct read_addr initialization
+	in loop for searching subsequent chunks.
+
+2009-10-29  Paul Pluzhnikov  <ppluzhnikov@google.com>
+
+	* configure.ac: New --with-libthread-db option.
+	* thread-db.c: Allow direct dependence on libthread_db.
+	(thread_db_free): Adjust.
+	* config.in: Regenerate.
+	* configure: Likewise.
+	
+2009-10-28  Paul Pluzhnikov  <ppluzhnikov@google.com>
+
+	PR gdb/10757
+	* thread-db.c (attach_thread): New function.
+	(maybe_attach_thread): Return success/failure.
+	(find_new_threads_callback): Adjust.
+	(thread_db_find_new_threads): Loop until no new threads.	
+	
+2009-10-13  Pedro Alves  <pedro@codesourcery.com>
+
+	* proc-service.c (ps_lgetregs): Formatting.
+
+2009-10-08  Paul Pluzhnikov  <ppluzhnikov@google.com>
+
+	* acinclude.m4: (SRV_CHECK_THREAD_DB, SRV_CHECK_TLS_GET_ADDR): Remove.
+	* configure.ac: Adjust.
+	* linux-low.h (struct process_info_private): Move members to struct
+	thread_db.
+	(thread_db_free, thread_db_handle_monitor_command): New prototype.
+	* linux-low.c (linux_remove_process): Adjust.
+	(linux_wait_for_event_1, linux_look_up_symbols): Likewise.
+	* server.c (handle_query): Move code ...
+	(handle_monitor_command): ... here. New function.
+	* target.h (struct target_ops): New member.
+	* thread-db.c (struct thread_db): New.
+	(libthread_db_search_path): New variable.
+	(thread_db_create_event, thread_db_enable_reporting)
+	(find_one_thread, maybe_attach_thread, find_new_threads_callback)
+	(thread_db_find_new_threads, (thread_db_get_tls_address): Adjust.
+	(try_thread_db_load_1, dladdr_to_soname): New functions.
+	(try_thread_db_load, thread_db_load_search): New functions.
+	(thread_db_init): Search for libthread_db.
+	(thread_db_free): New function.
+	(thread_db_handle_monitor_command): Likewise.
+	* config.in: Regenerate.
+	* configure: Regenerate.
+	
+2009-09-27  Ulrich Weigand  <uweigand@de.ibm.com>
+
+	* spu-low.c (spu_kill): Wait for inferior to terminate.
+	Call clear_inferiors.
+	(spu_detach): Call clear_inferiors.
+
+2009-08-22  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+
+	* aclocal.m4: Regenerate.
+	* config.in: Likewise.
+	* configure: Likewise.
+
+2009-07-31  Ulrich Weigand  <uweigand@de.ibm.com>
+
+	* linux-ppc-low.c (INSTR_SC, NR_spu_run): Define.
+	(parse_spufs_run): New function.
+	(ppc_get_pc, ppc_set_pc): Detect and handle SPU PC.
+	(ppc_breakpoint_at): Handle SPU breakpoints.
+
+2009-07-31  Ulrich Weigand  <uweigand@de.ibm.com>
+
+	* linux-low.c: Include <sys/stat.h> and <sys/vfs.h>.
+	(SPUFS_MAGIC): Define.
+	(spu_enumerate_spu_ids): New function.
+	(linux_qxfer_spu): New function.
+	(linux_target_ops): Install linux_qxfer_spu.
+
+2009-07-31  Ulrich Weigand  <uweigand@de.ibm.com>
+
+	* configure.srv (powerpc*-*-linux*): Add powerpc-cell32l.o
+	and powerpc-cell64l.o to srv_regobj.  Add rs6000/powerpc-cell32l.xml
+	and rs6000/powerpc-cell64l.xml to srv_xmlfiles.
+	* Makefile.in (powerpc-cell32l.o, powerpc-cell32l.c): New rules.
+	(powerpc-cell64l.o, powerpc-cell64l.c): Likewise.
+	(clean): Handle powerpc-cell32l.c and powerpc-cell64l.c.
+	* linux-ppc-low.c (PPC_FEATURE_CELL): Define.
+	(init_registers_powerpc_cell32l): Add prototype.
+	(init_registers_powerpc_cell64l): Likewise.
+	(ppc_arch_setup): Detect Cell/B.E. architecture.
+
+2009-07-30  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+
+	* Makefile.in (datarootdir): New variable.
+
+2009-07-28  Daniel Jacobowitz  <dan@codesourcery.com>
+
+	* linux-low.c (linux_write_memory): Update debugging output.
+	* Makefile.in (clean): Add new descriptions.
+	(arm-with-vfpv2.o, arm-with-vfpv2.c, arm-with-vfpv3.o)
+	(arm-with-vfpv3.c, arm-with-neon.o, arm-with-neon.c): New rules.
+	* configure.srv: Add new files for arm*-*-linux*.
+	* linux-arm-low.c: Add new declarations.
+	(PTRACE_GETVFPREGS, PTRACE_SETVFPREGS): Define if undefined.
+	(arm_hwcap, HWCAP_VFP, HWCAP_IWMMXT, HWCAP_NEON, HWCAP_VFPv3)
+	(HWCAP_VFPv3D16): New.
+	(arm_fill_wmmxregset, arm_store_wmmxregset): Check HWCAP_IWMMXT
+	instead of __IWMMXT__.
+	(arm_fill_vfpregset, arm_store_vfpregset, arm_get_hwcap)
+	(arm_arch_setup): New.
+	(target_regsets): Remove #ifdef.  Add VFP regset.
+	(the_low_target): Use arm_arch_setup.
+
+2009-07-28  Daniel Jacobowitz  <dan@codesourcery.com>
+
+	* linux-low.c (linux_kill_one_lwp): Adjust kernel workaround to skip
+	the main thread again.
+
 2009-07-06  Aleksandar Ristovski  <aristovski@qnx.com>
 
 	Adding Neutrino gdbserver.

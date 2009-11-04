@@ -344,6 +344,9 @@ struct spu_link_hash_table
   /* Count of overlay stubs needed in non-overlay area.  */
   unsigned int non_ovly_stub;
 
+  /* Pointer to the fixup section */
+  asection *sfixup;
+
   /* Set on error.  */
   unsigned int stub_err : 1;
 };
@@ -558,6 +561,7 @@ get_sym_h (struct elf_link_hash_entry **hp,
 bfd_boolean
 spu_elf_create_sections (struct bfd_link_info *info)
 {
+  struct spu_link_hash_table *htab = spu_hash_table (info);
   bfd *ibfd;
 
   for (ibfd = info->input_bfds; ibfd != NULL; ibfd = ibfd->link_next)
@@ -598,6 +602,19 @@ spu_elf_create_sections (struct bfd_link_info *info)
       memcpy (data + 12 + ((sizeof (SPU_PLUGIN_NAME) + 3) & -4),
 	      bfd_get_filename (info->output_bfd), name_len);
       s->contents = data;
+    }
+
+  if (htab->params->emit_fixups)
+    {
+      asection *s;
+      flagword flags;
+      ibfd = info->input_bfds;
+      flags = SEC_LOAD | SEC_ALLOC | SEC_READONLY | SEC_HAS_CONTENTS
+	      | SEC_IN_MEMORY;
+      s = bfd_make_section_anyway_with_flags (ibfd, ".fixup", flags);
+      if (s == NULL || !bfd_set_section_alignment (ibfd, s, 2))
+	return FALSE;
+      htab->sfixup = s;
     }
 
   return TRUE;
@@ -661,9 +678,10 @@ spu_elf_find_overlays (struct bfd_link_info *info)
   ovl_end = alloc_sec[0]->vma + alloc_sec[0]->size;
   if (htab->params->ovly_flavour == ovly_soft_icache)
     {
+      unsigned int prev_buf = 0, set_id = 0;
+
       /* Look for an overlapping vma to find the first overlay section.  */
       bfd_vma vma_start = 0;
-      bfd_vma lma_start = 0;
 
       for (i = 1; i < n; i++)
 	{
@@ -672,10 +690,6 @@ spu_elf_find_overlays (struct bfd_link_info *info)
 	    {
 	      asection *s0 = alloc_sec[i - 1];
 	      vma_start = s0->vma;
-	      if (strncmp (s0->name, ".ovl.init", 9) != 0)
-		lma_start = s0->lma;
-	      else
-		lma_start = s->lma;
 	      ovl_end = (s0->vma
 			 + ((bfd_vma) 1
 			    << (htab->num_lines_log2 + htab->line_size_log2)));
@@ -700,8 +714,10 @@ spu_elf_find_overlays (struct bfd_link_info *info)
 	  if (strncmp (s->name, ".ovl.init", 9) != 0)
 	    {
 	      num_buf = ((s->vma - vma_start) >> htab->line_size_log2) + 1;
-	      if (((s->vma - vma_start) & (htab->params->line_size - 1))
-		  || ((s->lma - lma_start) & (htab->params->line_size - 1)))
+	      set_id = (num_buf == prev_buf)? set_id + 1 : 0;
+	      prev_buf = num_buf;
+
+	      if ((s->vma - vma_start) & (htab->params->line_size - 1))
 		{
 		  info->callbacks->einfo (_("%X%P: overlay section %A "
 					    "does not start on a cache line.\n"),
@@ -720,7 +736,7 @@ spu_elf_find_overlays (struct bfd_link_info *info)
 
 	      alloc_sec[ovl_index++] = s;
 	      spu_elf_section_data (s)->u.o.ovl_index
-		= ((s->lma - lma_start) >>  htab->line_size_log2) + 1;
+		= (set_id << htab->num_lines_log2) + num_buf;
 	      spu_elf_section_data (s)->u.o.ovl_buf = num_buf;
 	    }
 	}
@@ -2676,19 +2692,12 @@ mark_functions_via_relocs (asection *sec,
       Elf_Internal_Sym *sym;
       struct elf_link_hash_entry *h;
       bfd_vma val;
-      bfd_boolean reject, is_call;
+      bfd_boolean nonbranch, is_call;
       struct function_info *caller;
       struct call_info *callee;
 
-      reject = FALSE;
       r_type = ELF32_R_TYPE (irela->r_info);
-      if (r_type != R_SPU_REL16
-	  && r_type != R_SPU_ADDR16)
-	{
-	  reject = TRUE;
-	  if (!(call_tree && spu_hash_table (info)->params->auto_overlay))
-	    continue;
-	}
+      nonbranch = r_type != R_SPU_REL16 && r_type != R_SPU_ADDR16;
 
       r_indx = ELF32_R_SYM (irela->r_info);
       if (!get_sym_h (&h, &sym, &sym_sec, psyms, r_indx, sec->owner))
@@ -2699,7 +2708,7 @@ mark_functions_via_relocs (asection *sec,
 	continue;
 
       is_call = FALSE;
-      if (!reject)
+      if (!nonbranch)
 	{
 	  unsigned char insn[4];
 
@@ -2730,14 +2739,13 @@ mark_functions_via_relocs (asection *sec,
 	    }
 	  else
 	    {
-	      reject = TRUE;
-	      if (!(call_tree && spu_hash_table (info)->params->auto_overlay)
-		  || is_hint (insn))
+	      nonbranch = TRUE;
+	      if (is_hint (insn))
 		continue;
 	    }
 	}
 
-      if (reject)
+      if (nonbranch)
 	{
 	  /* For --auto-overlay, count possible stubs we need for
 	     function pointer references.  */
@@ -2747,8 +2755,20 @@ mark_functions_via_relocs (asection *sec,
 	  else
 	    sym_type = ELF_ST_TYPE (sym->st_info);
 	  if (sym_type == STT_FUNC)
-	    spu_hash_table (info)->non_ovly_stub += 1;
-	  continue;
+	    {
+	      if (call_tree && spu_hash_table (info)->params->auto_overlay)
+		spu_hash_table (info)->non_ovly_stub += 1;
+	      /* If the symbol type is STT_FUNC then this must be a
+		 function pointer initialisation.  */
+	      continue;
+	    }
+	  /* Ignore data references.  */
+	  if ((sym_sec->flags & (SEC_ALLOC | SEC_LOAD | SEC_CODE))
+	      != (SEC_ALLOC | SEC_LOAD | SEC_CODE))
+	    continue;
+	  /* Otherwise we probably have a jump table reloc for
+	     a switch statement or some other reference to a
+	     code label.  */
 	}
 
       if (h)
@@ -2797,7 +2817,7 @@ mark_functions_via_relocs (asection *sec,
       callee->is_pasted = FALSE;
       callee->broken_cycle = FALSE;
       callee->priority = priority;
-      callee->count = 1;
+      callee->count = nonbranch? 0 : 1;
       if (callee->fun->last_caller != sec)
 	{
 	  callee->fun->last_caller = sec;
@@ -4514,13 +4534,12 @@ spu_elf_auto_overlay (struct bfd_link_info *info)
 
   script = htab->params->spu_elf_open_overlay_script ();
 
-  if (fprintf (script, "SECTIONS\n{\n") <= 0)
-    goto file_err;
-
   if (htab->params->ovly_flavour == ovly_soft_icache)
     {
+      if (fprintf (script, "SECTIONS\n{\n") <= 0)
+	goto file_err;
+
       if (fprintf (script,
-		   " .data.icache ALIGN (16) : { *(.ovtab) *(.data.icache) }\n"
 		   " . = ALIGN (%u);\n"
 		   " .ovl.init : { *(.ovl.init) }\n"
 		   " . = ABSOLUTE (ADDR (.ovl.init));\n",
@@ -4535,10 +4554,10 @@ spu_elf_auto_overlay (struct bfd_link_info *info)
 	  unsigned int vma, lma;
 
 	  vma = (indx & (htab->params->num_lines - 1)) << htab->line_size_log2;
-	  lma = indx << htab->line_size_log2;
+	  lma = vma + (((indx >> htab->num_lines_log2) + 1) << 18);
 
 	  if (fprintf (script, " .ovly%u ABSOLUTE (ADDR (.ovl.init)) + %u "
-		       ": AT (ALIGN (LOADADDR (.ovl.init) + SIZEOF (.ovl.init), 16) + %u) {\n",
+			       ": AT (LOADADDR (.ovl.init) + %u) {\n",
 		       ovlynum, vma, lma) <= 0)
 	    goto file_err;
 
@@ -4556,9 +4575,15 @@ spu_elf_auto_overlay (struct bfd_link_info *info)
       if (fprintf (script, " . = ABSOLUTE (ADDR (.ovl.init)) + %u;\n",
 		   1 << (htab->num_lines_log2 + htab->line_size_log2)) <= 0)
 	goto file_err;
+
+      if (fprintf (script, "}\nINSERT AFTER .toe;\n") <= 0)
+	goto file_err;
     }
   else
     {
+      if (fprintf (script, "SECTIONS\n{\n") <= 0)
+	goto file_err;
+
       if (fprintf (script,
 		   " . = ALIGN (16);\n"
 		   " .ovl.init : { *(.ovl.init) }\n"
@@ -4610,13 +4635,13 @@ spu_elf_auto_overlay (struct bfd_link_info *info)
 	    goto file_err;
 	}
 
+      if (fprintf (script, "}\nINSERT BEFORE .text;\n") <= 0)
+	goto file_err;
     }
 
   free (ovly_map);
   free (ovly_sections);
 
-  if (fprintf (script, "}\nINSERT BEFORE .text;\n") <= 0)
-    goto file_err;
   if (fclose (script) != 0)
     goto file_err;
 
@@ -4716,6 +4741,48 @@ spu_elf_count_relocs (struct bfd_link_info *info, asection *sec)
     }
 
   return count;
+}
+
+/* Functions for adding fixup records to .fixup */
+
+#define FIXUP_RECORD_SIZE 4
+
+#define FIXUP_PUT(output_bfd,htab,index,addr) \
+	  bfd_put_32 (output_bfd, addr, \
+		      htab->sfixup->contents + FIXUP_RECORD_SIZE * (index))
+#define FIXUP_GET(output_bfd,htab,index) \
+	  bfd_get_32 (output_bfd, \
+		      htab->sfixup->contents + FIXUP_RECORD_SIZE * (index))
+
+/* Store OFFSET in .fixup.  This assumes it will be called with an
+   increasing OFFSET.  When this OFFSET fits with the last base offset,
+   it just sets a bit, otherwise it adds a new fixup record.  */
+static void
+spu_elf_emit_fixup (bfd * output_bfd, struct bfd_link_info *info,
+		    bfd_vma offset)
+{
+  struct spu_link_hash_table *htab = spu_hash_table (info);
+  asection *sfixup = htab->sfixup;
+  bfd_vma qaddr = offset & ~(bfd_vma) 15;
+  bfd_vma bit = ((bfd_vma) 8) >> ((offset & 15) >> 2);
+  if (sfixup->reloc_count == 0)
+    {
+      FIXUP_PUT (output_bfd, htab, 0, qaddr | bit);
+      sfixup->reloc_count++;
+    }
+  else
+    {
+      bfd_vma base = FIXUP_GET (output_bfd, htab, sfixup->reloc_count - 1);
+      if (qaddr != (base & ~(bfd_vma) 15))
+	{
+	  if ((sfixup->reloc_count + 1) * FIXUP_RECORD_SIZE > sfixup->size)
+	    (*_bfd_error_handler) (_("fatal error while creating .fixup"));
+	  FIXUP_PUT (output_bfd, htab, sfixup->reloc_count, qaddr | bit);
+	  sfixup->reloc_count++;
+	}
+      else
+	FIXUP_PUT (output_bfd, htab, sfixup->reloc_count - 1, base | bit);
+    }
 }
 
 /* Apply RELOCS to CONTENTS of INPUT_SECTION from INPUT_BFD.  */
@@ -4847,8 +4914,9 @@ spu_elf_relocate_section (bfd *output_bfd,
 	continue;
 
       /* Change "a rt,ra,rb" to "ai rt,ra,0". */
-      if (r_type == R_SPU_ADD_PIC && h != NULL
-	  && (h->def_regular || ELF_COMMON_DEF_P (h)))
+      if (r_type == R_SPU_ADD_PIC
+	  && h != NULL
+	  && !(h->def_regular || ELF_COMMON_DEF_P (h)))
 	{
 	  bfd_byte *loc = contents + rel->r_offset;
 	  loc[0] = 0x1c; 
@@ -4908,6 +4976,16 @@ spu_elf_relocate_section (bfd *output_bfd,
 		  relocation += set_id << 18;
 		}
 	    }
+	}
+
+      if (htab->params->emit_fixups && !info->relocatable
+	  && (input_section->flags & SEC_ALLOC) != 0
+	  && r_type == R_SPU_ADDR32)
+	{
+	  bfd_vma offset;
+	  offset = rel->r_offset + input_section->output_section->vma
+		   + input_section->output_offset;
+	  spu_elf_emit_fixup (output_bfd, info, offset);
 	}
 
       if (unresolved_reloc)
@@ -5302,6 +5380,72 @@ spu_elf_modify_program_headers (bfd *abfd, struct bfd_link_info *info)
 	phdr[i].p_memsz += adjust;
       }
 
+  return TRUE;
+}
+
+bfd_boolean
+spu_elf_size_sections (bfd * output_bfd, struct bfd_link_info *info)
+{
+  struct spu_link_hash_table *htab = spu_hash_table (info);
+  if (htab->params->emit_fixups)
+    {
+      asection *sfixup = htab->sfixup;
+      int fixup_count = 0;
+      bfd *ibfd;
+      size_t size;
+
+      for (ibfd = info->input_bfds; ibfd != NULL; ibfd = ibfd->link_next)
+	{
+	  asection *isec;
+
+	  if (bfd_get_flavour (ibfd) != bfd_target_elf_flavour)
+	    continue;
+
+	  /* Walk over each section attached to the input bfd.  */
+	  for (isec = ibfd->sections; isec != NULL; isec = isec->next)
+	    {
+	      Elf_Internal_Rela *internal_relocs, *irelaend, *irela;
+	      bfd_vma base_end;
+
+	      /* If there aren't any relocs, then there's nothing more
+	         to do.  */
+	      if ((isec->flags & SEC_RELOC) == 0
+		  || isec->reloc_count == 0)
+		continue;
+
+	      /* Get the relocs.  */
+	      internal_relocs =
+		_bfd_elf_link_read_relocs (ibfd, isec, NULL, NULL,
+					   info->keep_memory);
+	      if (internal_relocs == NULL)
+		return FALSE;
+
+	      /* 1 quadword can contain up to 4 R_SPU_ADDR32
+	         relocations.  They are stored in a single word by
+	         saving the upper 28 bits of the address and setting the
+	         lower 4 bits to a bit mask of the words that have the
+	         relocation.  BASE_END keeps track of the next quadword. */
+	      irela = internal_relocs;
+	      irelaend = irela + isec->reloc_count;
+	      base_end = 0;
+	      for (; irela < irelaend; irela++)
+		if (ELF32_R_TYPE (irela->r_info) == R_SPU_ADDR32
+		    && irela->r_offset >= base_end)
+		  {
+		    base_end = (irela->r_offset & ~(bfd_vma) 15) + 16;
+		    fixup_count++;
+		  }
+	    }
+	}
+
+      /* We always have a NULL fixup as a sentinel */
+      size = (fixup_count + 1) * FIXUP_RECORD_SIZE;
+      if (!bfd_set_section_size (output_bfd, sfixup, size))
+	return FALSE;
+      sfixup->contents = (bfd_byte *) bfd_zalloc (info->input_bfds, size);
+      if (sfixup->contents == NULL)
+	return FALSE;
+    }
   return TRUE;
 }
 

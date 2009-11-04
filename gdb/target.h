@@ -53,7 +53,6 @@ struct target_section_table;
 
 #include "bfd.h"
 #include "symtab.h"
-#include "dcache.h"
 #include "memattr.h"
 #include "vec.h"
 #include "gdb_signals.h"
@@ -65,7 +64,8 @@ enum strata
     core_stratum,		/* Core dump files */
     process_stratum,		/* Executing processes */
     thread_stratum,		/* Executing threads */
-    record_stratum		/* Support record debugging */
+    record_stratum,		/* Support record debugging */
+    arch_stratum		/* Architecture overrides */
   };
 
 enum thread_control_capabilities
@@ -110,6 +110,15 @@ enum target_waitkind
 
     TARGET_WAITKIND_EXECD,
 
+    /* The program had previously vforked, and now the child is done
+       with the shared memory region, because it exec'ed or exited.
+       Note that the event is reported to the vfork parent.  This is
+       only used if GDB did not stay attached to the vfork child,
+       otherwise, a TARGET_WAITKIND_EXECD or
+       TARGET_WAITKIND_EXIT|SIGNALLED event associated with the child
+       has the same effect.  */
+    TARGET_WAITKIND_VFORK_DONE,
+
     /* The program has entered or returned from a system call.  On
        HP-UX, this is used in the hardware watchpoint implementation.
        The syscall's unique integer ID number is in value.syscall_id */
@@ -142,14 +151,15 @@ struct target_waitstatus
   {
     enum target_waitkind kind;
 
-    /* Forked child pid, execd pathname, exit status or signal number.  */
+    /* Forked child pid, execd pathname, exit status, signal number or
+       syscall number.  */
     union
       {
 	int integer;
 	enum target_signal sig;
 	ptid_t related_pid;
 	char *execd_pathname;
-	int syscall_id;
+	int syscall_number;
       }
     value;
   };
@@ -160,6 +170,21 @@ struct target_waitstatus
    options is not requested, target_wait blocks waiting for an
    event.  */
 #define TARGET_WNOHANG 1
+
+/* The structure below stores information about a system call.
+   It is basically used in the "catch syscall" command, and in
+   every function that gives information about a system call.
+   
+   It's also good to mention that its fields represent everything
+   that we currently know about a syscall in GDB.  */
+struct syscall
+  {
+    /* The syscall number.  */
+    int number;
+
+    /* The syscall name.  */
+    const char *name;
+  };
 
 /* Return a pretty printed form of target_waitstatus.
    Space for the result is malloc'd, caller must free.  */
@@ -202,6 +227,10 @@ enum target_object
      Target implementations of to_xfer_partial never need to handle
      this object, and most callers should not use it.  */
   TARGET_OBJECT_RAW_MEMORY,
+  /* Memory known to be part of the target's stack.  This is cached even
+     if it is not in a region marked as such, since it is known to be
+     "normal" RAM.  */
+  TARGET_OBJECT_STACK_MEMORY,
   /* Kernel Unwind Table.  See "ia64-tdep.c".  */
   TARGET_OBJECT_UNWIND_TABLE,
   /* Transfer auxilliary vector.  */
@@ -402,6 +431,7 @@ struct target_ops
     int (*to_follow_fork) (struct target_ops *, int);
     void (*to_insert_exec_catchpoint) (int);
     int (*to_remove_exec_catchpoint) (int);
+    int (*to_set_syscall_catchpoint) (int, int, int, int, int *);
     int (*to_has_exited) (int, int, int *);
     void (*to_mourn_inferior) (struct target_ops *);
     int (*to_can_run) (void);
@@ -555,6 +585,13 @@ struct target_ops
        The default implementation always returns target_gdbarch.  */
     struct gdbarch *(*to_thread_architecture) (struct target_ops *, ptid_t);
 
+    /* Determine current address space of thread PTID.
+
+       The default implementation always returns the inferior's
+       address space.  */
+    struct address_space *(*to_thread_address_space) (struct target_ops *,
+						      ptid_t);
+
     int to_magic;
     /* Need sub-structure for target machine related rather than comm related?
      */
@@ -664,17 +701,24 @@ extern void target_store_registers (struct regcache *regcache, int regs);
 #define	target_prepare_to_store(regcache)	\
      (*current_target.to_prepare_to_store) (regcache)
 
+/* Determine current address space of thread PTID.  */
+
+struct address_space *target_thread_address_space (ptid_t);
+
 /* Returns true if this target can debug multiple processes
    simultaneously.  */
 
 #define	target_supports_multi_process()	\
      (*current_target.to_supports_multi_process) ()
 
-extern DCACHE *target_dcache;
+/* Invalidate all target dcaches.  */
+extern void target_dcache_invalidate (void);
 
 extern int target_read_string (CORE_ADDR, char **, int, int *);
 
 extern int target_read_memory (CORE_ADDR memaddr, gdb_byte *myaddr, int len);
+
+extern int target_read_stack (CORE_ADDR memaddr, gdb_byte *myaddr, int len);
 
 extern int target_write_memory (CORE_ADDR memaddr, const gdb_byte *myaddr,
 				int len);
@@ -740,6 +784,8 @@ extern int inferior_has_forked (ptid_t pid, ptid_t *child_pid);
 extern int inferior_has_vforked (ptid_t pid, ptid_t *child_pid);
 
 extern int inferior_has_execd (ptid_t pid, char **execd_pathname);
+
+extern int inferior_has_called_syscall (ptid_t pid, int *syscall_number);
 
 /* Print a line about the current target.  */
 
@@ -892,6 +938,27 @@ int target_follow_fork (int follow_child);
 
 #define target_remove_exec_catchpoint(pid) \
      (*current_target.to_remove_exec_catchpoint) (pid)
+
+/* Syscall catch.
+
+   NEEDED is nonzero if any syscall catch (of any kind) is requested.
+   If NEEDED is zero, it means the target can disable the mechanism to
+   catch system calls because there are no more catchpoints of this type.
+
+   ANY_COUNT is nonzero if a generic (filter-less) syscall catch is
+   being requested.  In this case, both TABLE_SIZE and TABLE should
+   be ignored.
+
+   TABLE_SIZE is the number of elements in TABLE.  It only matters if
+   ANY_COUNT is zero.
+
+   TABLE is an array of ints, indexed by syscall number.  An element in
+   this array is nonzero if that syscall should be caught.  This argument
+   only matters if ANY_COUNT is zero.  */
+
+#define target_set_syscall_catchpoint(pid, needed, any_count, table_size, table) \
+     (*current_target.to_set_syscall_catchpoint) (pid, needed, any_count, \
+						  table_size, table)
 
 /* Returns TRUE if PID has exited.  And, also sets EXIT_STATUS to the
    exit code of PID, if any.  */

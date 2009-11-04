@@ -23,6 +23,7 @@
 
 #include "gdb_obstack.h"	/* For obstack internals.  */
 #include "symfile.h"		/* For struct psymbol_allocation_list */
+#include "progspace.h"
 
 struct bcache;
 struct htab;
@@ -99,15 +100,11 @@ struct objfile_data;
 
 struct entry_info
   {
-
-    /* The value we should use for this objects entry point.
-       The illegal/unknown value needs to be something other than 0, ~0
-       for instance, which is much less likely than 0. */
-
+    /* The relocated value we should use for this objfile entry point.  */
     CORE_ADDR entry_point;
 
-#define INVALID_ENTRY_POINT (~0)	/* ~0 will not be in any file, we hope.  */
-
+    /* Set to 1 iff ENTRY_POINT contains a valid value.  */
+    unsigned entry_point_p : 1;
   };
 
 /* Sections in an objfile.  The section offsets are stored in the
@@ -199,6 +196,10 @@ struct objfile
     /* Some flag bits for this objfile. */
 
     unsigned short flags;
+
+    /* The program space associated with this objfile.  */
+
+    struct program_space *pspace;
 
     /* Each objfile points to a linked list of symtabs derived from this file,
        one symtab structure for each compilation unit (source file).  Each link
@@ -414,17 +415,6 @@ struct objfile
 
 #define OBJF_USERLOADED	(1 << 3)	/* User loaded */
 
-/* The bfd of this objfile is used outside of the objfile (e.g. by solib).
-   Do not try to free it.  */
-
-#define OBJF_KEEPBFD	(1 << 4)	/* Do not delete bfd */
-
-
-/* The object file that the main symbol table was loaded from (e.g. the
-   argument to the "symbol-file" or "file" command).  */
-
-extern struct objfile *symfile_objfile;
-
 /* The object file that contains the runtime common minimal symbols
    for SunOS4. Note that this objfile has no associated BFD.  */
 
@@ -445,11 +435,6 @@ extern struct objfile *rt_common_objfile;
 
 extern struct objfile *current_objfile;
 
-/* All known objfiles are kept in a linked list.  This points to the
-   root of this list. */
-
-extern struct objfile *object_files;
-
 /* Declarations for functions defined in objfiles.c */
 
 extern struct objfile *allocate_objfile (bfd *, int);
@@ -457,6 +442,8 @@ extern struct objfile *allocate_objfile (bfd *, int);
 extern struct gdbarch *get_objfile_arch (struct objfile *);
 
 extern void init_entry_point_info (struct objfile *);
+
+extern int entry_point_address_query (CORE_ADDR *entry_p);
 
 extern CORE_ADDR entry_point_address (void);
 
@@ -477,6 +464,12 @@ extern struct cleanup *make_cleanup_free_objfile (struct objfile *);
 extern void free_all_objfiles (void);
 
 extern void objfile_relocate (struct objfile *, struct section_offsets *);
+
+extern int objfile_has_partial_symbols (struct objfile *objfile);
+
+extern int objfile_has_full_symbols (struct objfile *objfile);
+
+extern int objfile_has_symbols (struct objfile *objfile);
 
 extern int have_partial_symbols (void);
 
@@ -502,24 +495,49 @@ extern int in_plt_section (CORE_ADDR, char *);
 /* Keep a registry of per-objfile data-pointers required by other GDB
    modules.  */
 
+/* Allocate an entry in the per-objfile registry.  */
 extern const struct objfile_data *register_objfile_data (void);
+
+/* Allocate an entry in the per-objfile registry.
+   SAVE and FREE are called when clearing objfile data.
+   First all registered SAVE functions are called.
+   Then all registered FREE functions are called.
+   Either or both of SAVE, FREE may be NULL.  */
 extern const struct objfile_data *register_objfile_data_with_cleanup
-  (void (*cleanup) (struct objfile *, void *));
+  (void (*save) (struct objfile *, void *),
+   void (*free) (struct objfile *, void *));
+
 extern void clear_objfile_data (struct objfile *objfile);
 extern void set_objfile_data (struct objfile *objfile,
 			      const struct objfile_data *data, void *value);
 extern void *objfile_data (struct objfile *objfile,
 			   const struct objfile_data *data);
+
+extern struct bfd *gdb_bfd_ref (struct bfd *abfd);
+extern void gdb_bfd_unref (struct bfd *abfd);
 
 
-/* Traverse all object files.  ALL_OBJFILES_SAFE works even if you delete
-   the objfile during the traversal.  */
+/* Traverse all object files in the current program space.
+   ALL_OBJFILES_SAFE works even if you delete the objfile during the
+   traversal.  */
 
-#define	ALL_OBJFILES(obj) \
-  for ((obj) = object_files; (obj) != NULL; (obj) = (obj)->next)
+/* Traverse all object files in program space SS.  */
 
-#define	ALL_OBJFILES_SAFE(obj,nxt) \
-  for ((obj) = object_files; 	   \
+#define ALL_PSPACE_OBJFILES(ss, obj)					\
+  for ((obj) = ss->objfiles; (obj) != NULL; (obj) = (obj)->next)	\
+
+#define ALL_PSPACE_OBJFILES_SAFE(ss, obj, nxt)		\
+  for ((obj) = ss->objfiles;			\
+       (obj) != NULL? ((nxt)=(obj)->next,1) :0;	\
+       (obj) = (nxt))
+
+#define ALL_OBJFILES(obj)			    \
+  for ((obj) = current_program_space->objfiles; \
+       (obj) != NULL;				    \
+       (obj) = (obj)->next)
+
+#define ALL_OBJFILES_SAFE(obj,nxt)			\
+  for ((obj) = current_program_space->objfiles;	\
        (obj) != NULL? ((nxt)=(obj)->next,1) :0;	\
        (obj) = (nxt))
 
@@ -538,27 +556,44 @@ extern void *objfile_data (struct objfile *objfile,
 #define	ALL_OBJFILE_MSYMBOLS(objfile, m) \
     for ((m) = (objfile) -> msymbols; SYMBOL_LINKAGE_NAME(m) != NULL; (m)++)
 
-/* Traverse all symtabs in all objfiles.  */
+/* Traverse all symtabs in all objfiles in the current symbol
+   space.  */
 
 #define	ALL_SYMTABS(objfile, s) \
   ALL_OBJFILES (objfile)	 \
     ALL_OBJFILE_SYMTABS (objfile, s)
 
-/* Traverse all symtabs in all objfiles, skipping included files
-   (which share a blockvector with their primary symtab).  */
+#define ALL_PSPACE_SYMTABS(ss, objfile, s)		\
+  ALL_PSPACE_OBJFILES (ss, objfile)			\
+    ALL_OBJFILE_SYMTABS (objfile, s)
+
+/* Traverse all symtabs in all objfiles in the current program space,
+   skipping included files (which share a blockvector with their
+   primary symtab).  */
 
 #define ALL_PRIMARY_SYMTABS(objfile, s) \
   ALL_OBJFILES (objfile)		\
     ALL_OBJFILE_SYMTABS (objfile, s)	\
       if ((s)->primary)
 
-/* Traverse all psymtabs in all objfiles.  */
+#define ALL_PSPACE_PRIMARY_SYMTABS(pspace, objfile, s)	\
+  ALL_PSPACE_OBJFILES (ss, objfile)			\
+    ALL_OBJFILE_SYMTABS (objfile, s)			\
+      if ((s)->primary)
+
+/* Traverse all psymtabs in all objfiles in the current symbol
+   space.  */
 
 #define	ALL_PSYMTABS(objfile, p) \
   ALL_OBJFILES (objfile)	 \
     ALL_OBJFILE_PSYMTABS (objfile, p)
 
-/* Traverse all minimal symbols in all objfiles.  */
+#define ALL_PSPACE_PSYMTABS(ss, objfile, p)		\
+  ALL_PSPACE_OBJFILES (ss, objfile)			\
+    ALL_OBJFILE_PSYMTABS (objfile, p)
+
+/* Traverse all minimal symbols in all objfiles in the current symbol
+   space.  */
 
 #define	ALL_MSYMBOLS(objfile, m) \
   ALL_OBJFILES (objfile)	 \

@@ -1,3 +1,51 @@
+2009-11-02  Paul Brook  <paul@codesourcery.com>
+
+	* arm.h (FPU_VFP_EXT_V3xD, FPU_VFP_EXT_FP16, FPU_NEON_EXT_FMA,
+	FPU_VFP_EXT_FMA, FPU_VFP_V3xD, FPU_VFP_V4D16, FPU_VFP_V4): Define.
+	(FPU_ARCH_VFP_V3D16_FP16, FPU_ARCH_VFP_V3_FP16, FPU_ARCH_VFP_V3xD,
+	FPU_ARCH_VFP_V3xD_FP16, FPU_ARCH_VFP_V4, FPU_ARCH_VFP_V4D16,
+	FPU_ARCH_NEON_VFP_V4): Define.
+
+2009-10-23  Doug Evans  <dje@sebabeach.org>
+
+	* cgen-bitset.h: Delete, moved to ../cgen/bitset.h.
+	* cgen.h: Update.  Improve multi-inclusion macro name.
+
+2009-10-02  Peter Bergner  <bergner@vnet.ibm.com>
+
+	* ppc.h (PPC_OPCODE_476): Define.
+
+2009-10-01  Peter Bergner  <bergner@vnet.ibm.com>
+
+	* ppc.h (PPC_OPCODE_A2): Rename from PPC_OPCODE_PPCA2.
+
+2009-09-29  DJ Delorie  <dj@redhat.com>
+
+	* rx.h: New file.
+
+2009-09-22  Peter Bergner  <bergner@vnet.ibm.com>
+
+	* ppc.h (ppc_cpu_t): Typedef to uint64_t.
+
+2009-09-21  Ben Elliston  <bje@au.ibm.com>
+
+	* ppc.h (PPC_OPCODE_PPCA2): New.
+
+2009-09-05  Martin Thuresson  <martin@mtme.org>
+
+	* ia64.h (struct ia64_operand): Renamed member class to op_class.
+
+2009-08-29  Martin Thuresson  <martin@mtme.org>
+
+	* tic30.h (template): Rename type template to
+	insn_template. Updated code to use new name.
+	* tic54x.h (template): Rename type template to
+	insn_template.
+
+2009-08-20  Nick Hudson  <nick.hudson@gmx.co.uk>
+
+	* hppa.h (pa_opcodes): Add a pa10 bb without FLAG_STRICT.
+
 2009-06-11  Anthony Green  <green@moxielogic.com>
 
 	* moxie.h (MOXIE_F3_PCREL): Define.

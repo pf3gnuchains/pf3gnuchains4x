@@ -1,3 +1,14 @@
+2009-10-24  Doug Evans  <dje@sebabeach.org>
+
+	* sh-desc.h: Regenerate.
+
+2009-08-22  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+
+	* config.in: Regenerate.
+	* configure: Likewise.
+
+	* configure: Regenerate.
+
 2008-07-11  Hans-Peter Nilsson  <hp@axis.com>
 
 	* configure: Regenerate to track ../common/common.m4 changes.

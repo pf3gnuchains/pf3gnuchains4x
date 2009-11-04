@@ -20,6 +20,10 @@
    MA 02110-1301, USA.  */
 
 #include "config.h"
+#include "bfd.h"
+
+#if BFD_SUPPORTS_PLUGINS
+
 #include <assert.h>
 #include <dlfcn.h>
 #include <stdarg.h>
@@ -415,11 +419,11 @@ bfd_plugin_get_symbol_info (bfd *abfd ATTRIBUTE_UNUSED,
 static asymbol *
 bfd_plugin_make_empty_symbol (bfd *abfd)
 {
-  asymbol *new = bfd_zalloc (abfd, sizeof (asymbol));
-  if (new == NULL)
-    return new;
-  new->the_bfd = abfd;
-  return new;
+  asymbol *new_symbol = bfd_zalloc (abfd, sizeof (asymbol));
+  if (new_symbol == NULL)
+    return new_symbol;
+  new_symbol->the_bfd = abfd;
+  return new_symbol;
 }
 
 static int
@@ -492,3 +496,4 @@ const bfd_target plugin_vec =
 
   NULL  			/* backend_data.  */
 };
+#endif /* BFD_SUPPORTS_PLUGIN */

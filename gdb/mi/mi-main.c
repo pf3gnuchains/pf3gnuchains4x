@@ -362,13 +362,18 @@ mi_cmd_thread_info (char *command, char **argv, int argc)
 static int
 print_one_inferior (struct inferior *inferior, void *arg)
 {
-  struct cleanup *back_to = make_cleanup_ui_out_tuple_begin_end (uiout, NULL);
+  if (inferior->pid != 0)
+    {
+      struct cleanup *back_to
+	= make_cleanup_ui_out_tuple_begin_end (uiout, NULL);
 
-  ui_out_field_fmt (uiout, "id", "%d", inferior->pid);
-  ui_out_field_string (uiout, "type", "process");
-  ui_out_field_int (uiout, "pid", inferior->pid);
-  
-  do_cleanups (back_to);
+      ui_out_field_fmt (uiout, "id", "%d", inferior->pid);
+      ui_out_field_string (uiout, "type", "process");
+      ui_out_field_int (uiout, "pid", inferior->pid);
+
+      do_cleanups (back_to);
+    }
+
   return 0;
 }
 
@@ -1301,6 +1306,8 @@ mi_execute_command (char *cmd, int from_tty)
 	  mi_out_rewind (uiout);
 	}
 
+      bpstat_do_actions ();
+
       if (/* The notifications are only output when the top-level
 	     interpreter (specified on the command line) is MI.  */      
 	  ui_out_is_mi_like_p (interp_ui_out (top_level_interpreter ()))
@@ -1353,7 +1360,8 @@ mi_cmd_execute (struct mi_parse *parse)
   struct cleanup *cleanup;
   int i;
 
-  free_all_values ();
+  prepare_execute_command ();
+
   cleanup = make_cleanup (null_cleanup, NULL);
 
   if (parse->frame != -1 && parse->thread == -1)

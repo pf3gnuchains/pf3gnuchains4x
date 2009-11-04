@@ -546,20 +546,17 @@ struct attr_abbrev
     ENUM_BITFIELD(dwarf_form) form : 16;
   };
 
-/* Additional GDB-specific attribute forms.  */
-enum
-  {
-    /* A string which has been updated to GDB's internal
-       representation (e.g. converted to canonical form) and does not
-       need to be updated again.  */
-    GDB_FORM_cached_string = 0xff
-  };
-
 /* Attributes have a name and a value */
 struct attribute
   {
     ENUM_BITFIELD(dwarf_attribute) name : 16;
-    ENUM_BITFIELD(dwarf_form) form : 16;
+    ENUM_BITFIELD(dwarf_form) form : 15;
+
+    /* Has DW_STRING already been updated by dwarf2_canonicalize_name?  This
+       field should be in u.str (existing only for DW_STRING) but it is kept
+       here for better struct attribute alignment.  */
+    unsigned int string_is_canonical : 1;
+
     union
       {
 	char *str;
@@ -613,6 +610,7 @@ struct function_range
 /* Get at parts of an attribute structure */
 
 #define DW_STRING(attr)    ((attr)->u.str)
+#define DW_STRING_IS_CANONICAL(attr) ((attr)->string_is_canonical)
 #define DW_UNSND(attr)     ((attr)->u.unsnd)
 #define DW_BLOCK(attr)     ((attr)->u.blk)
 #define DW_SND(attr)       ((attr)->u.snd)
@@ -3367,7 +3365,7 @@ read_import_statement (struct die_info *die, struct dwarf2_cu *cu)
       return;
     }
 
-  imported_die = follow_die_ref (die, import_attr, &cu);
+  imported_die = follow_die_ref_or_sig (die, import_attr, &cu);
   imported_name = dwarf2_name (imported_die, cu);
   if (imported_name == NULL)
     {
@@ -4385,17 +4383,16 @@ dwarf2_add_field (struct field_info *fip, struct die_info *die,
       attr = dwarf2_attr (die, DW_AT_data_member_location, cu);
       if (attr)
 	{
-          int byte_offset;
+          int byte_offset = 0;
 
           if (attr_form_is_section_offset (attr))
-            {
-              dwarf2_complex_location_expr_complaint ();
-              byte_offset = 0;
-            }
+	    dwarf2_complex_location_expr_complaint ();
           else if (attr_form_is_constant (attr))
             byte_offset = dwarf2_get_attr_constant_value (attr, 0);
-          else
+          else if (attr_form_is_block (attr))
             byte_offset = decode_locdesc (DW_BLOCK (attr), cu);
+	  else
+	    dwarf2_complex_location_expr_complaint ();
 
           SET_FIELD_BITPOS (*fp, byte_offset * bits_per_byte);
 	}
@@ -4490,8 +4487,20 @@ dwarf2_add_field (struct field_info *fip, struct die_info *die,
       /* C++ base class field.  */
       attr = dwarf2_attr (die, DW_AT_data_member_location, cu);
       if (attr)
-	SET_FIELD_BITPOS (*fp, decode_locdesc (DW_BLOCK (attr), cu)
-			       * bits_per_byte);
+	{
+          int byte_offset = 0;
+
+          if (attr_form_is_section_offset (attr))
+	    dwarf2_complex_location_expr_complaint ();
+          else if (attr_form_is_constant (attr))
+            byte_offset = dwarf2_get_attr_constant_value (attr, 0);
+          else if (attr_form_is_block (attr))
+            byte_offset = decode_locdesc (DW_BLOCK (attr), cu);
+	  else
+	    dwarf2_complex_location_expr_complaint ();
+
+          SET_FIELD_BITPOS (*fp, byte_offset * bits_per_byte);
+	}
       FIELD_BITSIZE (*fp) = 0;
       FIELD_TYPE (*fp) = die_type (die, cu);
       FIELD_NAME (*fp) = type_name_no_tag (fp->type);
@@ -5374,8 +5383,8 @@ read_array_order (struct die_info *die, struct dwarf2_cu *cu)
     version checking.
   */
 
-  if (cu->language == language_fortran &&
-      cu->producer && strstr (cu->producer, "GNU F77"))
+  if (cu->language == language_fortran
+      && cu->producer && strstr (cu->producer, "GNU F77"))
     {
       return DW_ORD_row_major;
     }
@@ -5438,8 +5447,18 @@ read_common_block (struct die_info *die, struct dwarf2_cu *cu)
 	  attr = dwarf2_attr (child_die, DW_AT_data_member_location, cu);
 	  if (attr)
 	    {
-	      SYMBOL_VALUE_ADDRESS (sym) =
-		base + decode_locdesc (DW_BLOCK (attr), cu);
+	      CORE_ADDR byte_offset = 0;
+
+	      if (attr_form_is_section_offset (attr))
+		dwarf2_complex_location_expr_complaint ();
+	      else if (attr_form_is_constant (attr))
+		byte_offset = dwarf2_get_attr_constant_value (attr, 0);
+	      else if (attr_form_is_block (attr))
+		byte_offset = decode_locdesc (DW_BLOCK (attr), cu);
+	      else
+		dwarf2_complex_location_expr_complaint ();
+
+	      SYMBOL_VALUE_ADDRESS (sym) = base + byte_offset;
 	      add_symbol_to_list (sym, &global_symbols);
 	    }
 	  child_die = sibling_die (child_die);
@@ -6985,11 +7004,13 @@ read_attribute_value (struct attribute *attr, unsigned form,
       break;
     case DW_FORM_string:
       DW_STRING (attr) = read_string (abfd, info_ptr, &bytes_read);
+      DW_STRING_IS_CANONICAL (attr) = 0;
       info_ptr += bytes_read;
       break;
     case DW_FORM_strp:
       DW_STRING (attr) = read_indirect_string (abfd, info_ptr, cu_header,
 					       &bytes_read);
+      DW_STRING_IS_CANONICAL (attr) = 0;
       info_ptr += bytes_read;
       break;
     case DW_FORM_block:
@@ -8582,7 +8603,7 @@ dwarf2_const_value (struct attribute *attr, struct symbol *sym,
       /* NOTE: cagney/2003-05-09: In-lined store_address call with
          it's body - store_unsigned_integer.  */
       store_unsigned_integer (SYMBOL_VALUE_BYTES (sym), cu_header->addr_size,
-			      DW_ADDR (attr), byte_order);
+			      byte_order, DW_ADDR (attr));
       SYMBOL_CLASS (sym) = LOC_CONST_BYTES;
       break;
     case DW_FORM_string:
@@ -8999,12 +9020,12 @@ dwarf2_name (struct die_info *die, struct dwarf2_cu *cu)
 	 to canonicalize them.  */
       return DW_STRING (attr);
     default:
-      if (attr->form != GDB_FORM_cached_string)
+      if (!DW_STRING_IS_CANONICAL (attr))
 	{
 	  DW_STRING (attr)
 	    = dwarf2_canonicalize_name (DW_STRING (attr), cu,
 					&cu->objfile->objfile_obstack);
-	  attr->form = GDB_FORM_cached_string;
+	  DW_STRING_IS_CANONICAL (attr) = 1;
 	}
       return DW_STRING (attr);
     }
@@ -9515,8 +9536,6 @@ dwarf_form_name (unsigned form)
       return "DW_FORM_flag_present";
     case DW_FORM_sig8:
       return "DW_FORM_sig8";
-    case GDB_FORM_cached_string:
-      return "GDB_FORM_cached_string";
     default:
       return "DW_FORM_<unknown>";
     }
@@ -10069,10 +10088,10 @@ dump_die_shallow (struct ui_file *f, int indent, struct die_info *die)
 	  break;
 	case DW_FORM_string:
 	case DW_FORM_strp:
-	case GDB_FORM_cached_string:
-	  fprintf_unfiltered (f, "string: \"%s\"",
+	  fprintf_unfiltered (f, "string: \"%s\" (%s canonicalized)",
 		   DW_STRING (&die->attrs[i])
-		   ? DW_STRING (&die->attrs[i]) : "");
+		   ? DW_STRING (&die->attrs[i]) : "",
+		   DW_STRING_IS_CANONICAL (&die->attrs[i]) ? "is" : "not");
 	  break;
 	case DW_FORM_flag:
 	  if (DW_UNSND (&die->attrs[i]))
@@ -11137,20 +11156,22 @@ dwarf_decode_macros (struct line_header *lh, unsigned int offset,
 		complaint (&symfile_complaints,
 			   _("debug info with no main source gives macro %s "
 			     "on line %d: %s"),
-			   macinfo_type ==
-			   DW_MACINFO_define ? _("definition") : macinfo_type ==
-			   DW_MACINFO_undef ? _("undefinition") :
-			   "something-or-other", line, body);
+			   macinfo_type == DW_MACINFO_define ? 
+			     _("definition") : 
+			       macinfo_type == DW_MACINFO_undef ?
+				 _("undefinition") :
+				 _("something-or-other"), line, body);
 		break;
 	      }
 	    if ((line == 0 && !at_commandline) || (line != 0 && at_commandline))
 	      complaint (&symfile_complaints,
 			 _("debug info gives %s macro %s with %s line %d: %s"),
 			 at_commandline ? _("command-line") : _("in-file"),
-			 macinfo_type ==
-			 DW_MACINFO_define ? _("definition") : macinfo_type ==
-			 DW_MACINFO_undef ? _("undefinition") :
-			 "something-or-other",
+			 macinfo_type == DW_MACINFO_define ?
+			   _("definition") : 
+			     macinfo_type == DW_MACINFO_undef ?
+			       _("undefinition") :
+			       _("something-or-other"),
 			 line == 0 ? _("zero") : _("non-zero"), line, body);
 
 	    if (macinfo_type == DW_MACINFO_define)
@@ -11816,7 +11837,7 @@ munmap_section_buffer (struct dwarf2_section_info *info)
 /* munmap debug sections for OBJFILE, if necessary.  */
 
 static void
-dwarf2_per_objfile_cleanup (struct objfile *objfile, void *d)
+dwarf2_per_objfile_free (struct objfile *objfile, void *d)
 {
   struct dwarf2_per_objfile *data = d;
   munmap_section_buffer (&data->info);
@@ -11836,7 +11857,7 @@ void
 _initialize_dwarf2_read (void)
 {
   dwarf2_objfile_data_key
-    = register_objfile_data_with_cleanup (dwarf2_per_objfile_cleanup);
+    = register_objfile_data_with_cleanup (NULL, dwarf2_per_objfile_free);
 
   add_prefix_cmd ("dwarf2", class_maintenance, set_dwarf2_cmd, _("\
 Set DWARF 2 specific variables.\n\

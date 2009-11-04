@@ -46,6 +46,7 @@
 #include "readline/readline.h"
 #include "remote.h"
 #include "solib.h"
+#include "interps.h"
 
 /* Architecture-specific operations.  */
 
@@ -85,9 +86,8 @@ set_solib_ops (struct gdbarch *gdbarch, struct target_so_ops *new_ops)
    configuration needs to call set_solib_ops.  */
 struct target_so_ops *current_target_so_ops;
 
-/* local data declarations */
-
-static struct so_list *so_list_head;	/* List of known shared objects */
+/* List of known shared objects */
+#define so_list_head current_program_space->so_list
 
 /* Local function prototypes */
 
@@ -309,7 +309,7 @@ solib_bfd_open (char *pathname)
 
   /* Check bfd arch.  */
   b = gdbarch_bfd_arch_info (target_gdbarch);
-  if (b->compatible (b, bfd_get_arch_info (abfd)) != b)
+  if (!b->compatible (b, bfd_get_arch_info (abfd)))
     warning (_("`%s': Shared library architecture %s is not compatible "
                "with target architecture %s."), found_pathname,
              bfd_get_arch_info (abfd)->printable_name, b->printable_name);
@@ -361,7 +361,7 @@ solib_map_sections (void *arg)
   do_cleanups (old_chain);
 
   /* Leave bfd open, core_xfer_memory and "info files" need it.  */
-  so->abfd = abfd;
+  so->abfd = gdb_bfd_ref (abfd);
 
   /* copy full path name into so_name, so that later symbol_file_add
      can find it */
@@ -421,21 +421,11 @@ void
 free_so (struct so_list *so)
 {
   struct target_so_ops *ops = solib_ops (target_gdbarch);
-  char *bfd_filename = 0;
 
   if (so->sections)
     xfree (so->sections);
-      
-  if (so->abfd)
-    {
-      bfd_filename = bfd_get_filename (so->abfd);
-      if (! bfd_close (so->abfd))
-	warning (_("cannot close \"%s\": %s"),
-		 bfd_filename, bfd_errmsg (bfd_get_error ()));
-    }
 
-  if (bfd_filename)
-    xfree (bfd_filename);
+  gdb_bfd_unref (so->abfd);
 
   ops->free_so (so);
 
@@ -465,8 +455,7 @@ symbol_add_stub (struct so_list *so, int flags)
   sap = build_section_addr_info_from_section_table (so->sections,
                                                     so->sections_end);
 
-  so->objfile = symbol_file_add_from_bfd (so->abfd, flags,
-					  sap, OBJF_SHARED | OBJF_KEEPBFD);
+  so->objfile = symbol_file_add_from_bfd (so->abfd, flags, sap, OBJF_SHARED);
   free_section_addr_info (sap);
 
   return;
@@ -483,12 +472,12 @@ solib_read_symbols (struct so_list *so, int flags)
 
   if (so->symbols_loaded)
     {
-      if (from_tty)
+      if (from_tty || info_verbose)
 	printf_unfiltered (_("Symbols already loaded for %s\n"), so->so_name);
     }
   else if (so->abfd == NULL)
     {
-      if (from_tty)
+      if (from_tty || info_verbose)
 	printf_unfiltered (_("Symbol file not found for %s\n"), so->so_name);
     }
   else
@@ -504,7 +493,7 @@ solib_read_symbols (struct so_list *so, int flags)
                              "Error while reading shared library symbols:\n");
           return 0;
         }
-      if (from_tty && print_symbol_loading)
+      if (from_tty || info_verbose)
         printf_unfiltered (_("Loaded symbols for %s\n"), so->so_name);
       so->symbols_loaded = 1;
       return 1;
@@ -661,6 +650,7 @@ update_solib_list (int from_tty, struct target_ops *target)
       for (i = inferior; i; i = i->next)
 	{
 	  i->from_tty = from_tty;
+	  i->pspace = current_program_space;
 
 	  /* Fill in the rest of the `struct so_list' node.  */
 	  catch_errors (solib_map_sections, i,
@@ -795,52 +785,117 @@ solib_add (char *pattern, int from_tty, struct target_ops *target, int readsyms)
    DESCRIPTION
 
    Walk through the shared library list and print information
-   about each attached library.
+   about each attached library matching PATTERN.  If PATTERN is elided,
+   print them all.
  */
 
 static void
-info_sharedlibrary_command (char *ignore, int from_tty)
+info_sharedlibrary_command (char *pattern, int from_tty)
 {
   struct so_list *so = NULL;	/* link map state variable */
   int header_done = 0;
+  int so_missing_debug_info = 0;
   int addr_width;
+  int nr_libs;
+  struct cleanup *table_cleanup;
+  struct gdbarch *gdbarch = target_gdbarch;
+
+  if (pattern)
+    {
+      char *re_err = re_comp (pattern);
+
+      if (re_err)
+	error (_("Invalid regexp: %s"), re_err);
+    }
 
   /* "0x", a little whitespace, and two hex digits per byte of pointers.  */
-  addr_width = 4 + (gdbarch_ptr_bit (target_gdbarch) / 4);
+  addr_width = 4 + (gdbarch_ptr_bit (gdbarch) / 4);
 
   update_solib_list (from_tty, 0);
 
-  for (so = so_list_head; so; so = so->next)
+  /* make_cleanup_ui_out_table_begin_end needs to know the number of
+     rows, so we need to make two passes over the libs.  */
+
+  for (nr_libs = 0, so = so_list_head; so; so = so->next)
     {
       if (so->so_name[0])
 	{
-	  if (!header_done)
-	    {
-	      printf_unfiltered ("%-*s%-*s%-12s%s\n", addr_width, "From",
-				 addr_width, "To", "Syms Read",
-				 "Shared Object Library");
-	      header_done++;
-	    }
-
-	  printf_unfiltered ("%-*s", addr_width,
-			     so->addr_high != 0
-			       ? hex_string_custom (
-			           (LONGEST) so->addr_low,
-	                           addr_width - 4)
-			       : "");
-	  printf_unfiltered ("%-*s", addr_width,
-			     so->addr_high != 0
-			       ? hex_string_custom (
-			           (LONGEST) so->addr_high,
-	                           addr_width - 4)
-			       : "");
-	  printf_unfiltered ("%-12s", so->symbols_loaded ? "Yes" : "No");
-	  printf_unfiltered ("%s\n", so->so_name);
+	  if (pattern && ! re_exec (so->so_name))
+	    continue;
+	  ++nr_libs;
 	}
     }
-  if (so_list_head == NULL)
+
+  table_cleanup =
+    make_cleanup_ui_out_table_begin_end (uiout, 4, nr_libs,
+					 "SharedLibraryTable");
+
+  /* The "- 1" is because ui_out adds one space between columns.  */
+  ui_out_table_header (uiout, addr_width - 1, ui_left, "from", "From");
+  ui_out_table_header (uiout, addr_width - 1, ui_left, "to", "To");
+  ui_out_table_header (uiout, 12 - 1, ui_left, "syms-read", "Syms Read");
+  ui_out_table_header (uiout, 0, ui_noalign,
+		       "name", "Shared Object Library");
+
+  ui_out_table_body (uiout);
+
+  for (so = so_list_head; so; so = so->next)
     {
-      printf_unfiltered (_("No shared libraries loaded at this time.\n"));
+      struct cleanup *lib_cleanup;
+
+      if (! so->so_name[0])
+	continue;
+      if (pattern && ! re_exec (so->so_name))
+	continue;
+
+      lib_cleanup = make_cleanup_ui_out_tuple_begin_end (uiout, "lib");
+
+      if (so->addr_high != 0)
+	{
+	  ui_out_field_core_addr (uiout, "from", gdbarch, so->addr_low);
+	  ui_out_field_core_addr (uiout, "to", gdbarch, so->addr_high);
+	}
+      else
+	{
+	  ui_out_field_skip (uiout, "from");
+	  ui_out_field_skip (uiout, "to");
+	}
+
+      if (! ui_out_is_mi_like_p (interp_ui_out (top_level_interpreter ()))
+	  && so->symbols_loaded
+	  && !objfile_has_partial_symbols (so->objfile)
+	  && !objfile_has_full_symbols (so->objfile))
+	{
+	  so_missing_debug_info = 1;
+	  ui_out_field_string (uiout, "syms-read", "Yes (*)");
+	}
+      else
+	ui_out_field_string (uiout, "syms-read", 
+			     so->symbols_loaded ? "Yes" : "No");
+
+      ui_out_field_string (uiout, "name", so->so_name);
+
+      ui_out_text (uiout, "\n");
+
+      do_cleanups (lib_cleanup);
+    }
+
+  do_cleanups (table_cleanup);
+
+  if (nr_libs == 0)
+    {
+      if (pattern)
+	ui_out_message (uiout, 0,
+			_("No shared libraries matched.\n"));
+      else
+	ui_out_message (uiout, 0,
+			_("No shared libraries loaded at this time.\n"));
+    }
+  else
+    {
+      if (so_missing_debug_info)
+	ui_out_message (uiout, 0,
+			_("(*): Shared library is missing debugging information.\n"));
     }
 }
 
@@ -882,11 +937,11 @@ solib_contains_address_p (const struct so_list *const solib,
  */
 
 char *
-solib_name_from_address (CORE_ADDR address)
+solib_name_from_address (struct program_space *pspace, CORE_ADDR address)
 {
-  struct so_list *so = 0;	/* link map state variable */
+  struct so_list *so = NULL;
 
-  for (so = so_list_head; so; so = so->next)
+  for (so = pspace->so_list; so; so = so->next)
     if (solib_contains_address_p (so, address))
       return (so->so_name);
 

@@ -1,6 +1,6 @@
 /* m32c opcode support.  -*- C -*-
 
-   Copyright 2005, 2007 Free Software Foundation, Inc.
+   Copyright 2005, 2007, 2009 Free Software Foundation, Inc.
 
    Contributed by Red Hat Inc; developed under contract from Renesas
 
@@ -40,8 +40,8 @@
 /* -- opc.h */
 
 /* Needed for RTL's 'ext' and 'trunc' operators.  */
-#include "cgen-types.h"
-#include "cgen-ops.h"
+#include "cgen/basic-modes.h"
+#include "cgen/basic-ops.h"
 
 /* We can't use the default hash size because many bits are used by
    operands.  */

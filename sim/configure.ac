@@ -1,4 +1,5 @@
 dnl Process this file with autoconf to produce a configure script.
+m4_include([../config/override.m4])
 AC_PREREQ(2.59)dnl
 AC_INIT(Makefile.in)
 
@@ -94,6 +95,10 @@ if test "${enable_sim}" != no; then
 	   ;;
        mcore-*-*)
            AC_CONFIG_SUBDIRS(mcore)
+	   testsuite=yes
+	   ;;
+       microblaze-*-*)
+           AC_CONFIG_SUBDIRS(microblaze)
 	   testsuite=yes
 	   ;;
        mips*-*-*)

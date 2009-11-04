@@ -546,13 +546,75 @@ static int remote_async_mask_value = 1;
    this can go away.  */
 static int wait_forever_enabled_p = 1;
 
+/* Allow the user to specify what sequence to send to the remote
+   when he requests a program interruption: Although ^C is usually
+   what remote systems expect (this is the default, here), it is
+   sometimes preferable to send a break.  On other systems such
+   as the Linux kernel, a break followed by g, which is Magic SysRq g
+   is required in order to interrupt the execution.  */
+const char interrupt_sequence_control_c[] = "Ctrl-C";
+const char interrupt_sequence_break[] = "BREAK";
+const char interrupt_sequence_break_g[] = "BREAK-g";
+static const char *interrupt_sequence_modes[] =
+  {
+    interrupt_sequence_control_c,
+    interrupt_sequence_break,
+    interrupt_sequence_break_g,
+    NULL
+  };
+static const char *interrupt_sequence_mode = interrupt_sequence_control_c;
 
-/* This variable chooses whether to send a ^C or a break when the user
-   requests program interruption.  Although ^C is usually what remote
-   systems expect, and that is the default here, sometimes a break is
-   preferable instead.  */
+static void
+show_interrupt_sequence (struct ui_file *file, int from_tty,
+			 struct cmd_list_element *c,
+			 const char *value)
+{
+  if (interrupt_sequence_mode == interrupt_sequence_control_c)
+    fprintf_filtered (file,
+		      _("Send the ASCII ETX character (Ctrl-c) "
+			"to the remote target to interrupt the "
+			"execution of the program.\n"));
+  else if (interrupt_sequence_mode == interrupt_sequence_break)
+    fprintf_filtered (file,
+		      _("send a break signal to the remote target "
+			"to interrupt the execution of the program.\n"));
+  else if (interrupt_sequence_mode == interrupt_sequence_break_g)
+    fprintf_filtered (file,
+		      _("Send a break signal and 'g' a.k.a. Magic SysRq g to "
+			"the remote target to interrupt the execution "
+			"of Linux kernel.\n"));
+  else
+    internal_error (__FILE__, __LINE__,
+		    _("Invalid value for interrupt_sequence_mode: %s."),
+		    interrupt_sequence_mode);
+}
 
+/* This boolean variable specifies whether interrupt_sequence is sent
+   to the remote target when gdb connects to it.
+   This is mostly needed when you debug the Linux kernel: The Linux kernel
+   expects BREAK g which is Magic SysRq g for connecting gdb.  */
+static int interrupt_on_connect = 0;
+
+/* This variable is used to implement the "set/show remotebreak" commands.
+   Since these commands are now deprecated in favor of "set/show remote
+   interrupt-sequence", it no longer has any effect on the code.  */
 static int remote_break;
+
+static void
+set_remotebreak (char *args, int from_tty, struct cmd_list_element *c)
+{
+  if (remote_break)
+    interrupt_sequence_mode = interrupt_sequence_break;
+  else
+    interrupt_sequence_mode = interrupt_sequence_control_c;
+}
+
+static void
+show_remotebreak (struct ui_file *file, int from_tty,
+		  struct cmd_list_element *c,
+		  const char *value)
+{
+}
 
 /* Descriptor for I/O to remote machine.  Initialize it to NULL so that
    remote_open knows that we don't have a file open when the program
@@ -865,6 +927,9 @@ add_packet_config_cmd (struct packet_config *config, const char *name,
 				set_remote_protocol_packet_cmd,
 				show_remote_protocol_packet_cmd,
 				&remote_set_cmdlist, &remote_show_cmdlist);
+  /* The command code copies the documentation strings.  */
+  xfree (set_doc);
+  xfree (show_doc);
   /* set/show remote NAME-packet {auto,on,off} -- legacy.  */
   if (legacy)
     {
@@ -997,6 +1062,8 @@ enum {
   PACKET_qXfer_siginfo_write,
   PACKET_qAttached,
   PACKET_ConditionalTracepoints,
+  PACKET_bc,
+  PACKET_bs,
   PACKET_MAX
 };
 
@@ -1170,7 +1237,6 @@ remote_query_attached (int pid)
 static struct inferior *
 remote_add_inferior (int pid, int attached)
 {
-  struct remote_state *rs = get_remote_state ();
   struct inferior *inf;
 
   /* Check whether this process we're learning about is to be
@@ -1179,7 +1245,26 @@ remote_add_inferior (int pid, int attached)
   if (attached == -1)
     attached = remote_query_attached (pid);
 
-  inf = add_inferior (pid);
+  if (gdbarch_has_global_solist (target_gdbarch))
+    {
+      /* If the target shares code across all inferiors, then every
+	 attach adds a new inferior.  */
+      inf = add_inferior (pid);
+
+      /* ... and every inferior is bound to the same program space.
+	 However, each inferior may still have its own address
+	 space.  */
+      inf->aspace = maybe_new_address_space ();
+      inf->pspace = current_program_space;
+    }
+  else
+    {
+      /* In the traditional debugging scenario, there's a 1-1 match
+	 between program/address spaces.  We simply bind the inferior
+	 to the program space's address space.  */
+      inf = current_inferior ();
+      inferior_appeared (inf, pid);
+    }
 
   inf->attach_flag = attached;
 
@@ -1207,8 +1292,6 @@ remote_add_thread (ptid_t ptid, int running)
 static void
 remote_notice_new_inferior (ptid_t currthread, int running)
 {
-  struct remote_state *rs = get_remote_state ();
-
   /* If this is a new thread, add it to GDB's thread list.
      If we leave it up to WFI to do this, bad things will happen.  */
 
@@ -1426,7 +1509,6 @@ static int
 remote_thread_alive (struct target_ops *ops, ptid_t ptid)
 {
   struct remote_state *rs = get_remote_state ();
-  int tid = ptid_get_tid (ptid);
   char *p, *endp;
 
   if (ptid_equal (ptid, magic_null_ptid))
@@ -1602,7 +1684,6 @@ read_ptid (char *buf, char **obuf)
   char *p = buf;
   char *pp;
   ULONGEST pid = 0, tid = 0;
-  ptid_t ptid;
 
   if (*p == 'p')
     {
@@ -2198,9 +2279,6 @@ static ptid_t
 remote_current_thread (ptid_t oldpid)
 {
   struct remote_state *rs = get_remote_state ();
-  char *p = rs->buf;
-  int tid;
-  int pid;
 
   putpkt ("qC");
   getpkt (&rs->buf, &rs->buf_size, 0);
@@ -2588,6 +2666,25 @@ struct start_remote_args
   int extended_p;
 };
 
+/* Send interrupt_sequence to remote target.  */
+static void
+send_interrupt_sequence ()
+{
+  if (interrupt_sequence_mode == interrupt_sequence_control_c)
+    serial_write (remote_desc, "\x03", 1);
+  else if (interrupt_sequence_mode == interrupt_sequence_break)
+    serial_send_break (remote_desc);
+  else if (interrupt_sequence_mode == interrupt_sequence_break_g)
+    {
+      serial_send_break (remote_desc);
+      serial_write (remote_desc, "g", 1);
+    }
+  else
+    internal_error (__FILE__, __LINE__,
+		    _("Invalid value for interrupt_sequence_mode: %s."),
+		    interrupt_sequence_mode);
+}
+
 static void
 remote_start_remote (struct ui_out *uiout, void *opaque)
 {
@@ -2600,6 +2697,9 @@ remote_start_remote (struct ui_out *uiout, void *opaque)
 
   /* Ack any packet which the remote side has already sent.  */
   serial_write (remote_desc, "+", 1);
+
+  if (interrupt_on_connect)
+    send_interrupt_sequence ();
 
   /* The first packet we send to the target is the optional "supported
      packets" request.  If the target can answer this, it will tell us
@@ -2641,6 +2741,10 @@ remote_start_remote (struct ui_out *uiout, void *opaque)
   /* Next, if the target can specify a description, read it.  We do
      this before anything involving memory or registers.  */
   target_find_description ();
+
+  /* Next, now that we know something about the target, update the
+     address spaces in the program spaces.  */
+  update_address_spaces ();
 
   /* On OSs where the list of libraries is global to all
      processes, we fetch them early.  */
@@ -3056,6 +3160,10 @@ static struct protocol_feature remote_protocol_features[] = {
     PACKET_qXfer_siginfo_write },
   { "ConditionalTracepoints", PACKET_DISABLE, remote_cond_tracepoint_feature,
     PACKET_ConditionalTracepoints },
+  { "ReverseContinue", PACKET_DISABLE, remote_supported_packet,
+    PACKET_bc },
+  { "ReverseStep", PACKET_DISABLE, remote_supported_packet,
+    PACKET_bs },
 };
 
 static void
@@ -3485,7 +3593,7 @@ extended_remote_attach_1 (struct target_ops *target, char *args, int from_tty)
     error (_("Attaching to %s failed"),
 	   target_pid_to_str (pid_to_ptid (pid)));
 
-  remote_add_inferior (pid, 1);
+  set_current_inferior (remote_add_inferior (pid, 1));
 
   inferior_ptid = pid_to_ptid (pid);
 
@@ -3806,8 +3914,10 @@ remote_resume (struct target_ops *ops,
   remote_pass_signals ();
 
   /* The vCont packet doesn't need to specify threads via Hc.  */
-  if (remote_vcont_resume (ptid, step, siggnal))
-    goto done;
+  /* No reverse support (yet) for vCont.  */
+  if (execution_direction != EXEC_REVERSE)
+    if (remote_vcont_resume (ptid, step, siggnal))
+      goto done;
 
   /* All other supported resume packets do use Hc, so set the continue
      thread.  */
@@ -3823,6 +3933,14 @@ remote_resume (struct target_ops *ops,
       if (info_verbose && siggnal != TARGET_SIGNAL_0)
 	warning (" - Can't pass signal %d to target in reverse: ignored.\n",
 		 siggnal);
+
+      if (step 
+	  && remote_protocol_packets[PACKET_bs].support == PACKET_DISABLE)
+	error (_("Remote reverse-step not supported."));
+      if (!step
+	  && remote_protocol_packets[PACKET_bc].support == PACKET_DISABLE)
+	error (_("Remote reverse-continue not supported."));
+
       strcpy (buf, step ? "bs" : "bc");
     }
   else if (siggnal != TARGET_SIGNAL_0)
@@ -3954,7 +4072,6 @@ remote_stop_ns (ptid_t ptid)
   struct remote_state *rs = get_remote_state ();
   char *p = rs->buf;
   char *endp = rs->buf + get_remote_packet_size ();
-  struct stop_reply *reply, *next;
 
   if (remote_protocol_packets[PACKET_vCont].support == PACKET_SUPPORT_UNKNOWN)
     remote_vcont_probe (rs);
@@ -4011,12 +4128,8 @@ remote_stop_as (ptid_t ptid)
   if (rs->cached_wait_status)
     return;
 
-  /* Send a break or a ^C, depending on user preference.  */
-
-  if (remote_break)
-    serial_send_break (remote_desc);
-  else
-    serial_write (remote_desc, "\003", 1);
+  /* Send interrupt_sequence to remote target.  */
+  send_interrupt_sequence ();
 }
 
 /* This is the generic stop called via the target vector. When a target
@@ -4309,122 +4422,118 @@ remote_parse_stop_reply (char *buf, struct stop_reply *event)
   switch (buf[0])
     {
     case 'T':		/* Status with PC, SP, FP, ...	*/
-      {
-	gdb_byte regs[MAX_REGISTER_SIZE];
+      /* Expedited reply, containing Signal, {regno, reg} repeat.  */
+      /*  format is:  'Tssn...:r...;n...:r...;n...:r...;#cc', where
+	    ss = signal number
+	    n... = register number
+	    r... = register contents
+      */
 
-	/* Expedited reply, containing Signal, {regno, reg} repeat.  */
-	/*  format is:  'Tssn...:r...;n...:r...;n...:r...;#cc', where
-	   ss = signal number
-	   n... = register number
-	   r... = register contents
-	*/
+      p = &buf[3];	/* after Txx */
+      while (*p)
+	{
+	  char *p1;
+	  char *p_temp;
+	  int fieldsize;
+	  LONGEST pnum = 0;
 
-	p = &buf[3];	/* after Txx */
-	while (*p)
-	  {
-	    char *p1;
-	    char *p_temp;
-	    int fieldsize;
-	    LONGEST pnum = 0;
+	  /* If the packet contains a register number, save it in
+	     pnum and set p1 to point to the character following it.
+	     Otherwise p1 points to p.  */
 
-	    /* If the packet contains a register number, save it in
-	       pnum and set p1 to point to the character following it.
-	       Otherwise p1 points to p.  */
+	  /* If this packet is an awatch packet, don't parse the 'a'
+	     as a register number.  */
 
-	    /* If this packet is an awatch packet, don't parse the 'a'
-	       as a register number.  */
+	  if (strncmp (p, "awatch", strlen("awatch")) != 0)
+	    {
+	      /* Read the ``P'' register number.  */
+	      pnum = strtol (p, &p_temp, 16);
+	      p1 = p_temp;
+	    }
+	  else
+	    p1 = p;
 
-	    if (strncmp (p, "awatch", strlen("awatch")) != 0)
-	      {
-		/* Read the ``P'' register number.  */
-		pnum = strtol (p, &p_temp, 16);
-		p1 = p_temp;
-	      }
-	    else
-	      p1 = p;
-
-	    if (p1 == p)	/* No register number present here.  */
-	      {
-		p1 = strchr (p, ':');
-		if (p1 == NULL)
-		  error (_("Malformed packet(a) (missing colon): %s\n\
+	  if (p1 == p)	/* No register number present here.  */
+	    {
+	      p1 = strchr (p, ':');
+	      if (p1 == NULL)
+		error (_("Malformed packet(a) (missing colon): %s\n\
 Packet: '%s'\n"),
-			 p, buf);
-		if (strncmp (p, "thread", p1 - p) == 0)
-		  event->ptid = read_ptid (++p1, &p);
-		else if ((strncmp (p, "watch", p1 - p) == 0)
-			 || (strncmp (p, "rwatch", p1 - p) == 0)
-			 || (strncmp (p, "awatch", p1 - p) == 0))
-		  {
-		    event->stopped_by_watchpoint_p = 1;
-		    p = unpack_varlen_hex (++p1, &addr);
-		    event->watch_data_address = (CORE_ADDR) addr;
-		  }
-		else if (strncmp (p, "library", p1 - p) == 0)
-		  {
-		    p1++;
-		    p_temp = p1;
-		    while (*p_temp && *p_temp != ';')
-		      p_temp++;
+		       p, buf);
+	      if (strncmp (p, "thread", p1 - p) == 0)
+		event->ptid = read_ptid (++p1, &p);
+	      else if ((strncmp (p, "watch", p1 - p) == 0)
+		       || (strncmp (p, "rwatch", p1 - p) == 0)
+		       || (strncmp (p, "awatch", p1 - p) == 0))
+		{
+		  event->stopped_by_watchpoint_p = 1;
+		  p = unpack_varlen_hex (++p1, &addr);
+		  event->watch_data_address = (CORE_ADDR) addr;
+		}
+	      else if (strncmp (p, "library", p1 - p) == 0)
+		{
+		  p1++;
+		  p_temp = p1;
+		  while (*p_temp && *p_temp != ';')
+		    p_temp++;
 
-		    event->solibs_changed = 1;
+		  event->solibs_changed = 1;
+		  p = p_temp;
+		}
+	      else if (strncmp (p, "replaylog", p1 - p) == 0)
+		{
+		  /* NO_HISTORY event.
+		     p1 will indicate "begin" or "end", but
+		     it makes no difference for now, so ignore it.  */
+		  event->replay_event = 1;
+		  p_temp = strchr (p1 + 1, ';');
+		  if (p_temp)
 		    p = p_temp;
-		  }
-		else if (strncmp (p, "replaylog", p1 - p) == 0)
-		  {
-		    /* NO_HISTORY event.
-		       p1 will indicate "begin" or "end", but
-		       it makes no difference for now, so ignore it.  */
-		    event->replay_event = 1;
-		    p_temp = strchr (p1 + 1, ';');
-		    if (p_temp)
-		      p = p_temp;
-		  }
-		else
-		  {
-		    /* Silently skip unknown optional info.  */
-		    p_temp = strchr (p1 + 1, ';');
-		    if (p_temp)
-		      p = p_temp;
-		  }
-	      }
-	    else
-	      {
-		struct packet_reg *reg = packet_reg_from_pnum (rsa, pnum);
-		cached_reg_t cached_reg;
+		}
+	      else
+		{
+		  /* Silently skip unknown optional info.  */
+		  p_temp = strchr (p1 + 1, ';');
+		  if (p_temp)
+		    p = p_temp;
+		}
+	    }
+	  else
+	    {
+	      struct packet_reg *reg = packet_reg_from_pnum (rsa, pnum);
+	      cached_reg_t cached_reg;
 
-		p = p1;
+	      p = p1;
 
-		if (*p != ':')
-		  error (_("Malformed packet(b) (missing colon): %s\n\
+	      if (*p != ':')
+		error (_("Malformed packet(b) (missing colon): %s\n\
 Packet: '%s'\n"),
-			 p, buf);
-		++p;
+		       p, buf);
+	      ++p;
 
-		if (reg == NULL)
-		  error (_("Remote sent bad register number %s: %s\n\
+	      if (reg == NULL)
+		error (_("Remote sent bad register number %s: %s\n\
 Packet: '%s'\n"),
-			 phex_nz (pnum, 0), p, buf);
+		       phex_nz (pnum, 0), p, buf);
 
-		cached_reg.num = reg->regnum;
+	      cached_reg.num = reg->regnum;
 
-		fieldsize = hex2bin (p, cached_reg.data,
-				     register_size (target_gdbarch,
-						    reg->regnum));
-		p += 2 * fieldsize;
-		if (fieldsize < register_size (target_gdbarch,
-					       reg->regnum))
-		  warning (_("Remote reply is too short: %s"), buf);
+	      fieldsize = hex2bin (p, cached_reg.data,
+				   register_size (target_gdbarch,
+						  reg->regnum));
+	      p += 2 * fieldsize;
+	      if (fieldsize < register_size (target_gdbarch,
+					     reg->regnum))
+		warning (_("Remote reply is too short: %s"), buf);
 
-		VEC_safe_push (cached_reg_t, event->regcache, &cached_reg);
-	      }
+	      VEC_safe_push (cached_reg_t, event->regcache, &cached_reg);
+	    }
 
-	    if (*p != ';')
-	      error (_("Remote register badly formatted: %s\nhere: %s"),
-		     buf, p);
-	    ++p;
-	  }
-      }
+	  if (*p != ';')
+	    error (_("Remote register badly formatted: %s\nhere: %s"),
+		   buf, p);
+	  ++p;
+	}
       /* fall through */
     case 'S':		/* Old style status, just signal only.  */
       if (event->solibs_changed)
@@ -4540,7 +4649,6 @@ static void
 remote_get_pending_stop_replies (void)
 {
   struct remote_state *rs = get_remote_state ();
-  int ret;
 
   if (pending_stop_reply)
     {
@@ -4634,8 +4742,6 @@ static ptid_t
 remote_wait_ns (ptid_t ptid, struct target_waitstatus *status, int options)
 {
   struct remote_state *rs = get_remote_state ();
-  struct remote_arch_state *rsa = get_remote_arch_state ();
-  ptid_t event_ptid = null_ptid;
   struct stop_reply *stop_reply;
   int ret;
 
@@ -4694,11 +4800,8 @@ static ptid_t
 remote_wait_as (ptid_t ptid, struct target_waitstatus *status, int options)
 {
   struct remote_state *rs = get_remote_state ();
-  struct remote_arch_state *rsa = get_remote_arch_state ();
   ptid_t event_ptid = null_ptid;
-  ULONGEST addr;
-  int solibs_changed = 0;
-  char *buf, *p;
+  char *buf;
   struct stop_reply *stop_reply;
 
  again:
@@ -4873,7 +4976,8 @@ fetch_register_using_p (struct regcache *regcache, struct packet_reg *reg)
   *p++ = 'p';
   p += hexnumstr (p, reg->pnum);
   *p++ = '\0';
-  remote_send (&rs->buf, &rs->buf_size);
+  putpkt (rs->buf);
+  getpkt (&rs->buf, &rs->buf_size, 0);
 
   buf = rs->buf;
 
@@ -4884,8 +4988,10 @@ fetch_register_using_p (struct regcache *regcache, struct packet_reg *reg)
     case PACKET_UNKNOWN:
       return 0;
     case PACKET_ERROR:
-      error (_("Could not fetch register \"%s\""),
-	     gdbarch_register_name (get_regcache_arch (regcache), reg->regnum));
+      error (_("Could not fetch register \"%s\"; remote failure reply '%s'"),
+	     gdbarch_register_name (get_regcache_arch (regcache), 
+				    reg->regnum), 
+	     buf);
     }
 
   /* If this register is unfetchable, tell the regcache.  */
@@ -4916,9 +5022,7 @@ static int
 send_g_packet (void)
 {
   struct remote_state *rs = get_remote_state ();
-  int i, buf_len;
-  char *p;
-  char *regs;
+  int buf_len;
 
   sprintf (rs->buf, "g");
   remote_send (&rs->buf, &rs->buf_size);
@@ -5049,7 +5153,6 @@ static void
 remote_fetch_registers (struct target_ops *ops,
 			struct regcache *regcache, int regnum)
 {
-  struct remote_state *rs = get_remote_state ();
   struct remote_arch_state *rsa = get_remote_arch_state ();
   int i;
 
@@ -5121,11 +5224,11 @@ remote_prepare_to_store (struct regcache *regcache)
    packet was not recognized.  */
 
 static int
-store_register_using_P (const struct regcache *regcache, struct packet_reg *reg)
+store_register_using_P (const struct regcache *regcache, 
+			struct packet_reg *reg)
 {
   struct gdbarch *gdbarch = get_regcache_arch (regcache);
   struct remote_state *rs = get_remote_state ();
-  struct remote_arch_state *rsa = get_remote_arch_state ();
   /* Try storing a single register.  */
   char *buf = rs->buf;
   gdb_byte regp[MAX_REGISTER_SIZE];
@@ -5141,15 +5244,16 @@ store_register_using_P (const struct regcache *regcache, struct packet_reg *reg)
   p = buf + strlen (buf);
   regcache_raw_collect (regcache, reg->regnum, regp);
   bin2hex (regp, p, register_size (gdbarch, reg->regnum));
-  remote_send (&rs->buf, &rs->buf_size);
+  putpkt (rs->buf);
+  getpkt (&rs->buf, &rs->buf_size, 0);
 
   switch (packet_ok (rs->buf, &remote_protocol_packets[PACKET_P]))
     {
     case PACKET_OK:
       return 1;
     case PACKET_ERROR:
-      error (_("Could not write register \"%s\""),
-	     gdbarch_register_name (gdbarch, reg->regnum));
+      error (_("Could not write register \"%s\"; remote failure reply '%s'"),
+	     gdbarch_register_name (gdbarch, reg->regnum), rs->buf);
     case PACKET_UNKNOWN:
       return 0;
     default:
@@ -5189,7 +5293,11 @@ store_registers_using_G (const struct regcache *regcache)
   /* remote_prepare_to_store insures that rsa->sizeof_g_packet gets
      updated.  */
   bin2hex (regs, p, rsa->sizeof_g_packet);
-  remote_send (&rs->buf, &rs->buf_size);
+  putpkt (rs->buf);
+  getpkt (&rs->buf, &rs->buf_size, 0);
+  if (packet_check_result (rs->buf) == PACKET_ERROR)
+    error (_("Could not write registers; remote failure reply '%s'"), 
+	   rs->buf);
 }
 
 /* Store register REGNUM, or all registers if REGNUM == -1, from the contents
@@ -5199,7 +5307,6 @@ static void
 remote_store_registers (struct target_ops *ops,
 			struct regcache *regcache, int regnum)
 {
-  struct remote_state *rs = get_remote_state ();
   struct remote_arch_state *rsa = get_remote_arch_state ();
   int i;
 
@@ -5962,13 +6069,12 @@ escape_buffer (const char *buf, int n)
   struct cleanup *old_chain;
   struct ui_file *stb;
   char *str;
-  long length;
 
   stb = mem_fileopen ();
   old_chain = make_cleanup_ui_file_delete (stb);
 
   fputstrn_unfiltered (buf, n, 0, stb);
-  str = ui_file_xstrdup (stb, &length);
+  str = ui_file_xstrdup (stb, NULL);
   do_cleanups (old_chain);
   return str;
 }
@@ -6690,7 +6796,6 @@ static int
 extended_remote_run (char *args)
 {
   struct remote_state *rs = get_remote_state ();
-  char *p;
   int len;
 
   /* If the user has disabled vRun support, or we have detected that
@@ -6777,11 +6882,14 @@ extended_remote_create_inferior_1 (char *exec_file, char *args,
       extended_remote_restart ();
     }
 
-  /* Clean up from the last time we ran, before we mark the target
-     running again.  This will mark breakpoints uninserted, and
-     get_offsets may insert breakpoints.  */
-  init_thread_list ();
-  init_wait_for_inferior ();
+  if (!have_inferiors ())
+    {
+      /* Clean up from the last time we ran, before we mark the target
+	 running again.  This will mark breakpoints uninserted, and
+	 get_offsets may insert breakpoints.  */
+      init_thread_list ();
+      init_wait_for_inferior ();
+    }
 
   /* Now mark the inferior as running before we do anything else.  */
   inferior_ptid = magic_null_ptid;
@@ -6862,7 +6970,6 @@ remote_remove_breakpoint (struct gdbarch *gdbarch,
 {
   CORE_ADDR addr = bp_tgt->placed_address;
   struct remote_state *rs = get_remote_state ();
-  int bp_size;
 
   if (remote_protocol_packets[PACKET_Z0].support != PACKET_DISABLE)
     {
@@ -7228,7 +7335,6 @@ remote_write_qxfer (struct target_ops *ops, const char *object_name,
 {
   int i, buf_len;
   ULONGEST n;
-  gdb_byte *wbuf;
   struct remote_state *rs = get_remote_state ();
   int max_size = get_memory_write_packet_size (); 
 
@@ -7273,7 +7379,6 @@ remote_read_qxfer (struct target_ops *ops, const char *object_name,
   static ULONGEST finished_offset;
 
   struct remote_state *rs = get_remote_state ();
-  unsigned int total = 0;
   LONGEST i, n, packet_len;
 
   if (packet->support == PACKET_DISABLE)
@@ -7854,26 +7959,39 @@ remote_pid_to_str (struct target_ops *ops, ptid_t ptid)
   static char buf[64];
   struct remote_state *rs = get_remote_state ();
 
-  if (ptid_equal (magic_null_ptid, ptid))
+  if (ptid_is_pid (ptid))
     {
-      xsnprintf (buf, sizeof buf, "Thread <main>");
-      return buf;
-    }
-  else if (remote_multi_process_p (rs)
-	   && ptid_get_tid (ptid) != 0 && ptid_get_pid (ptid) != 0)
-    {
-      xsnprintf (buf, sizeof buf, "Thread %d.%ld",
-		 ptid_get_pid (ptid), ptid_get_tid (ptid));
-      return buf;
-    }
-  else if (ptid_get_tid (ptid) != 0)
-    {
-      xsnprintf (buf, sizeof buf, "Thread %ld",
-		 ptid_get_tid (ptid));
-      return buf;
-    }
+      /* Printing an inferior target id.  */
 
-  return normal_pid_to_str (ptid);
+      /* When multi-process extensions are off, there's no way in the
+	 remote protocol to know the remote process id, if there's any
+	 at all.  There's one exception --- when we're connected with
+	 target extended-remote, and we manually attached to a process
+	 with "attach PID".  We don't record anywhere a flag that
+	 allows us to distinguish that case from the case of
+	 connecting with extended-remote and the stub already being
+	 attached to a process, and reporting yes to qAttached, hence
+	 no smart special casing here.  */
+      if (!remote_multi_process_p (rs))
+	{
+	  xsnprintf (buf, sizeof buf, "Remote target");
+	  return buf;
+	}
+
+      return normal_pid_to_str (ptid);
+    }
+  else
+    {
+      if (ptid_equal (magic_null_ptid, ptid))
+	xsnprintf (buf, sizeof buf, "Thread <main>");
+      else if (remote_multi_process_p (rs))
+	xsnprintf (buf, sizeof buf, "Thread %d.%ld",
+		   ptid_get_pid (ptid), ptid_get_tid (ptid));
+      else
+	xsnprintf (buf, sizeof buf, "Thread %ld",
+		   ptid_get_tid (ptid));
+      return buf;
+    }
 }
 
 /* Get the address of the thread local variable in OBJFILE which is
@@ -8604,7 +8722,7 @@ void
 remote_file_get (const char *remote_file, const char *local_file, int from_tty)
 {
   struct cleanup *back_to, *close_cleanup;
-  int retcode, fd, remote_errno, bytes, io_size;
+  int fd, remote_errno, bytes, io_size;
   FILE *file;
   gdb_byte *buffer;
   ULONGEST offset;
@@ -8734,12 +8852,14 @@ remote_command (char *args, int from_tty)
   help_list (remote_cmdlist, "remote ", -1, gdb_stdout);
 }
 
-static int remote_target_can_reverse = 1;
-
 static int
 remote_can_execute_reverse (void)
 {
-  return remote_target_can_reverse;
+  if (remote_protocol_packets[PACKET_bs].support == PACKET_ENABLE
+      || remote_protocol_packets[PACKET_bc].support == PACKET_ENABLE)
+    return 1;
+  else
+    return 0;
 }
 
 static int
@@ -8979,6 +9099,8 @@ void
 _initialize_remote (void)
 {
   struct remote_state *rs;
+  struct cmd_list_element *cmd;
+  char *cmd_name;
 
   /* architecture specific data */
   remote_gdbarch_data_handle =
@@ -9046,8 +9168,31 @@ terminating `#' character and checksum."),
 Set whether to send break if interrupted."), _("\
 Show whether to send break if interrupted."), _("\
 If set, a break, instead of a cntrl-c, is sent to the remote target."),
-			   NULL, NULL, /* FIXME: i18n: Whether to send break if interrupted is %s.  */
+			   set_remotebreak, show_remotebreak,
 			   &setlist, &showlist);
+  cmd_name = "remotebreak";
+  cmd = lookup_cmd (&cmd_name, setlist, "", -1, 1);
+  deprecate_cmd (cmd, "set remote interrupt-sequence");
+  cmd_name = "remotebreak"; /* needed because lookup_cmd updates the pointer */
+  cmd = lookup_cmd (&cmd_name, showlist, "", -1, 1);
+  deprecate_cmd (cmd, "show remote interrupt-sequence");
+
+  add_setshow_enum_cmd ("interrupt-sequence", class_support,
+			interrupt_sequence_modes, &interrupt_sequence_mode, _("\
+Set interrupt sequence to remote target."), _("\
+Show interrupt sequence to remote target."), _("\
+Valid value is \"Ctrl-C\", \"BREAK\" or \"BREAK-g\". The default is \"Ctrl-C\"."),
+			NULL, show_interrupt_sequence,
+			&remote_set_cmdlist,
+			&remote_show_cmdlist);
+
+  add_setshow_boolean_cmd ("interrupt-on-connect", class_support,
+			   &interrupt_on_connect, _("\
+Set whether interrupt-sequence is sent to remote target when gdb connects to."), _("		\
+Show whether interrupt-sequence is sent to remote target when gdb connects to."), _("		\
+If set, interrupt sequence is sent to remote target."),
+			   NULL, NULL,
+			   &remote_set_cmdlist, &remote_show_cmdlist);
 
   /* Install commands for configuring memory read/write packets.  */
 
@@ -9168,6 +9313,12 @@ Show the maximum size of the address (in bits) in a memory packet."), NULL,
   add_packet_config_cmd (&remote_protocol_packets[PACKET_qGetTLSAddr],
 			 "qGetTLSAddr", "get-thread-local-storage-address",
 			 0);
+
+  add_packet_config_cmd (&remote_protocol_packets[PACKET_bc],
+			 "bc", "reverse-continue", 0);
+
+  add_packet_config_cmd (&remote_protocol_packets[PACKET_bs],
+			 "bs", "reverse-step", 0);
 
   add_packet_config_cmd (&remote_protocol_packets[PACKET_qSupported],
 			 "qSupported", "supported-packets", 0);

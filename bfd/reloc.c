@@ -1,6 +1,6 @@
 /* BFD support for handling relocation entries.
    Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999,
-   2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008
+   2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
    Written by Cygnus Support.
 
@@ -4052,6 +4052,57 @@ ENUMDOC
   instructions
 
 ENUM
+  BFD_RELOC_RX_NEG8
+ENUMX
+  BFD_RELOC_RX_NEG16
+ENUMX
+  BFD_RELOC_RX_NEG24
+ENUMX
+  BFD_RELOC_RX_NEG32
+ENUMX
+  BFD_RELOC_RX_16_OP
+ENUMX
+  BFD_RELOC_RX_24_OP
+ENUMX
+  BFD_RELOC_RX_32_OP
+ENUMX
+  BFD_RELOC_RX_8U
+ENUMX
+  BFD_RELOC_RX_16U
+ENUMX
+  BFD_RELOC_RX_24U
+ENUMX
+  BFD_RELOC_RX_DIR3U_PCREL
+ENUMX
+  BFD_RELOC_RX_DIFF
+ENUMX
+  BFD_RELOC_RX_GPRELB
+ENUMX
+  BFD_RELOC_RX_GPRELW
+ENUMX
+  BFD_RELOC_RX_GPRELL
+ENUMX
+  BFD_RELOC_RX_SYM
+ENUMX
+  BFD_RELOC_RX_OP_SUBTRACT
+ENUMX
+  BFD_RELOC_RX_ABS8
+ENUMX
+  BFD_RELOC_RX_ABS16
+ENUMX
+  BFD_RELOC_RX_ABS32
+ENUMX
+  BFD_RELOC_RX_ABS16U
+ENUMX
+  BFD_RELOC_RX_ABS16UW
+ENUMX
+  BFD_RELOC_RX_ABS16UL
+ENUMX
+  BFD_RELOC_RX_RELAX
+ENUMDOC
+  Renesas RX Relocations.
+
+ENUM
   BFD_RELOC_390_12
 ENUMDOC
    Direct 12 bit.
@@ -5193,6 +5244,74 @@ ENUM
 ENUMDOC
  Mach-O generic relocations.
 
+ENUM
+  BFD_RELOC_MICROBLAZE_32_LO
+ENUMDOC
+  This is a 32 bit reloc for the microblaze that stores the 
+  low 16 bits of a value
+ENUM
+  BFD_RELOC_MICROBLAZE_32_LO_PCREL
+ENUMDOC
+  This is a 32 bit pc-relative reloc for the microblaze that 
+  stores the low 16 bits of a value
+ENUM
+  BFD_RELOC_MICROBLAZE_32_ROSDA
+ENUMDOC
+  This is a 32 bit reloc for the microblaze that stores a 
+  value relative to the read-only small data area anchor
+ENUM
+  BFD_RELOC_MICROBLAZE_32_RWSDA
+ENUMDOC
+  This is a 32 bit reloc for the microblaze that stores a 
+  value relative to the read-write small data area anchor
+ENUM
+  BFD_RELOC_MICROBLAZE_32_SYM_OP_SYM
+ENUMDOC
+  This is a 32 bit reloc for the microblaze to handle 
+  expressions of the form "Symbol Op Symbol"
+ENUM
+  BFD_RELOC_MICROBLAZE_64_NONE
+ENUMDOC
+  This is a 64 bit reloc that stores the 32 bit pc relative 
+  value in two words (with an imm instruction).  No relocation is 
+  done here - only used for relaxing
+ENUM
+  BFD_RELOC_MICROBLAZE_64_GOTPC
+ENUMDOC
+  This is a 64 bit reloc that stores the 32 bit pc relative 
+  value in two words (with an imm instruction).  The relocation is
+  PC-relative GOT offset
+ENUM
+  BFD_RELOC_MICROBLAZE_64_GOT
+ENUMDOC
+  This is a 64 bit reloc that stores the 32 bit pc relative 
+  value in two words (with an imm instruction).  The relocation is
+  GOT offset
+ENUM
+  BFD_RELOC_MICROBLAZE_64_PLT
+ENUMDOC
+  This is a 64 bit reloc that stores the 32 bit pc relative 
+  value in two words (with an imm instruction).  The relocation is
+  PC-relative offset into PLT
+ENUM
+  BFD_RELOC_MICROBLAZE_64_GOTOFF
+ENUMDOC
+  This is a 64 bit reloc that stores the 32 bit GOT relative 
+  value in two words (with an imm instruction).  The relocation is
+  relative offset from _GLOBAL_OFFSET_TABLE_
+ENUM
+  BFD_RELOC_MICROBLAZE_32_GOTOFF
+ENUMDOC
+  This is a 32 bit reloc that stores the 32 bit GOT relative 
+  value in a word.  The relocation is relative offset from 
+  _GLOBAL_OFFSET_TABLE_
+ENUM
+  BFD_RELOC_MICROBLAZE_COPY
+ENUMDOC
+  This is used to tell the dynamic linker to copy the value out of
+  the dynamic object into the runtime process image.
+
+
 ENDSENUM
   BFD_RELOC_UNUSED
 CODE_FRAGMENT
@@ -5407,7 +5526,7 @@ bfd_generic_get_relocated_section_contents (bfd *abfd,
   if (reloc_size == 0)
     return data;
 
-  reloc_vector = bfd_malloc (reloc_size);
+  reloc_vector = (arelent **) bfd_malloc (reloc_size);
   if (reloc_vector == NULL)
     return NULL;
 

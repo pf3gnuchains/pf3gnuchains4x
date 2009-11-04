@@ -40,6 +40,12 @@
 #include <pwd.h>
 #include <sys/types.h>
 #include <dirent.h>
+#include <sys/stat.h>
+#include <sys/vfs.h>
+
+#ifndef SPUFS_MAGIC
+#define SPUFS_MAGIC 0x23c9b64e
+#endif
 
 #ifndef PTRACE_GETSIGINFO
 # define PTRACE_GETSIGINFO 0x4202
@@ -255,8 +261,14 @@ linux_add_process (int pid, int attached)
 static void
 linux_remove_process (struct process_info *process)
 {
-  free (process->private->arch_private);
-  free (process->private);
+  struct process_info_private *priv = process->private;
+
+#ifdef USE_THREAD_DB
+  thread_db_free (process);
+#endif
+
+  free (priv->arch_private);
+  free (priv);
   remove_process (process);
 }
 
@@ -589,7 +601,7 @@ linux_kill_one_lwp (struct inferior_list_entry *entry, void *args)
      the children get a chance to be reaped, it will remain a zombie
      forever.  */
 
-  if (last_thread_of_process_p (thread))
+  if (lwpid_of (lwp) == pid)
     {
       if (debug_threads)
 	fprintf (stderr, "lkop: is last of process %s\n",
@@ -1116,7 +1128,7 @@ linux_wait_for_event_1 (ptid_t ptid, int *wstat, int options)
 	  && !event_child->stepping
 	  && (
 #ifdef USE_THREAD_DB
-	      (current_process ()->private->thread_db_active
+	      (current_process ()->private->thread_db != NULL
 	       && (WSTOPSIG (*wstat) == __SIGRTMIN
 		   || WSTOPSIG (*wstat) == __SIGRTMIN + 1))
 	      ||
@@ -2394,7 +2406,16 @@ linux_write_memory (CORE_ADDR memaddr, const unsigned char *myaddr, int len)
 
   if (debug_threads)
     {
-      fprintf (stderr, "Writing %02x to %08lx\n", (unsigned)myaddr[0], (long)memaddr);
+      /* Dump up to four bytes.  */
+      unsigned int val = * (unsigned int *) myaddr;
+      if (len == 1)
+	val = val & 0xff;
+      else if (len == 2)
+	val = val & 0xffff;
+      else if (len == 3)
+	val = val & 0xffffff;
+      fprintf (stderr, "Writing %0*x to 0x%08lx\n", 2 * ((len < 4) ? len : 4),
+	       val, (long)memaddr);
     }
 
   /* Fill start and end extra bytes of buffer with existing memory data.  */
@@ -2627,11 +2648,10 @@ linux_look_up_symbols (void)
 #ifdef USE_THREAD_DB
   struct process_info *proc = current_process ();
 
-  if (proc->private->thread_db_active)
+  if (proc->private->thread_db != NULL)
     return;
 
-  proc->private->thread_db_active
-    = thread_db_init (!linux_supports_tracefork_flag);
+  thread_db_init (!linux_supports_tracefork_flag);
 #endif
 }
 
@@ -3025,6 +3045,100 @@ linux_supports_multi_process (void)
   return 1;
 }
 
+
+/* Enumerate spufs IDs for process PID.  */
+static int
+spu_enumerate_spu_ids (long pid, unsigned char *buf, CORE_ADDR offset, int len)
+{
+  int pos = 0;
+  int written = 0;
+  char path[128];
+  DIR *dir;
+  struct dirent *entry;
+
+  sprintf (path, "/proc/%ld/fd", pid);
+  dir = opendir (path);
+  if (!dir)
+    return -1;
+
+  rewinddir (dir);
+  while ((entry = readdir (dir)) != NULL)
+    {
+      struct stat st;
+      struct statfs stfs;
+      int fd;
+
+      fd = atoi (entry->d_name);
+      if (!fd)
+        continue;
+
+      sprintf (path, "/proc/%ld/fd/%d", pid, fd);
+      if (stat (path, &st) != 0)
+        continue;
+      if (!S_ISDIR (st.st_mode))
+        continue;
+
+      if (statfs (path, &stfs) != 0)
+        continue;
+      if (stfs.f_type != SPUFS_MAGIC)
+        continue;
+
+      if (pos >= offset && pos + 4 <= offset + len)
+        {
+          *(unsigned int *)(buf + pos - offset) = fd;
+          written += 4;
+        }
+      pos += 4;
+    }
+
+  closedir (dir);
+  return written;
+}
+
+/* Implements the to_xfer_partial interface for the TARGET_OBJECT_SPU
+   object type, using the /proc file system.  */
+static int
+linux_qxfer_spu (const char *annex, unsigned char *readbuf,
+		 unsigned const char *writebuf,
+		 CORE_ADDR offset, int len)
+{
+  long pid = lwpid_of (get_thread_lwp (current_inferior));
+  char buf[128];
+  int fd = 0;
+  int ret = 0;
+
+  if (!writebuf && !readbuf)
+    return -1;
+
+  if (!*annex)
+    {
+      if (!readbuf)
+	return -1;
+      else
+	return spu_enumerate_spu_ids (pid, readbuf, offset, len);
+    }
+
+  sprintf (buf, "/proc/%ld/fd/%s", pid, annex);
+  fd = open (buf, writebuf? O_WRONLY : O_RDONLY);
+  if (fd <= 0)
+    return -1;
+
+  if (offset != 0
+      && lseek (fd, (off_t) offset, SEEK_SET) != (off_t) offset)
+    {
+      close (fd);
+      return 0;
+    }
+
+  if (writebuf)
+    ret = write (fd, writebuf, (size_t) len);
+  else
+    ret = read (fd, readbuf, (size_t) len);
+
+  close (fd);
+  return ret;
+}
+
 static struct target_ops linux_target_ops = {
   linux_create_inferior,
   linux_attach,
@@ -3055,14 +3169,19 @@ static struct target_ops linux_target_ops = {
 #else
   NULL,
 #endif
-  NULL,
+  linux_qxfer_spu,
   hostio_last_error_from_errno,
   linux_qxfer_osdata,
   linux_xfer_siginfo,
   linux_supports_non_stop,
   linux_async,
   linux_start_non_stop,
-  linux_supports_multi_process
+  linux_supports_multi_process,
+#ifdef USE_THREAD_DB
+  thread_db_handle_monitor_command
+#else
+  NULL
+#endif
 };
 
 static void

@@ -28,6 +28,7 @@ struct type;
 struct regcache;
 
 #include "bfd.h"
+#include "exec.h"
 
 /* Return the name of the executable file as a string.
    ERR nonzero means get error if there is none specified;
@@ -46,6 +47,10 @@ extern void memory_error (int status, CORE_ADDR memaddr);
 /* Like target_read_memory, but report an error if can't read.  */
 
 extern void read_memory (CORE_ADDR memaddr, gdb_byte *myaddr, int len);
+
+/* Like target_read_stack, but report an error if can't read.  */
+
+extern void read_stack (CORE_ADDR memaddr, gdb_byte *myaddr, int len);
 
 /* Read an integer from debugged memory, given address and number of
    bytes.  */
@@ -99,13 +104,9 @@ extern void (*deprecated_file_changed_hook) (char *filename);
 
 extern void specify_exec_file_hook (void (*hook) (char *filename));
 
-/* Binary File Diddlers for the exec and core files.  */
+/* Binary File Diddler for the core file.  */
 
 extern bfd *core_bfd;
-extern bfd *exec_bfd;
-
-/* The mtime when we last opened exec_bfd.  */
-extern long exec_bfd_mtime;
 
 /* Whether to open exec and core files read-only or read-write.  */
 

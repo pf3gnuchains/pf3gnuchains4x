@@ -210,7 +210,45 @@ show_targetdebug (struct ui_file *file, int from_tty,
 
 static void setup_target_debug (void);
 
-DCACHE *target_dcache;
+/* The option sets this.  */
+static int stack_cache_enabled_p_1 = 1;
+/* And set_stack_cache_enabled_p updates this.
+   The reason for the separation is so that we don't flush the cache for
+   on->on transitions.  */
+static int stack_cache_enabled_p = 1;
+
+/* This is called *after* the stack-cache has been set.
+   Flush the cache for off->on and on->off transitions.
+   There's no real need to flush the cache for on->off transitions,
+   except cleanliness.  */
+
+static void
+set_stack_cache_enabled_p (char *args, int from_tty,
+			   struct cmd_list_element *c)
+{
+  if (stack_cache_enabled_p != stack_cache_enabled_p_1)
+    target_dcache_invalidate ();
+
+  stack_cache_enabled_p = stack_cache_enabled_p_1;
+}
+
+static void
+show_stack_cache_enabled_p (struct ui_file *file, int from_tty,
+			    struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("Cache use for stack accesses is %s.\n"), value);
+}
+
+/* Cache of memory operations, to speed up remote access.  */
+static DCACHE *target_dcache;
+
+/* Invalidate the target dcache.  */
+
+void
+target_dcache_invalidate (void)
+{
+  dcache_invalidate (target_dcache);
+}
 
 /* The user just typed 'target' without the name of a target.  */
 
@@ -413,7 +451,7 @@ target_kill (void)
 void
 target_load (char *arg, int from_tty)
 {
-  dcache_invalidate (target_dcache);
+  target_dcache_invalidate ();
   (*current_target.to_load) (arg, from_tty);
 }
 
@@ -609,6 +647,7 @@ update_current_target (void)
       /* Do not inherit to_follow_fork.  */
       INHERIT (to_insert_exec_catchpoint, t);
       INHERIT (to_remove_exec_catchpoint, t);
+      INHERIT (to_set_syscall_catchpoint, t);
       INHERIT (to_has_exited, t);
       /* Do not inherit to_mourn_inferiour.  */
       INHERIT (to_can_run, t);
@@ -750,6 +789,9 @@ update_current_target (void)
 	    tcomplain);
   de_fault (to_remove_exec_catchpoint,
 	    (int (*) (int))
+	    tcomplain);
+  de_fault (to_set_syscall_catchpoint,
+	    (int (*) (int, int, int, int, int *))
 	    tcomplain);
   de_fault (to_has_exited,
 	    (int (*) (int, int, int *))
@@ -1143,12 +1185,14 @@ target_section_by_addr (struct target_ops *target, CORE_ADDR addr)
    value are just as for target_xfer_partial.  */
 
 static LONGEST
-memory_xfer_partial (struct target_ops *ops, void *readbuf, const void *writebuf,
-		     ULONGEST memaddr, LONGEST len)
+memory_xfer_partial (struct target_ops *ops, enum target_object object,
+		     void *readbuf, const void *writebuf, ULONGEST memaddr,
+		     LONGEST len)
 {
   LONGEST res;
   int reg_len;
   struct mem_region *region;
+  struct inferior *inf;
 
   /* Zero length requests are ok and require no work.  */
   if (len == 0)
@@ -1223,18 +1267,23 @@ memory_xfer_partial (struct target_ops *ops, void *readbuf, const void *writebuf
       return -1;
     }
 
-  if (region->attrib.cache)
+  if (!ptid_equal (inferior_ptid, null_ptid))
+    inf = find_inferior_pid (ptid_get_pid (inferior_ptid));
+  else
+    inf = NULL;
+
+  if (inf != NULL
+      && (region->attrib.cache
+	  || (stack_cache_enabled_p && object == TARGET_OBJECT_STACK_MEMORY)))
     {
-      /* FIXME drow/2006-08-09: This call discards OPS, so the raw
-	 memory request will start back at current_target.  */
       if (readbuf != NULL)
-	res = dcache_xfer_memory (target_dcache, memaddr, readbuf,
+	res = dcache_xfer_memory (ops, target_dcache, memaddr, readbuf,
 				  reg_len, 0);
       else
 	/* FIXME drow/2006-08-09: If we're going to preserve const
 	   correctness dcache_xfer_memory should take readbuf and
 	   writebuf.  */
-	res = dcache_xfer_memory (target_dcache, memaddr,
+	res = dcache_xfer_memory (ops, target_dcache, memaddr,
 				  (void *) writebuf,
 				  reg_len, 1);
       if (res <= 0)
@@ -1276,6 +1325,20 @@ memory_xfer_partial (struct target_ops *ops, void *readbuf, const void *writebuf
   if (readbuf && !show_memory_breakpoints)
     breakpoint_restore_shadows (readbuf, memaddr, reg_len);
 
+  /* Make sure the cache gets updated no matter what - if we are writing
+     to the stack.  Even if this write is not tagged as such, we still need
+     to update the cache.  */
+
+  if (res > 0
+      && inf != NULL
+      && writebuf != NULL
+      && !region->attrib.cache
+      && stack_cache_enabled_p
+      && object != TARGET_OBJECT_STACK_MEMORY)
+    {
+      dcache_update (target_dcache, memaddr, (void *) writebuf, res);
+    }
+
   /* If we still haven't got anything, return the last error.  We
      give up.  */
   return res;
@@ -1310,8 +1373,9 @@ target_xfer_partial (struct target_ops *ops,
   /* If this is a memory transfer, let the memory-specific code
      have a look at it instead.  Memory transfers are more
      complicated.  */
-  if (object == TARGET_OBJECT_MEMORY)
-    retval = memory_xfer_partial (ops, readbuf, writebuf, offset, len);
+  if (object == TARGET_OBJECT_MEMORY || object == TARGET_OBJECT_STACK_MEMORY)
+    retval = memory_xfer_partial (ops, object, readbuf,
+				  writebuf, offset, len);
   else
     {
       enum target_object raw_object = object;
@@ -1387,6 +1451,23 @@ target_read_memory (CORE_ADDR memaddr, gdb_byte *myaddr, int len)
      Memory accesses check target->to_has_(all_)memory, and the
      flattened target doesn't inherit those.  */
   if (target_read (current_target.beneath, TARGET_OBJECT_MEMORY, NULL,
+		   myaddr, memaddr, len) == len)
+    return 0;
+  else
+    return EIO;
+}
+
+/* Like target_read_memory, but specify explicitly that this is a read from
+   the target's stack.  This may trigger different cache behavior.  */
+
+int
+target_read_stack (CORE_ADDR memaddr, gdb_byte *myaddr, int len)
+{
+  /* Dispatch to the topmost target, not the flattened current_target.
+     Memory accesses check target->to_has_(all_)memory, and the
+     flattened target doesn't inherit those.  */
+
+  if (target_read (current_target.beneath, TARGET_OBJECT_STACK_MEMORY, NULL,
 		   myaddr, memaddr, len) == len)
     return 0;
   else
@@ -1904,6 +1985,29 @@ target_pre_inferior (int from_tty)
     }
 }
 
+/* Callback for iterate_over_inferiors.  Gets rid of the given
+   inferior.  */
+
+static int
+dispose_inferior (struct inferior *inf, void *args)
+{
+  struct thread_info *thread;
+
+  thread = any_thread_of_process (inf->pid);
+  if (thread)
+    {
+      switch_to_thread (thread->ptid);
+
+      /* Core inferiors actually should be detached, not killed.  */
+      if (target_has_execution)
+	target_kill ();
+      else
+	target_detach (NULL, 0);
+    }
+
+  return 0;
+}
+
 /* This is to be called by the open routine before it does
    anything.  */
 
@@ -1912,11 +2016,12 @@ target_preopen (int from_tty)
 {
   dont_repeat ();
 
-  if (target_has_execution)
+  if (have_inferiors ())
     {
       if (!from_tty
-          || query (_("A program is being debugged already.  Kill it? ")))
-	target_kill ();
+	  || !have_live_inferiors ()
+	  || query (_("A program is being debugged already.  Kill it? ")))
+	iterate_over_inferiors (dispose_inferior, NULL);
       else
 	error (_("Program not killed."));
     }
@@ -1944,7 +2049,7 @@ target_detach (char *args, int from_tty)
   else
     /* If we're in breakpoints-always-inserted mode, have to remove
        them before detaching.  */
-    remove_breakpoints ();
+    remove_breakpoints_pid (PIDGET (inferior_ptid));
 
   for (t = current_target.beneath; t != NULL; t = t->beneath)
     {
@@ -2033,7 +2138,7 @@ target_resume (ptid_t ptid, int step, enum target_signal signal)
 {
   struct target_ops *t;
 
-  dcache_invalidate (target_dcache);
+  target_dcache_invalidate ();
 
   for (t = current_target.beneath; t != NULL; t = t->beneath)
     {
@@ -2200,7 +2305,7 @@ simple_search_memory (struct target_ops *ops,
       if (search_space_len >= pattern_len)
 	{
 	  unsigned keep_len = search_buf_size - chunk_size;
-	  CORE_ADDR read_addr = start_addr + keep_len;
+	  CORE_ADDR read_addr = start_addr + chunk_size + keep_len;
 	  int nr_to_read;
 
 	  /* Copy the trailing part of the previous iteration to the front
@@ -2298,7 +2403,8 @@ target_require_runnable (void)
       /* Do not worry about thread_stratum targets that can not
 	 create inferiors.  Assume they will be pushed again if
 	 necessary, and continue to the process_stratum.  */
-      if (t->to_stratum == thread_stratum)
+      if (t->to_stratum == thread_stratum
+	  || t->to_stratum == arch_stratum)
 	continue;
 
       error (_("\
@@ -2444,6 +2550,42 @@ target_get_osdata (const char *type)
   return target_read_stralloc (t, TARGET_OBJECT_OSDATA, type);
 }
 
+/* Determine the current address space of thread PTID.  */
+
+struct address_space *
+target_thread_address_space (ptid_t ptid)
+{
+  struct address_space *aspace;
+  struct inferior *inf;
+  struct target_ops *t;
+
+  for (t = current_target.beneath; t != NULL; t = t->beneath)
+    {
+      if (t->to_thread_address_space != NULL)
+	{
+	  aspace = t->to_thread_address_space (t, ptid);
+	  gdb_assert (aspace);
+
+	  if (targetdebug)
+	    fprintf_unfiltered (gdb_stdlog,
+				"target_thread_address_space (%s) = %d\n",
+				target_pid_to_str (ptid),
+				address_space_num (aspace));
+	  return aspace;
+	}
+    }
+
+  /* Fall-back to the "main" address space of the inferior.  */
+  inf = find_inferior_pid (ptid_get_pid (ptid));
+
+  if (inf == NULL || inf->aspace == NULL)
+    internal_error (__FILE__, __LINE__, "\
+Can't determine the current address space of thread %s\n",
+		    target_pid_to_str (ptid));
+
+  return inf->aspace;
+}
+
 static int
 default_region_ok_for_hw_watchpoint (CORE_ADDR addr, int len)
 {
@@ -2555,7 +2697,7 @@ generic_mourn_inferior (void)
   if (!ptid_equal (ptid, null_ptid))
     {
       int pid = ptid_get_pid (ptid);
-      delete_inferior (pid);
+      exit_inferior (pid);
     }
 
   breakpoint_init_inferior (inf_exited);
@@ -2609,17 +2751,19 @@ dummy_pid_to_str (struct target_ops *ops, ptid_t ptid)
   return normal_pid_to_str (ptid);
 }
 
-/* Error-catcher for target_find_memory_regions */
-static int dummy_find_memory_regions (int (*ignore1) (), void *ignore2)
+/* Error-catcher for target_find_memory_regions.  */
+static int
+dummy_find_memory_regions (int (*ignore1) (), void *ignore2)
 {
-  error (_("No target."));
+  error (_("Command not implemented for this target."));
   return 0;
 }
 
-/* Error-catcher for target_make_corefile_notes */
-static char * dummy_make_corefile_notes (bfd *ignore1, int *ignore2)
+/* Error-catcher for target_make_corefile_notes.  */
+static char *
+dummy_make_corefile_notes (bfd *ignore1, int *ignore2)
 {
-  error (_("No target."));
+  error (_("Command not implemented for this target."));
   return NULL;
 }
 
@@ -2767,9 +2911,9 @@ target_waitstatus_to_string (const struct target_waitstatus *ws)
     case TARGET_WAITKIND_EXECD:
       return xstrprintf ("%sexecd", kind_str);
     case TARGET_WAITKIND_SYSCALL_ENTRY:
-      return xstrprintf ("%ssyscall-entry", kind_str);
+      return xstrprintf ("%sentered syscall", kind_str);
     case TARGET_WAITKIND_SYSCALL_RETURN:
-      return xstrprintf ("%ssyscall-return", kind_str);
+      return xstrprintf ("%sexited syscall", kind_str);
     case TARGET_WAITKIND_SPURIOUS:
       return xstrprintf ("%sspurious", kind_str);
     case TARGET_WAITKIND_IGNORE:
@@ -3264,8 +3408,8 @@ debug_to_thread_architecture (struct target_ops *ops, ptid_t ptid)
 
   retval = debug_target.to_thread_architecture (ops, ptid);
 
-  fprintf_unfiltered (gdb_stdlog, "target_thread_architecture (%s) = %p [%s]\n",
-		      target_pid_to_str (ptid), retval,
+  fprintf_unfiltered (gdb_stdlog, "target_thread_architecture (%s) = %s [%s]\n",
+		      target_pid_to_str (ptid), host_address_to_string (retval),
 		      gdbarch_bfd_arch_info (retval)->printable_name);
   return retval;
 }
@@ -3455,6 +3599,17 @@ Tells gdb whether to control the inferior in asynchronous mode."),
 			   show_maintenance_target_async_permitted,
 			   &setlist,
 			   &showlist);
+
+  add_setshow_boolean_cmd ("stack-cache", class_support,
+			   &stack_cache_enabled_p_1, _("\
+Set cache use for stack access."), _("\
+Show cache use for stack access."), _("\
+When on, use the data cache for all stack access, regardless of any\n\
+configured memory regions.  This improves remote performance significantly.\n\
+By default, caching for stack access is on."),
+			   set_stack_cache_enabled_p,
+			   show_stack_cache_enabled_p,
+			   &setlist, &showlist);
 
   target_dcache = dcache_init ();
 }

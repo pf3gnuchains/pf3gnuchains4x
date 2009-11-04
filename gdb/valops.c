@@ -565,6 +565,32 @@ value_one (struct type *type, enum lval_type lv)
   return val;
 }
 
+/* Helper function for value_at, value_at_lazy, and value_at_lazy_stack.  */
+
+static struct value *
+get_value_at (struct type *type, CORE_ADDR addr, int lazy)
+{
+  struct value *val;
+
+  if (TYPE_CODE (check_typedef (type)) == TYPE_CODE_VOID)
+    error (_("Attempt to dereference a generic pointer."));
+
+  if (lazy)
+    {
+      val = allocate_value_lazy (type);
+    }
+  else
+    {
+      val = allocate_value (type);
+      read_memory (addr, value_contents_all_raw (val), TYPE_LENGTH (type));
+    }
+
+  VALUE_LVAL (val) = lval_memory;
+  set_value_address (val, addr);
+
+  return val;
+}
+
 /* Return a value with type TYPE located at ADDR.
 
    Call value_at only if the data needs to be fetched immediately;
@@ -580,19 +606,7 @@ value_one (struct type *type, enum lval_type lv)
 struct value *
 value_at (struct type *type, CORE_ADDR addr)
 {
-  struct value *val;
-
-  if (TYPE_CODE (check_typedef (type)) == TYPE_CODE_VOID)
-    error (_("Attempt to dereference a generic pointer."));
-
-  val = allocate_value (type);
-
-  read_memory (addr, value_contents_all_raw (val), TYPE_LENGTH (type));
-
-  VALUE_LVAL (val) = lval_memory;
-  set_value_address (val, addr);
-
-  return val;
+  return get_value_at (type, addr, 0);
 }
 
 /* Return a lazy value with type TYPE located at ADDR (cf. value_at).  */
@@ -600,17 +614,7 @@ value_at (struct type *type, CORE_ADDR addr)
 struct value *
 value_at_lazy (struct type *type, CORE_ADDR addr)
 {
-  struct value *val;
-
-  if (TYPE_CODE (check_typedef (type)) == TYPE_CODE_VOID)
-    error (_("Attempt to dereference a generic pointer."));
-
-  val = allocate_value_lazy (type);
-
-  VALUE_LVAL (val) = lval_memory;
-  set_value_address (val, addr);
-
-  return val;
+  return get_value_at (type, addr, 1);
 }
 
 /* Called only from the value_contents and value_contents_all()
@@ -656,7 +660,12 @@ value_fetch_lazy (struct value *val)
       int length = TYPE_LENGTH (check_typedef (value_enclosing_type (val)));
 
       if (length)
-	read_memory (addr, value_contents_all_raw (val), length);
+	{
+	  if (value_stack (val))
+	    read_stack (addr, value_contents_all_raw (val), length);
+	  else
+	    read_memory (addr, value_contents_all_raw (val), length);
+	}
     }
   else if (VALUE_LVAL (val) == lval_register)
     {
@@ -818,6 +827,9 @@ value_assign (struct value *toval, struct value *fromval)
 
 	if (value_bitsize (toval))
 	  {
+	    struct value *parent = value_parent (toval);
+	    changed_addr = value_address (parent) + value_offset (toval);
+
 	    changed_len = (value_bitpos (toval)
 			   + value_bitsize (toval)
 			   + HOST_CHAR_BIT - 1)
@@ -829,17 +841,16 @@ value_assign (struct value *toval, struct value *fromval)
 	       registers.  */
 	    if (changed_len < TYPE_LENGTH (type)
 		&& TYPE_LENGTH (type) <= (int) sizeof (LONGEST)
-		&& ((LONGEST) value_address (toval) % TYPE_LENGTH (type)) == 0)
+		&& ((LONGEST) changed_addr % TYPE_LENGTH (type)) == 0)
 	      changed_len = TYPE_LENGTH (type);
 
 	    if (changed_len > (int) sizeof (LONGEST))
 	      error (_("Can't handle bitfields which don't fit in a %d bit word."),
 		     (int) sizeof (LONGEST) * HOST_CHAR_BIT);
 
-	    read_memory (value_address (toval), buffer, changed_len);
+	    read_memory (changed_addr, buffer, changed_len);
 	    modify_field (type, buffer, value_as_long (fromval),
 			  value_bitpos (toval), value_bitsize (toval));
-	    changed_addr = value_address (toval);
 	    dest_buffer = buffer;
 	  }
 	else
@@ -882,6 +893,8 @@ value_assign (struct value *toval, struct value *fromval)
 	  {
 	    if (value_bitsize (toval))
 	      {
+		struct value *parent = value_parent (toval);
+		int offset = value_offset (parent) + value_offset (toval);
 		int changed_len;
 		gdb_byte buffer[sizeof (LONGEST)];
 
@@ -894,15 +907,13 @@ value_assign (struct value *toval, struct value *fromval)
 		  error (_("Can't handle bitfields which don't fit in a %d bit word."),
 			 (int) sizeof (LONGEST) * HOST_CHAR_BIT);
 
-		get_frame_register_bytes (frame, value_reg,
-					  value_offset (toval),
+		get_frame_register_bytes (frame, value_reg, offset,
 					  changed_len, buffer);
 
 		modify_field (type, buffer, value_as_long (fromval),
 			      value_bitpos (toval), value_bitsize (toval));
 
-		put_frame_register_bytes (frame, value_reg,
-					  value_offset (toval),
+		put_frame_register_bytes (frame, value_reg, offset,
 					  changed_len, buffer);
 	      }
 	    else

@@ -1,6 +1,6 @@
 /* Select disassembly routine for specified architecture.
    Copyright 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003,
-   2004, 2005, 2006, 2007 Free Software Foundation, Inc.
+   2004, 2005, 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
 
    This file is part of the GNU opcodes library.
 
@@ -56,6 +56,7 @@
 #define ARCH_maxq
 #define ARCH_mcore
 #define ARCH_mep
+#define ARCH_microblaze
 #define ARCH_mips
 #define ARCH_mmix
 #define ARCH_mn10200
@@ -70,6 +71,7 @@
 #define ARCH_pj
 #define ARCH_powerpc
 #define ARCH_rs6000
+#define ARCH_rx
 #define ARCH_s390
 #define ARCH_score
 #define ARCH_sh
@@ -264,6 +266,11 @@ disassembler (abfd)
       disassemble = print_insn_mt;
       break;
 #endif
+#ifdef ARCH_microblaze
+    case bfd_arch_microblaze:
+      disassemble = print_insn_microblaze;
+      break;
+#endif
 #ifdef ARCH_msp430
     case bfd_arch_msp430:
       disassemble = print_insn_msp430;
@@ -344,6 +351,11 @@ disassembler (abfd)
 	disassemble = print_insn_big_powerpc;
       else
 	disassemble = print_insn_rs6000;
+      break;
+#endif
+#ifdef ARCH_rx
+    case bfd_arch_rx:
+      disassemble = print_insn_rx;
       break;
 #endif
 #ifdef ARCH_s390

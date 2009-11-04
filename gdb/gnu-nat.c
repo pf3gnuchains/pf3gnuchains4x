@@ -2166,7 +2166,8 @@ gnu_attach (struct target_ops *ops, char *args, int from_tty)
 
   push_target (ops);
 
-  inferior = add_inferior (pid);
+  inferior = current_inferior ();
+  inferior_appeared (inferior, pid);
   inferior->attach_flag = 1;
 
   inf_update_procs (inf);
@@ -3112,7 +3113,7 @@ Set the thread that gdb thinks is the libc signal thread."),
 Set whether gdb thinks the inferior process is stopped as with SIGSTOP.\n\
 Stopped process will be continued by sending them a signal."),
 	   &setlist);
-  add_cmd ("stopped", no_class, show_signals_cmd, _("\
+  add_cmd ("stopped", no_class, show_stopped_cmd, _("\
 Show whether gdb thinks the inferior process is stopped as with SIGSTOP."),
 	   &showlist);
 

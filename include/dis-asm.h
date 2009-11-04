@@ -265,6 +265,7 @@ extern int print_insn_maxq_big		(bfd_vma, disassemble_info *);
 extern int print_insn_maxq_little	(bfd_vma, disassemble_info *);
 extern int print_insn_mcore		(bfd_vma, disassemble_info *);
 extern int print_insn_mep		(bfd_vma, disassemble_info *);
+extern int print_insn_microblaze	(bfd_vma, disassemble_info *);
 extern int print_insn_mmix		(bfd_vma, disassemble_info *);
 extern int print_insn_mn10200		(bfd_vma, disassemble_info *);
 extern int print_insn_mn10300		(bfd_vma, disassemble_info *);
@@ -295,6 +296,7 @@ extern int print_insn_xtensa		(bfd_vma, disassemble_info *);
 extern int print_insn_z80		(bfd_vma, disassemble_info *);
 extern int print_insn_z8001		(bfd_vma, disassemble_info *);
 extern int print_insn_z8002		(bfd_vma, disassemble_info *);
+extern int print_insn_rx		(bfd_vma, disassemble_info *);
 
 extern disassembler_ftype arc_get_disassembler (void *);
 extern disassembler_ftype cris_get_disassembler (bfd *);
