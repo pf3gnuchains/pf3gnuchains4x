@@ -1,5 +1,5 @@
 /* tc-m32c.c -- Assembler for the Renesas M32C.
-   Copyright (C) 2005, 2006, 2007, 2008 Free Software Foundation.
+   Copyright (C) 2005, 2006, 2007, 2008, 2009 Free Software Foundation.
    Contributed by RedHat.
 
    This file is part of GAS, the GNU Assembler.
@@ -159,9 +159,6 @@ const pseudo_typeS md_pseudo_table[] =
   { "bss",	s_bss, 		0},
   { "3byte",	cons,		3 },
   { "word",	cons,		4 },
-  {"file",	(void (*) (int)) dwarf2_directive_file, 0},
-  {"loc",	dwarf2_directive_loc, 0},
-  {"loc_mark_labels", dwarf2_directive_loc_mark_labels, 0},
   { NULL, 	NULL, 		0 }
 };
 

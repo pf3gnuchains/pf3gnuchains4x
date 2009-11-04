@@ -1,6 +1,6 @@
 /* subsegs.c - subsegments -
    Copyright 1987, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998,
-   1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007
+   1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2009
    Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
@@ -65,7 +65,7 @@ subseg_change (register segT seg, register int subseg)
 
   if (! seginfo)
     {
-      seginfo = xcalloc (1, sizeof (*seginfo));
+      seginfo = (segment_info_type *) xcalloc (1, sizeof (*seginfo));
       seginfo->bfd_section = seg;
       bfd_set_section_userdata (stdoutput, seg, seginfo);
     }
@@ -103,7 +103,7 @@ subseg_set_rest (segT seg, subsegT subseg)
     {
       /* This should be the only code that creates a frchainS.  */
 
-      newP = obstack_alloc (&frchains, sizeof (frchainS));
+      newP = (frchainS *) obstack_alloc (&frchains, sizeof (frchainS));
       newP->frch_subseg = subseg;
       newP->fix_root = NULL;
       newP->fix_tail = NULL;
@@ -167,7 +167,7 @@ subseg_get (const char *segname, int force_new)
   if (! seginfo)
     {
       secptr->output_section = secptr;
-      seginfo = xcalloc (1, sizeof (*seginfo));
+      seginfo = (segment_info_type *) xcalloc (1, sizeof (*seginfo));
       seginfo->bfd_section = secptr;
       bfd_set_section_userdata (stdoutput, secptr, seginfo);
     }

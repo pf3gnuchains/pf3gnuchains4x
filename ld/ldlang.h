@@ -66,28 +66,30 @@ typedef struct memory_region_struct
   bfd_boolean had_full_message;
 } lang_memory_region_type;
 
+enum statement_enum
+{
+  lang_output_section_statement_enum,
+  lang_assignment_statement_enum,
+  lang_input_statement_enum,
+  lang_address_statement_enum,
+  lang_wild_statement_enum,
+  lang_input_section_enum,
+  lang_object_symbols_statement_enum,
+  lang_fill_statement_enum,
+  lang_data_statement_enum,
+  lang_reloc_statement_enum,
+  lang_target_statement_enum,
+  lang_output_statement_enum,
+  lang_padding_statement_enum,
+  lang_group_statement_enum,
+  lang_insert_statement_enum,
+  lang_constructors_statement_enum
+};
+
 typedef struct lang_statement_header_struct
 {
   union lang_statement_union *next;
-  enum statement_enum
-  {
-    lang_output_section_statement_enum,
-    lang_assignment_statement_enum,
-    lang_input_statement_enum,
-    lang_address_statement_enum,
-    lang_wild_statement_enum,
-    lang_input_section_enum,
-    lang_object_symbols_statement_enum,
-    lang_fill_statement_enum,
-    lang_data_statement_enum,
-    lang_reloc_statement_enum,
-    lang_target_statement_enum,
-    lang_output_statement_enum,
-    lang_padding_statement_enum,
-    lang_group_statement_enum,
-    lang_insert_statement_enum,
-    lang_constructors_statement_enum
-  } type;
+  enum statement_enum type;
 } lang_statement_header_type;
 
 typedef struct
@@ -445,6 +447,7 @@ struct orphan_save
   lang_output_section_statement_type **os_tail;
 };
 
+extern const char *output_target;
 extern lang_output_section_statement_type *abs_output_section;
 extern lang_statement_list_type lang_output_section_statement;
 extern bfd_boolean lang_has_input_file;
@@ -483,6 +486,8 @@ extern lang_output_section_statement_type *lang_enter_output_section_statement
    etree_type *, int);
 extern void lang_final
   (void);
+extern void lang_relax_sections
+  (bfd_boolean);
 extern void lang_process
   (void);
 extern void lang_section_start
@@ -550,7 +555,9 @@ extern lang_input_statement_type *lang_add_input_file
 extern void lang_add_keepsyms_file
   (const char *);
 extern lang_output_section_statement_type *lang_output_section_statement_lookup
-  (const char *const, int, bfd_boolean);
+  (const char *, int, bfd_boolean);
+extern lang_output_section_statement_type *next_matching_output_section_statement
+  (lang_output_section_statement_type *, int);
 extern void ldlang_add_undef
   (const char *const);
 extern void lang_add_output_format

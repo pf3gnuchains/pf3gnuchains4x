@@ -1,6 +1,6 @@
 /* write.c - emit .o file
    Copyright 1986, 1987, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997,
-   1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008
+   1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
@@ -156,7 +156,7 @@ fix_new_internal (fragS *frag,		/* Which frag?  */
 
   n_fixups++;
 
-  fixP = obstack_alloc (&notes, sizeof (fixS));
+  fixP = (fixS *) obstack_alloc (&notes, sizeof (fixS));
 
   fixP->fx_frag = frag;
   fixP->fx_where = where;
@@ -560,6 +560,9 @@ size_seg (bfd *abfd, asection *sec, void *xxx ATTRIBUTE_UNUSED)
     size = 0;
 
   flags = bfd_get_section_flags (abfd, sec);
+  if (size == 0 && bfd_get_section_size (sec) != 0 &&
+    (flags & SEC_HAS_CONTENTS) != 0)
+    return;
 
   if (size > 0 && ! seginfo->bss)
     flags |= SEC_HAS_CONTENTS;
@@ -1167,7 +1170,7 @@ write_relocs (bfd *abfd, asection *sec, void *xxx ATTRIBUTE_UNUSED)
 	rp = &r->next;
     }
 
-  relocs = xcalloc (n, sizeof (arelent *));
+  relocs = (arelent **) xcalloc (n, sizeof (arelent *));
 
   i = 0;
   for (fixp = seginfo->fix_root; fixp != (fixS *) NULL; fixp = fixp->fx_next)
@@ -1395,7 +1398,7 @@ set_symtab (void)
       int i;
       bfd_size_type amt = (bfd_size_type) nsyms * sizeof (asymbol *);
 
-      asympp = bfd_alloc (stdoutput, amt);
+      asympp = (asymbol **) bfd_alloc (stdoutput, amt);
       symp = symbol_rootP;
       for (i = 0; i < nsyms; i++, symp = symbol_next (symp))
 	{
@@ -1886,7 +1889,9 @@ write_object_file (void)
 #ifdef obj_frob_file
   obj_frob_file ();
 #endif
-
+#ifdef obj_coff_generate_pdata
+  obj_coff_generate_pdata ();
+#endif
   bfd_map_over_sections (stdoutput, write_relocs, (char *) 0);
 
 #ifdef tc_frob_file_after_relocs

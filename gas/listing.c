@@ -1,6 +1,6 @@
 /* listing.c - maintain assembly listings
    Copyright 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000,
-   2001, 2002, 2003, 2005, 2006, 2007, 2008
+   2001, 2002, 2003, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
@@ -130,6 +130,18 @@ typedef struct file_info_struct
   int                       at_end;
 } file_info_type;
 
+enum edict_enum
+{
+  EDICT_NONE,
+  EDICT_SBTTL,
+  EDICT_TITLE,
+  EDICT_NOLIST,
+  EDICT_LIST,
+  EDICT_NOLIST_NEXT,
+  EDICT_EJECT
+};
+
+
 /* This structure remembers which line from which file goes into which
    frag.  */
 struct list_info_struct
@@ -160,16 +172,7 @@ struct list_info_struct
   /* Pointer to any error message associated with this line.  */
   char *message;
 
-  enum
-    {
-      EDICT_NONE,
-      EDICT_SBTTL,
-      EDICT_TITLE,
-      EDICT_NOLIST,
-      EDICT_LIST,
-      EDICT_NOLIST_NEXT,
-      EDICT_EJECT
-    } edict;
+  enum edict_enum edict;
   char *edict_arg;
 
   /* Nonzero if this line is to be omitted because it contains
@@ -260,7 +263,7 @@ file_info (const char *file_name)
     }
 
   /* Make new entry.  */
-  p = xmalloc (sizeof (file_info_type));
+  p = (file_info_type *) xmalloc (sizeof (file_info_type));
   p->next = file_info_head;
   file_info_head = p;
   p->filename = xstrdup (file_name);
@@ -285,7 +288,7 @@ listing_newline (char *ps)
   unsigned int line;
   static unsigned int last_line = 0xffff;
   static char *last_file = NULL;
-  list_info_type *new = NULL;
+  list_info_type *new_i = NULL;
 
   if (listing == 0)
     return;
@@ -318,7 +321,7 @@ listing_newline (char *ps)
 	  && !(last_file && file && strcmp (file, last_file)))
 	return;
 
-      new = (list_info_type *) xmalloc (sizeof (list_info_type));
+      new_i = (list_info_type *) xmalloc (sizeof (list_info_type));
 
       /* Detect if we are reading from stdin by examining the file
 	 name returned by as_where().
@@ -339,7 +342,7 @@ listing_newline (char *ps)
 	  int seen_quote = 0;
 	  int seen_slash = 0;
 
-	  for (copy = input_line_pointer - 1;
+	  for (copy = input_line_pointer;
 	       *copy && (seen_quote
 			 || is_end_of_line [(unsigned char) *copy] != 1);
 	       copy++)
@@ -350,13 +353,13 @@ listing_newline (char *ps)
 		seen_quote = ! seen_quote;
 	    }
 
-	  len = (copy - input_line_pointer) + 2;
+	  len = copy - input_line_pointer + 1;
 
-	  copy = xmalloc (len);
+	  copy = (char *) xmalloc (len);
 
 	  if (copy != NULL)
 	    {
-	      char *src = input_line_pointer - 1;
+	      char *src = input_line_pointer;
 	      char *dest = copy;
 
 	      while (--len)
@@ -371,15 +374,15 @@ listing_newline (char *ps)
 	      *dest = 0;
 	    }
 
-	  new->line_contents = copy;
+	  new_i->line_contents = copy;
 	}
       else
-	new->line_contents = NULL;
+	new_i->line_contents = NULL;
     }
   else
     {
-      new = xmalloc (sizeof (list_info_type));
-      new->line_contents = ps;
+      new_i = (list_info_type *) xmalloc (sizeof (list_info_type));
+      new_i->line_contents = ps;
     }
 
   last_line = line;
@@ -388,21 +391,21 @@ listing_newline (char *ps)
   new_frag ();
 
   if (listing_tail)
-    listing_tail->next = new;
+    listing_tail->next = new_i;
   else
-    head = new;
+    head = new_i;
 
-  listing_tail = new;
+  listing_tail = new_i;
 
-  new->frag = frag_now;
-  new->line = line;
-  new->file = file_info (file);
-  new->next = (list_info_type *) NULL;
-  new->message = (char *) NULL;
-  new->edict = EDICT_NONE;
-  new->hll_file = (file_info_type *) NULL;
-  new->hll_line = 0;
-  new->debugging = 0;
+  new_i->frag = frag_now;
+  new_i->line = line;
+  new_i->file = file_info (file);
+  new_i->next = (list_info_type *) NULL;
+  new_i->message = (char *) NULL;
+  new_i->edict = EDICT_NONE;
+  new_i->hll_file = (file_info_type *) NULL;
+  new_i->hll_line = 0;
+  new_i->debugging = 0;
 
   new_frag ();
 
@@ -416,7 +419,7 @@ listing_newline (char *ps)
       segname = segment_name (now_seg);
       if (strncmp (segname, ".debug", sizeof ".debug" - 1) == 0
 	  || strncmp (segname, ".line", sizeof ".line" - 1) == 0)
-	new->debugging = 1;
+	new_i->debugging = 1;
     }
 #endif
 }
@@ -1147,8 +1150,8 @@ listing_listing (char *name ATTRIBUTE_UNUSED)
   int show_listing = 1;
   unsigned int width;
 
-  buffer = xmalloc (listing_rhs_width);
-  data_buffer = xmalloc (MAX_BYTES);
+  buffer = (char *) xmalloc (listing_rhs_width);
+  data_buffer = (char *) xmalloc (MAX_BYTES);
   eject = 1;
   list = head->next;
 
@@ -1406,14 +1409,6 @@ listing_eject (int ignore ATTRIBUTE_UNUSED)
     listing_tail->edict = EDICT_EJECT;
 }
 
-void
-listing_flags (int ignore ATTRIBUTE_UNUSED)
-{
-  while ((*input_line_pointer++) && (*input_line_pointer != '\n'))
-    input_line_pointer++;
-
-}
-
 /* Turn listing on or off.  An argument of 0 means to turn off
    listing.  An argument of 1 means to turn on listing.  An argument
    of 2 means to turn off listing, but as of the next line; that is,
@@ -1509,7 +1504,7 @@ listing_title (int depth)
 	  if (listing)
 	    {
 	      length = input_line_pointer - start;
-	      ttl = xmalloc (length + 1);
+	      ttl = (char *) xmalloc (length + 1);
 	      memcpy (ttl, start, length);
 	      ttl[length] = 0;
 	      listing_tail->edict = depth ? EDICT_SBTTL : EDICT_TITLE;
@@ -1554,12 +1549,6 @@ listing_source_file (const char *file)
 #else
 
 /* Dummy functions for when compiled without listing enabled.  */
-
-void
-listing_flags (int ignore)
-{
-  s_ignore (0);
-}
 
 void
 listing_list (int on)

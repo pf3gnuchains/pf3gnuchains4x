@@ -114,6 +114,7 @@ typedef struct fat_user_section_struct {
      list of hash table entries for symbols defined in this section.  */
   struct map_symbol_def *map_symbol_def_head;
   struct map_symbol_def **map_symbol_def_tail;
+  unsigned long map_symbol_def_count;
 } fat_section_userdata_type;
 
 #define get_userdata(x) ((x)->userdata)
@@ -122,6 +123,22 @@ typedef struct fat_user_section_struct {
 #define SHORT_SIZE	(2)
 #define LONG_SIZE	(4)
 #define QUAD_SIZE	(8)
+
+enum endian_enum { ENDIAN_UNSET = 0, ENDIAN_BIG, ENDIAN_LITTLE };
+
+enum symbolic_enum
+  {
+    symbolic_unset = 0,
+    symbolic,
+    symbolic_functions,
+  };
+
+enum dynamic_list_enum
+  {
+    dynamic_list_unset = 0,
+    dynamic_list_data,
+    dynamic_list
+  };
 
 typedef struct {
   /* 1 => assign space to common symbols even if `relocatable_output'.  */
@@ -160,24 +177,14 @@ typedef struct {
   bfd_boolean accept_unknown_input_arch;
 
   /* Big or little endian as set on command line.  */
-  enum { ENDIAN_UNSET = 0, ENDIAN_BIG, ENDIAN_LITTLE } endian;
+  enum endian_enum endian;
 
   /* -Bsymbolic and -Bsymbolic-functions, as set on command line.  */
-  enum
-    {
-      symbolic_unset = 0,
-      symbolic,
-      symbolic_functions,
-    } symbolic;
+  enum symbolic_enum symbolic;
 
   /* --dynamic-list, --dynamic-list-cpp-new, --dynamic-list-cpp-typeinfo
      and --dynamic-list FILE, as set on command line.  */
-  enum
-    {
-      dynamic_list_unset = 0,
-      dynamic_list_data,
-      dynamic_list
-    } dynamic_list;
+  enum dynamic_list_enum dynamic_list;
 
   /* Name of runtime interpreter to invoke.  */
   char *interpreter;

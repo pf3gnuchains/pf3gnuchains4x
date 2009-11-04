@@ -364,6 +364,17 @@ argument must be one of the strings @samp{archive}, @samp{shared}, or
 @samp{-Bstatic}, and the other two keywords are functionally equivalent
 to @samp{-Bdynamic}.  This option may be used any number of times.
 
+@kindex --audit @var{AUDITLIB}
+@item --audit @var{AUDITLIB}
+Adds @var{AUDITLIB} to the @code{DT_AUDIT} entry of the dynamic section.
+@var{AUDITLIB} is not checked for existence, nor will it use the DT_SONAME
+specified in the library.  If specified multiple times @code{DT_AUDIT}
+will contain a colon separated list of audit interfaces to use. If the linker
+finds an object with an audit entry while searching for shared libraries,
+it will add a corresponding @code{DT_DEPAUDIT} entry in the output file.  
+This option is only meaningful on ELF platforms supporting the rtld-audit
+interface.  
+
 @ifset I960
 @cindex architectures
 @kindex -A @var{arch}
@@ -450,6 +461,17 @@ compatibility with other linkers.  They assign space to common symbols
 even if a relocatable output file is specified (with @samp{-r}).  The
 script command @code{FORCE_COMMON_ALLOCATION} has the same effect.
 @xref{Miscellaneous Commands}.
+
+@kindex --depaudit @var{AUDITLIB}
+@kindex -P @var{AUDITLIB}
+@item --depaudit @var{AUDITLIB}
+@itemx -P @var{AUDITLIB}
+Adds @var{AUDITLIB} to the @code{DT_DEPAUDIT} entry of the dynamic section.
+@var{AUDITLIB} is not checked for existence, nor will it use the DT_SONAME
+specified in the library.  If specified multiple times @code{DT_DEPAUDIT}
+will contain a colon separated list of audit interfaces to use.  This
+option is only meaningful on ELF platforms supporting the rtld-audit interface.
+The -P option is provided for Solaris compatibility.  
 
 @cindex entry point, from command line
 @kindex -e @var{entry}
@@ -2200,6 +2222,11 @@ These cygwin-excludes are: @code{_cygwin_dll_entry@@12},
 @item --exclude-symbols @var{symbol},@var{symbol},...
 Specifies a list of symbols which should not be automatically
 exported.  The symbol names may be delimited by commas or colons.
+[This option is specific to the i386 PE targeted port of the linker]
+
+@kindex --exclude-all-symbols
+@item --exclude-all-symbols
+Specifies no symbols should be automatically exported.
 [This option is specific to the i386 PE targeted port of the linker]
 
 @kindex --file-alignment
@@ -4688,7 +4715,8 @@ The @var{name} is used only for reference in the @code{SECTIONS} command
 of the linker script.  It is not put into the output file.  Program
 header names are stored in a separate name space, and will not conflict
 with symbol names, file names, or section names.  Each program header
-must have a distinct name.
+must have a distinct name.  The headers are processed in order and it
+is usual for them to map to sections in ascending load address order.
 
 Certain program header types describe segments of memory which the
 system loader will load from the file.  In the linker script, you
@@ -4712,11 +4740,13 @@ segment at all.
 
 @kindex FILEHDR
 @kindex PHDRS
-You may use the @code{FILEHDR} and @code{PHDRS} keywords appear after
+You may use the @code{FILEHDR} and @code{PHDRS} keywords after
 the program header type to further describe the contents of the segment.
 The @code{FILEHDR} keyword means that the segment should include the ELF
 file header.  The @code{PHDRS} keyword means that the segment should
-include the ELF program headers themselves.
+include the ELF program headers themselves.  If applied to a loadable
+segment (@code{PT_LOAD}), all prior loadable segments must have one of
+these keywords.
 
 The @var{type} may be one of the following.  The numbers indicate the
 value of the keyword.
@@ -6642,14 +6672,19 @@ bar
 _bar = bar
 another_foo = abc.dll.afoo
 var1 DATA
+doo = foo == foo2
+eoo DATA == var1
 @end example
 
-This example defines a DLL with a non-default base address and five
+This example defines a DLL with a non-default base address and seven
 symbols in the export table. The third exported symbol @code{_bar} is an
 alias for the second. The fourth symbol, @code{another_foo} is resolved
 by "forwarding" to another module and treating it as an alias for
 @code{afoo} exported from the DLL @samp{abc.dll}. The final symbol
-@code{var1} is declared to be a data object.
+@code{var1} is declared to be a data object. The @samp{doo} symbol in
+export library is an alias of @samp{foo}, which gets the string name
+in export table @samp{foo2}. The @samp{eoo} symbol is an data export
+symbol, which gets in export table the name @samp{var1}.
 
 The optional @code{LIBRARY <name>} command indicates the @emph{internal}
 name of the output DLL. If @samp{<name>} does not include a suffix,
@@ -6674,7 +6709,7 @@ The complete specification of an export symbol is:
 EXPORTS
   ( (  ( <name1> [ = <name2> ] )
      | ( <name1> = <module-name> . <external-name>))
-  [ @@ <integer> ] [NONAME] [DATA] [CONSTANT] [PRIVATE] ) *
+  [ @@ <integer> ] [NONAME] [DATA] [CONSTANT] [PRIVATE] [== <name3>] ) *
 @end example
 
 Declares @samp{<name1>} as an exported symbol from the DLL, or declares
@@ -6682,7 +6717,8 @@ Declares @samp{<name1>} as an exported symbol from the DLL, or declares
 @samp{<name1>} as a "forward" alias for the symbol
 @samp{<external-name>} in the DLL @samp{<module-name>}.
 Optionally, the symbol may be exported by the specified ordinal
-@samp{<integer>} alias.
+@samp{<integer>} alias. The optional @samp{<name3>} is the to be used
+string in import/export table for the symbol.
 
 The optional keywords that follow the declaration indicate:
 

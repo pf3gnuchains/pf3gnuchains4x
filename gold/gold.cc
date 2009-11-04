@@ -41,6 +41,9 @@
 #include "reloc.h"
 #include "defstd.h"
 #include "plugin.h"
+#include "gc.h"
+#include "icf.h"
+#include "incremental.h"
 
 namespace gold
 {
@@ -175,6 +178,21 @@ queue_initial_tasks(const General_options& options,
     thread_count = cmdline.number_of_input_files();
   workqueue->set_thread_count(thread_count);
 
+  if (cmdline.options().incremental())
+    {
+      Incremental_checker incremental_checker(
+          parameters->options().output_file_name(),
+          layout->incremental_inputs());
+      if (incremental_checker.can_incrementally_link_output_file())
+        {
+          // TODO: remove when incremental linking implemented.
+          printf("Incremental linking might be possible "
+              "(not implemented yet)\n");
+        }
+      // TODO: If we decide on an incremental build, fewer tasks
+      // should be scheduled.
+    }
+
   // Read the input files.  We have to add the symbols to the symbol
   // table in order.  We do this by creating a separate blocker for
   // each input file.  We associate the blocker with the following
@@ -203,13 +221,15 @@ queue_initial_tasks(const General_options& options,
     }
 
   if (parameters->options().relocatable()
-      && parameters->options().gc_sections())
-    gold_error(_("cannot mix -r with garbage collection"));
+      && (parameters->options().gc_sections()
+	  || parameters->options().icf_enabled()))
+    gold_error(_("cannot mix -r with --gc-sections or --icf"));
 
-  if (parameters->options().gc_sections())
+  if (parameters->options().gc_sections()
+      || parameters->options().icf_enabled())
     {
       workqueue->queue(new Task_function(new Gc_runner(options,
-                                                       input_objects,
+						       input_objects,
                                                        symtab,
                                                        layout,
                                                        mapfile),
@@ -228,8 +248,8 @@ queue_initial_tasks(const General_options& options,
     }
 }
 
-// Queue up a set of tasks to be done before queueing the middle set 
-// of tasks.  This is only necessary when garbage collection 
+// Queue up a set of tasks to be done before queueing the middle set
+// of tasks.  This is only necessary when garbage collection
 // (--gc-sections) of unused sections is desired.  The relocs are read
 // and processed here early to determine the garbage sections before the
 // relocs can be scanned in later tasks.
@@ -253,8 +273,8 @@ queue_middle_gc_tasks(const General_options& options,
     {
       // We can read and process the relocations in any order.  
       blocker->add_blocker();
-      workqueue->queue(new Read_relocs(options, symtab, layout, *p,
-				       symtab_lock, blocker));
+      workqueue->queue(new Read_relocs(symtab, layout, *p, symtab_lock,
+				       blocker));
     }
 
   Task_token* this_blocker = new Task_token(true);
@@ -309,8 +329,24 @@ queue_middle_tasks(const General_options& options,
       gold_assert(symtab->gc() != NULL);
       // Do a transitive closure on all references to determine the worklist.
       symtab->gc()->do_transitive_closure();
-      // Call do_layout again to determine the output_sections for all 
-      // referenced input sections.
+    }
+
+  // If identical code folding (--icf) is chosen it makes sense to do it 
+  // only after garbage collection (--gc-sections) as we do not want to 
+  // be folding sections that will be garbage.
+  if (parameters->options().icf_enabled())
+    {
+      symtab->icf()->find_identical_sections(input_objects, symtab);
+    }
+
+  // Call Object::layout for the second time to determine the 
+  // output_sections for all referenced input sections.  When 
+  // --gc-sections or --icf is turned on, Object::layout is 
+  // called twice.  It is called the first time when the 
+  // symbols are added.
+  if (parameters->options().gc_sections()
+      || parameters->options().icf_enabled())
+    {
       for (Input_objects::Relobj_iterator p = input_objects->relobj_begin();
            p != input_objects->relobj_end();
            ++p)
@@ -318,6 +354,7 @@ queue_middle_tasks(const General_options& options,
           (*p)->layout(symtab, layout, NULL);
         }
     }
+
   // Layout deferred objects due to plugins.
   if (parameters->options().has_plugins())
     {
@@ -325,7 +362,9 @@ queue_middle_tasks(const General_options& options,
       gold_assert(plugins != NULL);
       plugins->layout_deferred_objects();
     }     
-  if (parameters->options().gc_sections())
+
+  if (parameters->options().gc_sections()
+      || parameters->options().icf_enabled())
     {
       for (Input_objects::Relobj_iterator p = input_objects->relobj_begin();
            p != input_objects->relobj_end();
@@ -349,7 +388,7 @@ queue_middle_tasks(const General_options& options,
   // pass an empty archive to the linker and get an empty object file
   // out.  In order to do this we need to use a default target.
   if (input_objects->number_of_input_objects() == 0)
-    set_parameters_target(&parameters->default_target());
+    parameters_force_valid_target();
 
   int thread_count = options.thread_count_middle();
   if (thread_count == 0)
@@ -357,8 +396,9 @@ queue_middle_tasks(const General_options& options,
   workqueue->set_thread_count(thread_count);
 
   // Now we have seen all the input files.
-  const bool doing_static_link = (!input_objects->any_dynamic()
-				  && !parameters->options().shared());
+  const bool doing_static_link =
+    (!input_objects->any_dynamic()
+     && !parameters->options().output_is_position_independent());
   set_parameters_doing_static_link(doing_static_link);
   if (!doing_static_link && options.is_static())
     {
@@ -374,6 +414,23 @@ queue_middle_tasks(const General_options& options,
       && options.oformat_enum() != General_options::OBJECT_FORMAT_ELF)
     gold_fatal(_("cannot use non-ELF output format with dynamic object %s"),
 	       (*input_objects->dynobj_begin())->name().c_str());
+
+  if (parameters->options().relocatable())
+    {
+      Input_objects::Relobj_iterator p = input_objects->relobj_begin();
+      if (p != input_objects->relobj_end())
+	{
+	  bool uses_split_stack = (*p)->uses_split_stack();
+	  for (++p; p != input_objects->relobj_end(); ++p)
+	    {
+	      if ((*p)->uses_split_stack() != uses_split_stack)
+		gold_fatal(_("cannot mix split-stack '%s' and "
+			     "non-split-stack '%s' when using -r"),
+			   (*input_objects->relobj_begin())->name().c_str(),
+			   (*p)->name().c_str());
+	    }
+	}
+    }
 
   if (is_debugging_enabled(DEBUG_SCRIPT))
     layout->script_options()->print(stderr);
@@ -420,15 +477,17 @@ queue_middle_tasks(const General_options& options,
 
   // If doing garbage collection, the relocations have already been read.
   // Otherwise, read and scan the relocations.
-  if (parameters->options().gc_sections())
+  if (parameters->options().gc_sections()
+      || parameters->options().icf_enabled())
     {
       for (Input_objects::Relobj_iterator p = input_objects->relobj_begin();
            p != input_objects->relobj_end();
            ++p)
         {
           blocker->add_blocker();
-          workqueue->queue(new Scan_relocs(options, symtab, layout, *p, 
-                           (*p)->get_relocs_data(),symtab_lock, blocker));
+          workqueue->queue(new Scan_relocs(symtab, layout, *p, 
+					   (*p)->get_relocs_data(),
+					   symtab_lock, blocker));
         }
     }
   else
@@ -454,8 +513,8 @@ queue_middle_tasks(const General_options& options,
           // relocations.  That task will in turn queue a task to wait
           // until it can write to the symbol table.
           blocker->add_blocker();
-          workqueue->queue(new Read_relocs(options, symtab, layout, *p,
-                   symtab_lock, blocker));
+          workqueue->queue(new Read_relocs(symtab, layout, *p, symtab_lock,
+					   blocker));
         }
     }
 
@@ -542,7 +601,7 @@ queue_final_tasks(const General_options& options,
       if (input_sections_blocker != NULL)
 	input_sections_blocker->add_blocker();
       final_blocker->add_blocker();
-      workqueue->queue(new Relocate_task(options, symtab, layout, *p, of,
+      workqueue->queue(new Relocate_task(symtab, layout, *p, of,
 					 input_sections_blocker,
 					 output_sections_blocker,
 					 final_blocker));

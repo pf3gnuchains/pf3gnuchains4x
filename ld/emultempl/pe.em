@@ -196,7 +196,8 @@ fragment <<EOF
 #define OPTION_OUT_DEF			(OPTION_SUPPORT_OLD_CODE + 1)
 #define OPTION_EXPORT_ALL		(OPTION_OUT_DEF + 1)
 #define OPTION_EXCLUDE_SYMBOLS		(OPTION_EXPORT_ALL + 1)
-#define OPTION_KILL_ATS			(OPTION_EXCLUDE_SYMBOLS + 1)
+#define OPTION_EXCLUDE_ALL_SYMBOLS	(OPTION_EXCLUDE_SYMBOLS + 1)
+#define OPTION_KILL_ATS			(OPTION_EXCLUDE_ALL_SYMBOLS + 1)
 #define OPTION_STDCALL_ALIASES		(OPTION_KILL_ATS + 1)
 #define OPTION_ENABLE_STDCALL_FIXUP	(OPTION_STDCALL_ALIASES + 1)
 #define OPTION_DISABLE_STDCALL_FIXUP	(OPTION_ENABLE_STDCALL_FIXUP + 1)
@@ -242,9 +243,12 @@ fragment <<EOF
 
 static void
 gld${EMULATION_NAME}_add_options
-  (int ns ATTRIBUTE_UNUSED, char **shortopts ATTRIBUTE_UNUSED, int nl,
-    struct option **longopts, int nrl ATTRIBUTE_UNUSED,
-    struct option **really_longopts ATTRIBUTE_UNUSED)
+  (int ns ATTRIBUTE_UNUSED,
+   char **shortopts ATTRIBUTE_UNUSED,
+   int nl,
+   struct option **longopts,
+   int nrl ATTRIBUTE_UNUSED,
+   struct option **really_longopts ATTRIBUTE_UNUSED)
 {
   static const struct option xtra_long[] = {
     /* PE options */
@@ -267,12 +271,13 @@ gld${EMULATION_NAME}_add_options
     {"use-nul-prefixed-import-tables", no_argument, NULL,
      OPTION_USE_NUL_PREFIXED_IMPORT_TABLES},
 #ifdef DLL_SUPPORT
-    /* getopt allows abbreviations, so we do this to stop it from treating -o
-       as an abbreviation for this option */
+    /* getopt allows abbreviations, so we do this to stop it
+       from treating -o as an abbreviation for this option.  */
     {"output-def", required_argument, NULL, OPTION_OUT_DEF},
     {"output-def", required_argument, NULL, OPTION_OUT_DEF},
     {"export-all-symbols", no_argument, NULL, OPTION_EXPORT_ALL},
     {"exclude-symbols", required_argument, NULL, OPTION_EXCLUDE_SYMBOLS},
+    {"exclude-all-symbols", no_argument, NULL, OPTION_EXCLUDE_ALL_SYMBOLS},
     {"exclude-libs", required_argument, NULL, OPTION_EXCLUDE_LIBS},
     {"exclude-modules-for-implib", required_argument, NULL, OPTION_EXCLUDE_MODULES_FOR_IMPLIB},
     {"kill-at", no_argument, NULL, OPTION_KILL_ATS},
@@ -311,8 +316,8 @@ gld${EMULATION_NAME}_add_options
     {NULL, no_argument, NULL, 0}
   };
 
-  *longopts = (struct option *)
-    xrealloc (*longopts, nl * sizeof (struct option) + sizeof (xtra_long));
+  *longopts
+    = xrealloc (*longopts, nl * sizeof (struct option) + sizeof (xtra_long));
   memcpy (*longopts + nl, &xtra_long, sizeof (xtra_long));
 }
 
@@ -386,6 +391,7 @@ gld_${EMULATION_NAME}_list_options (FILE *file)
   fprintf (file, _("  --disable-stdcall-fixup            Don't link _sym to _sym@nn\n"));
   fprintf (file, _("  --enable-stdcall-fixup             Link _sym to _sym@nn without warnings\n"));
   fprintf (file, _("  --exclude-symbols sym,sym,...      Exclude symbols from automatic export\n"));
+  fprintf (file, _("  --exclude-all-symbols              Exclude all symbols from automatic export\n"));
   fprintf (file, _("  --exclude-libs lib,lib,...         Exclude libraries from automatic export\n"));
   fprintf (file, _("  --exclude-modules-for-implib mod,mod,...\n"));
   fprintf (file, _("                                     Exclude objects, archive members from auto\n"));
@@ -666,6 +672,9 @@ gld${EMULATION_NAME}_handle_option (int optc)
     case OPTION_EXCLUDE_SYMBOLS:
       pe_dll_add_excludes (optarg, EXCLUDESYMS);
       break;
+    case OPTION_EXCLUDE_ALL_SYMBOLS:
+      pe_dll_exclude_all_symbols = 1;
+      break;
     case OPTION_EXCLUDE_LIBS:
       pe_dll_add_excludes (optarg, EXCLUDELIBS);
       break;
@@ -819,12 +828,15 @@ gld_${EMULATION_NAME}_set_symbols (void)
       if (link_info.relocatable)
 	init[IMAGEBASEOFF].value = 0;
       else if (init[DLLOFF].value || (link_info.shared && !link_info.pie))
+	{
 #ifdef DLL_SUPPORT
-	init[IMAGEBASEOFF].value = (pe_enable_auto_image_base) ?
-	  compute_dll_image_base (output_filename) : NT_DLL_IMAGE_BASE;
+	  init[IMAGEBASEOFF].value = (pe_enable_auto_image_base
+				      ? compute_dll_image_base (output_filename)
+				      : NT_DLL_IMAGE_BASE);
 #else
-	init[IMAGEBASEOFF].value = NT_DLL_IMAGE_BASE;
+	  init[IMAGEBASEOFF].value = NT_DLL_IMAGE_BASE;
 #endif
+	}
       else
 	init[IMAGEBASEOFF].value = NT_EXE_IMAGE_BASE;
       init[MSIMAGEBASEOFF].value = init[IMAGEBASEOFF].value;
@@ -859,8 +871,7 @@ gld_${EMULATION_NAME}_set_symbols (void)
   /* Restore the pointer.  */
   pop_stat_ptr ();
 
-  if (pe.FileAlignment >
-      pe.SectionAlignment)
+  if (pe.FileAlignment > pe.SectionAlignment)
     {
       einfo (_("%P: warning, file alignment > section alignment.\n"));
     }
@@ -872,27 +883,13 @@ gld_${EMULATION_NAME}_set_symbols (void)
 static void
 gld_${EMULATION_NAME}_after_parse (void)
 {
-  /* The Windows libraries are designed for the linker to treat the
-     entry point as an undefined symbol.  Otherwise, the .obj that
-     defines mainCRTStartup is brought in because it is the first
-     encountered in libc.lib and it has other symbols in it which will
-     be pulled in by the link process.  To avoid this, we act as
-     though the user specified -u with the entry point symbol.
-
-     This function is called after the linker script and command line
-     options have been read, so at this point we know the right entry
-     point.  This function is called before the input files are
-     opened, so registering the symbol as undefined will make a
-     difference.  */
-
-  if (! link_info.relocatable && entry_symbol.name != NULL)
-    ldlang_add_undef (entry_symbol.name);
-
   /* PR ld/6744:  Warn the user if they have used an ELF-only
      option hoping it will work on PE.  */
   if (link_info.export_dynamic)
     einfo (_("%P: warning: --export-dynamic is not supported for PE "
       "targets, did you mean --export-all-symbols?\n"));
+
+  after_parse_default ();
 }
 
 /* pe-dll.c directly accesses pe_data_import_dll,
@@ -1266,7 +1263,7 @@ gld_${EMULATION_NAME}_after_open (void)
 		      }
 		    symbols = bfd_get_outsymbols (is->the_bfd);
 
-		    relocs = (arelent **) xmalloc ((size_t) relsize);
+		    relocs = xmalloc ((size_t) relsize);
 		    nrelocs = bfd_canonicalize_reloc (is->the_bfd, sec,
 						      relocs, symbols);
 		    if (nrelocs < 0)
@@ -1581,7 +1578,7 @@ gld_${EMULATION_NAME}_unrecognized_file (lang_input_statement_type *entry ATTRIB
 		buflen = len + 2;
 	    }
 
-	  buf = (char *) xmalloc (buflen);
+	  buf = xmalloc (buflen);
 
 	  for (i = 0; i < pe_def_file->num_exports; i++)
 	    {
@@ -1716,7 +1713,7 @@ gld_${EMULATION_NAME}_finish (void)
 #ifdef DLL_SUPPORT
   if (link_info.shared
 #if !defined(TARGET_IS_shpe) && !defined(TARGET_IS_mipspe)
-    || (!link_info.relocatable && pe_def_file->num_exports != 0)
+      || (!link_info.relocatable && pe_def_file->num_exports != 0)
 #endif
     )
     {
@@ -1786,21 +1783,32 @@ gld_${EMULATION_NAME}_place_orphan (asection *s,
 
   lang_list_init (&add_child);
 
-  if (constraint == 0
-      && (os = lang_output_section_find (secname)) != NULL
-      && os->bfd_section != NULL
-      && (os->bfd_section->flags == 0
-	  || ((s->flags ^ os->bfd_section->flags)
-	      & (SEC_LOAD | SEC_ALLOC)) == 0))
-    {
-      /* We already have an output section statement with this
-	 name, and its bfd section has compatible flags.
-	 If the section already exists but does not have any flags set,
-	 then it has been created by the linker, probably as a result of
-	 a --section-start command line switch.  */
-      lang_add_section (&add_child, s, os);
-    }
-  else
+  os = NULL;
+  if (constraint == 0)
+    for (os = lang_output_section_find (secname);
+	 os != NULL;
+	 os = next_matching_output_section_statement (os, 0))
+      {
+	/* If we don't match an existing output section, tell
+	   lang_insert_orphan to create a new output section.  */
+	constraint = SPECIAL;
+
+	if (os->bfd_section != NULL
+	    && (os->bfd_section->flags == 0
+		|| ((s->flags ^ os->bfd_section->flags)
+		    & (SEC_LOAD | SEC_ALLOC)) == 0))
+	  {
+	    /* We already have an output section statement with this
+	       name, and its bfd section has compatible flags.
+	       If the section already exists but does not have any flags set,
+	       then it has been created by the linker, probably as a result of
+	       a --section-start command line switch.  */
+	    lang_add_section (&add_child, s, os);
+	    break;
+	  }
+      }
+
+  if (os == NULL)
     {
       static struct orphan_save hold[] =
 	{
@@ -1906,7 +1914,8 @@ gld_${EMULATION_NAME}_place_orphan (asection *s,
 
 static bfd_boolean
 gld_${EMULATION_NAME}_open_dynamic_archive
-  (const char *arch ATTRIBUTE_UNUSED, search_dirs_type *search,
+  (const char *arch ATTRIBUTE_UNUSED,
+   search_dirs_type *search,
    lang_input_statement_type *entry)
 {
   static const struct

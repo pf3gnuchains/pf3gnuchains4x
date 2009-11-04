@@ -1,6 +1,6 @@
 /* a.out object file format
    Copyright 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1999, 2000,
-   2001, 2002, 2003, 2004, 2005, 2007 Free Software Foundation, Inc.
+   2001, 2002, 2003, 2004, 2005, 2007, 2009 Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
 
@@ -310,7 +310,8 @@ const struct format_ops aout_format_ops =
   aout_pop_insert,
   0,	/* ecoff_set_ext.  */
   0,	/* read_begin_hook.  */
-  0 	/* symbol_new_hook.  */
+  0, 	/* symbol_new_hook.  */
+  0 	/* symbol_clone_hook.  */
 };
 
 const pseudo_typeS aout_pseudo_table[] =

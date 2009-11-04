@@ -656,8 +656,12 @@ enum DT
   DT_FINI_ARRAYSZ = 28,
   DT_RUNPATH = 29,
   DT_FLAGS = 30,
+
+  // This is used to mark a range of dynamic tags.  It is not really
+  // a tag value.
   DT_ENCODING = 32,
-  DT_PREINIT_ARRAY = 33,
+
+  DT_PREINIT_ARRAY = 32,
   DT_PREINIT_ARRAYSZ = 33,
   DT_LOOS = 0x6000000d,
   DT_HIOS = 0x6ffff000,

@@ -1,6 +1,6 @@
 /* expr.c -operands, expressions-
    Copyright 1987, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998,
-   1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007
+   1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2009
    Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
@@ -48,7 +48,7 @@ static void mri_char_constant (expressionS *);
 static void current_location (expressionS *);
 static void clean_up_expression (expressionS * expressionP);
 static segT operand (expressionS *, enum expr_mode);
-static operatorT operator (int *);
+static operatorT operatorf (int *);
 
 extern const char EXP_CHARS[], FLT_CHARS[];
 
@@ -1228,9 +1228,9 @@ operand (expressionS *expressionP, enum expr_mode mode)
 
 #ifdef md_operator
 	  {
-	    operatorT operator = md_operator (name, 1, &c);
+	    operatorT op = md_operator (name, 1, &c);
 
-	    switch (operator)
+	    switch (op)
 	      {
 	      case O_uminus:
 		*input_line_pointer = c;
@@ -1250,14 +1250,14 @@ operand (expressionS *expressionP, enum expr_mode mode)
 	      default:
 		break;
 	      }
-	    if (operator != O_absent && operator != O_illegal)
+	    if (op != O_absent && op != O_illegal)
 	      {
 		*input_line_pointer = c;
 		expr (9, expressionP, mode);
 		expressionP->X_add_symbol = make_expr_symbol (expressionP);
 		expressionP->X_op_symbol = NULL;
 		expressionP->X_add_number = 0;
-		expressionP->X_op = operator;
+		expressionP->X_op = op;
 		break;
 	      }
 	  }
@@ -1486,7 +1486,7 @@ static const operatorT op_encoding[256] = {
    7	* / % << >>
    8	unary - unary ~
 */
-static operator_rankT op_rank[] = {
+static operator_rankT op_rank[O_max] = {
   0,	/* O_illegal */
   0,	/* O_absent */
   0,	/* O_constant */
@@ -1517,22 +1517,6 @@ static operator_rankT op_rank[] = {
   3,	/* O_logical_and */
   2,	/* O_logical_or */
   1,	/* O_index */
-  0,	/* O_md1 */
-  0,	/* O_md2 */
-  0,	/* O_md3 */
-  0,	/* O_md4 */
-  0,	/* O_md5 */
-  0,	/* O_md6 */
-  0,	/* O_md7 */
-  0,	/* O_md8 */
-  0,	/* O_md9 */
-  0,	/* O_md10 */
-  0,	/* O_md11 */
-  0,	/* O_md12 */
-  0,	/* O_md13 */
-  0,	/* O_md14 */
-  0,	/* O_md15 */
-  0,	/* O_md16 */
 };
 
 /* Unfortunately, in MRI mode for the m68k, multiplication and
@@ -1562,10 +1546,10 @@ expr_set_precedence (void)
 }
 
 void
-expr_set_rank (operatorT operator, operator_rankT rank)
+expr_set_rank (operatorT op, operator_rankT rank)
 {
-  gas_assert (operator >= O_md1 && operator < ARRAY_SIZE (op_rank));
-  op_rank[operator] = rank;
+  gas_assert (op >= O_md1 && op < ARRAY_SIZE (op_rank));
+  op_rank[op] = rank;
 }
 
 /* Initialize the expression parser.  */
@@ -1588,7 +1572,7 @@ expr_begin (void)
    Does not advance INPUT_LINE_POINTER.  */
 
 static inline operatorT
-operator (int *num_chars)
+operatorf (int *num_chars)
 {
   int c;
   operatorT ret;
@@ -1748,7 +1732,7 @@ expr (int rankarg,		/* Larger # is higher rank.  */
   /* operand () gobbles spaces.  */
   know (*input_line_pointer != ' ');
 
-  op_left = operator (&op_chars);
+  op_left = operatorf (&op_chars);
   while (op_left != O_illegal && op_rank[(int) op_left] > rank)
     {
       segT rightseg;
@@ -1779,7 +1763,7 @@ expr (int rankarg,		/* Larger # is higher rank.  */
 	    }
 	}
 
-      op_right = operator (&op_chars);
+      op_right = operatorf (&op_chars);
 
       know (op_right == O_illegal || op_left == O_index
 	    || op_rank[(int) op_right] <= op_rank[(int) op_left]);
@@ -2013,6 +1997,7 @@ resolve_expression (expressionS *expressionP)
   /* Help out with CSE.  */
   valueT final_val = expressionP->X_add_number;
   symbolS *add_symbol = expressionP->X_add_symbol;
+  symbolS *orig_add_symbol = add_symbol;
   symbolS *op_symbol = expressionP->X_op_symbol;
   operatorT op = expressionP->X_op;
   valueT left, right;
@@ -2094,6 +2079,7 @@ resolve_expression (expressionS *expressionP)
 	      left = right;
 	      seg_left = seg_right;
 	      add_symbol = op_symbol;
+	      orig_add_symbol = expressionP->X_op_symbol;
 	      op = O_symbol;
 	      break;
 	    }
@@ -2138,18 +2124,19 @@ resolve_expression (expressionS *expressionP)
 	    {
 	      if (op == O_bit_exclusive_or || op == O_bit_inclusive_or)
 		{
-		  if (seg_right != absolute_section || right != 0)
+		  if (!(seg_right == absolute_section && right == 0))
 		    {
 		      seg_left = seg_right;
 		      left = right;
 		      add_symbol = op_symbol;
+		      orig_add_symbol = expressionP->X_op_symbol;
 		    }
 		  op = O_symbol;
 		  break;
 		}
 	      else if (op == O_left_shift || op == O_right_shift)
 		{
-		  if (seg_left != absolute_section || left != 0)
+		  if (!(seg_left == absolute_section && left == 0))
 		    {
 		      op = O_symbol;
 		      break;
@@ -2165,6 +2152,7 @@ resolve_expression (expressionS *expressionP)
 	      seg_left = seg_right;
 	      left = right;
 	      add_symbol = op_symbol;
+	      orig_add_symbol = expressionP->X_op_symbol;
 	      op = O_symbol;
 	      break;
 	    }
@@ -2174,11 +2162,11 @@ resolve_expression (expressionS *expressionP)
 	      op = O_symbol;
 	      break;
 	    }
-	  else if (left != right
-		   || ((seg_left != reg_section || seg_right != reg_section)
-		       && (seg_left != undefined_section
-			   || seg_right != undefined_section
-			   || add_symbol != op_symbol)))
+	  else if (!(left == right
+		     && ((seg_left == reg_section && seg_right == reg_section)
+			 || (seg_left == undefined_section
+			     && seg_right == undefined_section
+			     && add_symbol == op_symbol))))
 	    return 0;
 	  else if (op == O_bit_and || op == O_bit_inclusive_or)
 	    {
@@ -2249,7 +2237,8 @@ resolve_expression (expressionS *expressionP)
 	op = O_constant;
       else if (seg_left == reg_section && final_val == 0)
 	op = O_register;
-      else if (add_symbol != expressionP->X_add_symbol)
+      else if (seg_left == undefined_section
+	       && add_symbol != orig_add_symbol)
 	final_val += left;
       expressionP->X_add_symbol = add_symbol;
     }

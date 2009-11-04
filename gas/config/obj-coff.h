@@ -1,6 +1,6 @@
 /* coff object file format
    Copyright 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998,
-   1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007
+   1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2009
    Free Software Foundation, Inc.
 
    This file is part of GAS.
@@ -162,9 +162,6 @@
 #endif
 
 #ifdef TE_PE
-/* PE weak symbols need USE_UNIQUE.  */
-#define USE_UNIQUE 1
-
 #define obj_set_weak_hook pecoff_obj_set_weak_hook
 #define obj_clear_weak_hook pecoff_obj_clear_weak_hook
 #endif
@@ -413,4 +410,11 @@ extern void obj_coff_init_stab_section   (segT);
 extern void c_section_header             (struct internal_scnhdr *,
 					  char *, long, long, long, long,
 					  long, long, long, long);
+extern void obj_coff_seh_do_final (void);
+
+#ifndef obj_coff_generate_pdata
+#define obj_coff_generate_pdata obj_coff_seh_do_final
+#endif
+
+
 #endif /* OBJ_FORMAT_H */

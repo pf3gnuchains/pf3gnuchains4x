@@ -1,5 +1,5 @@
 /* tc-pj.c -- Assemble code for Pico Java
-   Copyright 1999, 2000, 2001, 2002, 2003, 2005, 2007
+   Copyright 1999, 2000, 2001, 2002, 2003, 2005, 2007, 2009
    Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
@@ -183,9 +183,9 @@ fake_opcode (const char *name,
    can have another name.  */
 
 static void
-alias (const char *new, const char *old)
+alias (const char *new_name, const char *old)
 {
-  hash_insert (opcode_hash_control, new,
+  hash_insert (opcode_hash_control, new_name,
 	       (char *) hash_find (opcode_hash_control, old));
 }
 
@@ -261,6 +261,7 @@ md_assemble (char *str)
       return;
     }
 
+  dwarf2_emit_insn (0);
   if (opcode->opcode == -1)
     {
       /* It's a fake opcode.  Dig out the args and pretend that was

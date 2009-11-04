@@ -205,12 +205,16 @@ static const enum m68k_register mcf5216_ctrl[] = {
   VBR, CACR, ACR0, ACR1, FLASHBAR, RAMBAR, RAMBAR1,
   0
 };
+static const enum m68k_register mcf5221x_ctrl[] = {
+  VBR, FLASHBAR, RAMBAR, RAMBAR1,
+  0
+};
 static const enum m68k_register mcf52223_ctrl[] = {
   VBR, CACR, ACR0, ACR1, FLASHBAR, RAMBAR, RAMBAR1,
   0
 };
 static const enum m68k_register mcf52235_ctrl[] = {
-  VBR, CACR, ACR0, ACR1, FLASHBAR, RAMBAR, RAMBAR1,
+  VBR, FLASHBAR, RAMBAR, RAMBAR1,
   0
 };
 static const enum m68k_register mcf5225_ctrl[] = {
@@ -258,7 +262,7 @@ static const enum m68k_register mcf5282_ctrl[] = {
   0
 };
 static const enum m68k_register mcf53017_ctrl[] = {
-  VBR, CACR, ACR0, ACR1, RAMBAR0, RAMBAR,
+  VBR, CACR, ACR0, ACR1, RAMBAR, RAMBAR1,
   0
 };
 static const enum m68k_register mcf5307_ctrl[] = {
@@ -621,6 +625,8 @@ static const struct m68k_cpu m68k_cpus[] =
   {mcfisa_a|mcfisa_aa|mcfhwdiv|mcfemac|mcfusp,	mcf5216_ctrl, "5214", -1},
   {mcfisa_a|mcfisa_aa|mcfhwdiv|mcfemac|mcfusp,	mcf5216_ctrl, "5216", 0},
   {mcfisa_a|mcfisa_aa|mcfhwdiv|mcfemac|mcfusp,	mcf5216_ctrl, "521x", 2},
+
+  {mcfisa_a|mcfisa_aa|mcfhwdiv|mcfmac|mcfusp,   mcf5221x_ctrl, "5221x", 0},
 
   {mcfisa_a|mcfisa_aa|mcfhwdiv|mcfmac|mcfusp,   mcf52223_ctrl, "52221", -1},
   {mcfisa_a|mcfisa_aa|mcfhwdiv|mcfmac|mcfusp,   mcf52223_ctrl, "52223", 0},
@@ -1320,10 +1326,29 @@ tc_gen_reloc (asection *section ATTRIBUTE_UNUSED, fixS *fixp)
 	   && fixp->fx_addsy
 	   && S_IS_WEAK (fixp->fx_addsy)
 	   && ! bfd_is_und_section (S_GET_SEGMENT (fixp->fx_addsy)))
-    /* PR gas/3041 Adjust addend in order to force bfd_install_relocation()
-       to put the symbol offset into frags referencing a weak symbol.  */
-    reloc->addend = fixp->fx_addnumber
-		    - (S_GET_VALUE (fixp->fx_addsy) * 2);
+    {
+      /* PR gas/3041 References to weak symbols must be treated as extern
+	 in order to be overridable by the linker, even if they are defined
+	 in the same object file. So the original addend must be written
+	 "as is" into the output section without further processing.
+	 The addend value must be hacked here in order to force
+	 bfd_install_relocation() to write the original value into the
+	 output section.
+	 1) MD_APPLY_SYM_VALUE() is set to 1 for m68k/a.out, so the symbol
+	 value has already been added to the addend in fixup_segment(). We
+	 have to remove it.
+	 2) bfd_install_relocation() will incorrectly treat this symbol as
+	 resolved, so it will write the symbol value plus its addend and
+	 section VMA. As a workaround we can tweak the addend value here in
+	 order to get the original value in the section after the call to
+	 bfd_install_relocation().  */
+      reloc->addend = fixp->fx_addnumber
+		      /* Fix because of MD_APPLY_SYM_VALUE() */
+		      - S_GET_VALUE (fixp->fx_addsy)
+		      /* Fix for bfd_install_relocation() */
+		      - (S_GET_VALUE (fixp->fx_addsy)
+			 + S_GET_SEGMENT (fixp->fx_addsy)->vma);
+    }
   else
     reloc->addend = 0;
 #else

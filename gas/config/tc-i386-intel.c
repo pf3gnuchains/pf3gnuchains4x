@@ -23,6 +23,7 @@ static struct
   {
     operatorT op_modifier;	/* Operand modifier.  */
     int is_mem;			/* 1 if operand is memory reference.  */
+    int has_offset;		/* 1 if operand has offset.  */
     unsigned int in_offset;	/* >=1 if processing operand of offset.  */
     unsigned int in_bracket;	/* >=1 if processing operand in brackets.  */
     unsigned int in_scale;	/* >=1 if processing multipication operand
@@ -65,7 +66,7 @@ intel_state;
 static struct
   {
     const char *name;
-    operatorT operator;
+    operatorT op;
     unsigned int operands;
   }
 const i386_operators[] =
@@ -91,7 +92,7 @@ const i386_operators[] =
 static struct
   {
     const char *name;
-    operatorT operator;
+    operatorT op;
     unsigned short sz[3];
   }
 const i386_types[] =
@@ -158,7 +159,7 @@ operatorT i386_operator (const char *name, unsigned int operands, char *pc)
 	if (i386_operators[j].operands
 	    && i386_operators[j].operands != operands)
 	  return O_illegal;
-	return i386_operators[j].operator;
+	return i386_operators[j].op;
       }
 
   for (j = 0; i386_types[j].name; ++j)
@@ -175,7 +176,7 @@ operatorT i386_operator (const char *name, unsigned int operands, char *pc)
 	  *pc = c;
 	  if (intel_syntax > 0 || operands != 1)
 	    return O_illegal;
-	  return i386_types[j].operator;
+	  return i386_types[j].op;
 	}
 
       *input_line_pointer = c;
@@ -279,6 +280,7 @@ static int i386_intel_simplify (expressionS *e)
       break;
 
     case O_offset:
+      intel_state.has_offset = 1;
       ++intel_state.in_offset;
       ret = i386_intel_simplify_symbol (e->X_add_symbol);
       --intel_state.in_offset;
@@ -464,6 +466,7 @@ i386_intel_operand (char *operand_string, int got_a_float)
   /* Initialize state structure.  */
   intel_state.op_modifier = O_absent;
   intel_state.is_mem = 0;
+  intel_state.has_offset = 0;
   intel_state.base = NULL;
   intel_state.index = NULL;
   intel_state.seg = NULL;
@@ -497,6 +500,10 @@ i386_intel_operand (char *operand_string, int got_a_float)
       as_bad (_("invalid expression"));
       ret = 0;
     }
+  else if (!intel_state.has_offset
+	   && input_line_pointer > buf
+	   && *(input_line_pointer - 1) == ']')
+    intel_state.is_mem |= 1;
 
   input_line_pointer = saved_input_line_pointer;
   free (buf);
@@ -714,6 +721,51 @@ i386_intel_operand (char *operand_string, int got_a_float)
       if (i.mem_operands
 	  >= 2 - !current_templates->start->opcode_modifier.isstring)
 	{
+	  /* Handle
+
+	     call	0x9090,0x90909090
+	     lcall	0x9090,0x90909090
+	     jmp	0x9090,0x90909090
+	     ljmp	0x9090,0x90909090
+	   */
+
+	  if ((current_templates->start->opcode_modifier.jumpintersegment
+	       || current_templates->start->opcode_modifier.jumpdword
+	       || current_templates->start->opcode_modifier.jump)
+	      && this_operand == 1
+	      && intel_state.seg == NULL
+	      && i.mem_operands == 1
+	      && i.disp_operands == 1
+	      && intel_state.op_modifier == O_absent)
+	    {
+	      /* Try to process the first operand as immediate,  */
+	      this_operand = 0;
+	      if (i386_finalize_immediate (exp_seg, i.op[0].imms,
+					   intel_state.reloc_types,
+					   NULL))
+		{
+		  this_operand = 1;
+		  expP = &im_expressions[0];
+		  i.op[this_operand].imms = expP;
+		  *expP = exp;
+
+		  /* Try to process the second operand as immediate,  */
+		  if (i386_finalize_immediate (exp_seg, expP,
+					       intel_state.reloc_types,
+					       NULL))
+		    {
+		      i.mem_operands = 0;
+		      i.disp_operands = 0;
+		      i.imm_operands = 2;
+		      i.types[0].bitfield.mem = 0;
+		      i.types[0].bitfield.disp16 = 0;
+		      i.types[0].bitfield.disp32 = 0;
+		      i.types[0].bitfield.disp32s = 0;
+		      return 1;
+		    }
+		}
+	    }
+
 	  as_bad (_("too many memory references for `%s'"),
 		  current_templates->start->name);
 	  return 0;

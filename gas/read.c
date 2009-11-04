@@ -1,6 +1,6 @@
 /* read.c - read a source file -
    Copyright 1986, 1987, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997,
-   1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008
+   1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
@@ -42,7 +42,7 @@
 #include "dw2gencfi.h"
 
 #ifndef TC_START_LABEL
-#define TC_START_LABEL(x,y) (x == ':')
+#define TC_START_LABEL(x,y,z) (x == ':')
 #endif
 
 /* Set by the object-format or the target.  */
@@ -371,7 +371,7 @@ static const pseudo_typeS potable[] = {
   {"irpc", s_irp, 1},
   {"irepc", s_irp, 1},
   {"lcomm", s_lcomm, 0},
-  {"lflags", listing_flags, 0},	/* Listing flags.  */
+  {"lflags", s_ignore, 0},	/* Listing flags.  */
   {"linefile", s_app_line, 0},
   {"linkonce", s_linkonce, 0},
   {"list", listing_list, 1},	/* Turn listing on.  */
@@ -620,19 +620,57 @@ read_a_source_file (char *name)
 #endif
       while (input_line_pointer < buffer_limit)
 	{
+	  bfd_boolean was_new_line;
 	  /* We have more of this buffer to parse.  */
 
 	  /* We now have input_line_pointer->1st char of next line.
 	     If input_line_pointer [-1] == '\n' then we just
 	     scanned another line: so bump line counters.  */
-	  if (is_end_of_line[(unsigned char) input_line_pointer[-1]])
+	  was_new_line = is_end_of_line[(unsigned char) input_line_pointer[-1]];
+	  if (was_new_line)
 	    {
 #ifdef md_start_line_hook
 	      md_start_line_hook ();
 #endif
 	      if (input_line_pointer[-1] == '\n')
 		bump_line_counters ();
+	    }
 
+#ifndef NO_LISTING
+	  /* If listing is on, and we are expanding a macro, then give
+	     the listing code the contents of the expanded line.  */
+	  if (listing)
+	    {
+	      if ((listing & LISTING_MACEXP) && macro_nest > 0)
+		{
+		  /* Find the end of the current expanded macro line.  */
+		  s = find_end_of_line (input_line_pointer, flag_m68k_mri);
+
+		  if (s != last_eol)
+		    {
+		      char *copy;
+		      int len;
+
+		      last_eol = s;
+		      /* Copy it for safe keeping.  Also give an indication of
+			 how much macro nesting is involved at this point.  */
+		      len = s - input_line_pointer;
+		      copy = (char *) xmalloc (len + macro_nest + 2);
+		      memset (copy, '>', macro_nest);
+		      copy[macro_nest] = ' ';
+		      memcpy (copy + macro_nest + 1, input_line_pointer, len);
+		      copy[macro_nest + 1 + len] = '\0';
+
+		      /* Install the line with the listing facility.  */
+		      listing_newline (copy);
+		    }
+		}
+	      else
+		listing_newline (NULL);
+	    }
+#endif
+	  if (was_new_line)
+	    {
 	      line_label = NULL;
 
 	      if (LABELS_WITHOUT_COLONS || flag_m68k_mri)
@@ -645,7 +683,6 @@ read_a_source_file (char *name)
 		      char c;
 		      int mri_line_macro;
 
-		      LISTING_NEWLINE ();
 		      HANDLE_CONDITIONAL_ASSEMBLY ();
 
 		      c = get_symbol_end ();
@@ -712,39 +749,6 @@ read_a_source_file (char *name)
 	    c = *input_line_pointer++;
 	  while (c == '\t' || c == ' ' || c == '\f');
 
-#ifndef NO_LISTING
-	  /* If listing is on, and we are expanding a macro, then give
-	     the listing code the contents of the expanded line.  */
-	  if (listing)
-	    {
-	      if ((listing & LISTING_MACEXP) && macro_nest > 0)
-		{
-		  char *copy;
-		  int len;
-
-		  /* Find the end of the current expanded macro line.  */
-		  s = find_end_of_line (input_line_pointer - 1, flag_m68k_mri);
-
-		  if (s != last_eol)
-		    {
-		      last_eol = s;
-		      /* Copy it for safe keeping.  Also give an indication of
-			 how much macro nesting is involved at this point.  */
-		      len = s - (input_line_pointer - 1);
-		      copy = (char *) xmalloc (len + macro_nest + 2);
-		      memset (copy, '>', macro_nest);
-		      copy[macro_nest] = ' ';
-		      memcpy (copy + macro_nest + 1, input_line_pointer - 1, len);
-		      copy[macro_nest + 1 + len] = '\0';
-
-		      /* Install the line with the listing facility.  */
-		      listing_newline (copy);
-		    }
-		}
-	      else
-		listing_newline (NULL);
-	    }
-#endif
 	  /* C is the 1st significant character.
 	     Input_line_pointer points after that character.  */
 	  if (is_name_beginner (c))
@@ -760,7 +764,7 @@ read_a_source_file (char *name)
 		 S points to the beginning of the symbol.
 		   [In case of pseudo-op, s->'.'.]
 		 Input_line_pointer->'\0' where c was.  */
-	      if (TC_START_LABEL (c, input_line_pointer))
+	      if (TC_START_LABEL (c, s, input_line_pointer))
 		{
 		  if (flag_m68k_mri)
 		    {
@@ -1034,7 +1038,7 @@ read_a_source_file (char *name)
 		     that goes with this #APP  There is one.  The specs
 		     guarantee it...  */
 		  tmp_len = buffer_limit - s;
-		  tmp_buf = xmalloc (tmp_len + 1);
+		  tmp_buf = (char *) xmalloc (tmp_len + 1);
 		  memcpy (tmp_buf, s, tmp_len);
 		  do
 		    {
@@ -1050,7 +1054,7 @@ read_a_source_file (char *name)
 		      else
 			num = buffer_limit - buffer;
 
-		      tmp_buf = xrealloc (tmp_buf, tmp_len + num);
+		      tmp_buf = (char *) xrealloc (tmp_buf, tmp_len + num);
 		      memcpy (tmp_buf + tmp_len, buffer, num);
 		      tmp_len += num;
 		    }
@@ -1087,7 +1091,7 @@ read_a_source_file (char *name)
 		      break;
 		    }
 
-		  new_buf = xrealloc (new_buf, new_length + 100);
+		  new_buf = (char *) xrealloc (new_buf, new_length + 100);
 		  new_tmp = new_buf + new_length;
 		  new_length += 100;
 		}
@@ -2097,7 +2101,7 @@ s_vendor_attribute (int vendor)
       if (i == 0)
 	goto bad;
 
-      name = alloca (i + 1);
+      name = (char *) alloca (i + 1);
       memcpy (name, s, i);
       name[i] = '\0';
 
@@ -2973,6 +2977,57 @@ do_repeat (int count, const char *start, const char *end)
   sb_new (&many);
   while (count-- > 0)
     sb_add_sb (&many, &one);
+
+  sb_kill (&one);
+
+  input_scrub_include_sb (&many, input_line_pointer, 1);
+  sb_kill (&many);
+  buffer_limit = input_scrub_next_buffer (&input_line_pointer);
+}
+
+/* Like do_repeat except that any text matching EXPANDER in the
+   block is replaced by the itteration count.  */
+
+void
+do_repeat_with_expander (int count,
+			 const char * start,
+			 const char * end,
+			 const char * expander)
+{
+  sb one;
+  sb many;
+
+  sb_new (&one);
+  if (!buffer_and_nest (start, end, &one, get_non_macro_line_sb))
+    {
+      as_bad (_("%s without %s"), start, end);
+      return;
+    }
+
+  sb_new (&many);
+
+  if (expander != NULL && strstr (one.ptr, expander) != NULL)
+    {
+      while (count -- > 0)
+	{
+	  int len;
+	  char * sub;
+	  sb processed;
+
+	  sb_new (& processed);
+	  sb_add_sb (& processed, & one);
+	  sub = strstr (processed.ptr, expander);
+	  len = sprintf (sub, "%d", count);
+	  gas_assert (len < 8);
+	  strcpy (sub + len, sub + 8);
+	  processed.len -= (8 - len);
+	  sb_add_sb (& many, & processed);
+	  sb_kill (& processed);
+	}
+    }
+  else
+    while (count-- > 0)
+      sb_add_sb (&many, &one);
 
   sb_kill (&one);
 
@@ -3857,7 +3912,7 @@ s_reloc (int ignore ATTRIBUTE_UNUSED)
   int c;
   struct reloc_list *reloc;
 
-  reloc = xmalloc (sizeof (*reloc));
+  reloc = (struct reloc_list *) xmalloc (sizeof (*reloc));
 
   if (flag_mri)
     stop = mri_comment_field (&stopc);
@@ -3911,7 +3966,7 @@ s_reloc (int ignore ATTRIBUTE_UNUSED)
   if (*input_line_pointer == ',')
     {
       ++input_line_pointer;
-      expression_and_evaluate (&exp);
+      expression (&exp);
     }
   switch (exp.X_op)
     {
@@ -4264,6 +4319,9 @@ emit_expr_fix (expressionS *exp, unsigned int nbytes, fragS *frag, char *p)
 	break;
       case 2:
 	r = BFD_RELOC_16;
+	break;
+      case 3:
+	r = BFD_RELOC_24;
 	break;
       case 4:
 	r = BFD_RELOC_32;
@@ -5404,7 +5462,7 @@ demand_copy_string (int *lenP)
       /* JF this next line is so demand_copy_C_string will return a
 	 null terminated string.  */
       obstack_1grow (&notes, '\0');
-      retval = obstack_finish (&notes);
+      retval = (char *) obstack_finish (&notes);
     }
   else
     {
@@ -5513,7 +5571,7 @@ s_incbin (int x ATTRIBUTE_UNUSED)
     {
       int i;
 
-      path = xmalloc ((unsigned long) len + include_dir_maxlen + 5);
+      path = (char *) xmalloc ((unsigned long) len + include_dir_maxlen + 5);
 
       for (i = 0; i < include_dir_count; i++)
 	{
@@ -5583,7 +5641,7 @@ s_include (int arg ATTRIBUTE_UNUSED)
 {
   char *filename;
   int i;
-  FILE *try;
+  FILE *try_file;
   char *path;
 
   if (!flag_m68k_mri)
@@ -5610,22 +5668,23 @@ s_include (int arg ATTRIBUTE_UNUSED)
 	}
 
       obstack_1grow (&notes, '\0');
-      filename = obstack_finish (&notes);
+      filename = (char *) obstack_finish (&notes);
       while (!is_end_of_line[(unsigned char) *input_line_pointer])
 	++input_line_pointer;
     }
 
   demand_empty_rest_of_line ();
-  path = xmalloc ((unsigned long) i + include_dir_maxlen + 5 /* slop */ );
+  path = (char *) xmalloc ((unsigned long) i
+                           + include_dir_maxlen + 5 /* slop */ );
 
   for (i = 0; i < include_dir_count; i++)
     {
       strcpy (path, include_dirs[i]);
       strcat (path, "/");
       strcat (path, filename);
-      if (0 != (try = fopen (path, FOPEN_RT)))
+      if (0 != (try_file = fopen (path, FOPEN_RT)))
 	{
-	  fclose (try);
+	  fclose (try_file);
 	  goto gotit;
 	}
     }

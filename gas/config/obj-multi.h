@@ -1,5 +1,5 @@
 /* Multiple object format emulation.
-   Copyright 1995, 1996, 1997, 1999, 2000, 2002, 2004, 2007
+   Copyright 1995, 1996, 1997, 1999, 2000, 2002, 2004, 2005, 2007, 2009
    Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
@@ -79,6 +79,11 @@
 #define obj_symbol_new_hook(S)				\
 	(this_format->symbol_new_hook			\
 	 ? (*this_format->symbol_new_hook) (S)		\
+	 : (void) 0)
+
+#define obj_symbol_clone_hook(N, O)			\
+	(this_format->symbol_clone_hook			\
+	 ? (*this_format->symbol_clone_hook) (N, O)	\
 	 : (void) 0)
 
 #define obj_sec_sym_ok_for_reloc(A)			\

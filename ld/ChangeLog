@@ -1,3 +1,576 @@
+2009-10-29  Nathan Sidwell  <nathan@codesourcery.com>
+
+	* emulparams/vxworks.sh (OTHER_READONLY_SECTIONS): Move into ...
+	(OTHER_READWRITE_SECTIONS): ... here.
+
+2009-10-28  Kai Tietz  <kai.tietz@onevision.com>
+
+	* emultempl/pep.em (U): Define underscore macro.
+	(init): Use for __ImageBase U macro.
+
+2009-10-23  Kai Tietz  <kai.tietz@onevision.com>
+
+	* deffile.h (def_file_export): New member its_name.
+	(def_file_import): Likewise.
+	(def_file_add_export): Add argument its_name.
+	(def_file_add_import): Likewise.
+	* deffilep.y (def_exports): Add argument its_name.
+	(def_import): Likewise.
+	(EQUAL): Add new token for '=='.
+	(opt_equalequal_name): New rule.
+	(expline): Add rule opt_equalequal_name.
+	(impline): Likewise.
+	(def_file_free): Free for exports and imports
+	the optional member its_name.
+	(def_lex): Add scan of '==' as EQUAL.
+	* pe-dll.c (pe_export_sort): Sort for its_name too.
+	(process_def_file_and_drectve): Adjust calls to
+	def_file_add_export.
+	(generate_edata): Take its_name in account.
+	(make_one): Likewise.
+	(pe_process_import_defs): Likewise.
+	(pe_dll_generate_def_file): Add print of new '==' option.
+	* ld.texinfo: Extend documentation about .def file syntax.
+	* NEWS: Mention new feature.
+
+2009-10-23  Kai Tietz  <kai.tietz@onevision.com>
+
+	* deffilep.y (def_lex): Allow '<' and '>' characters in identifier
+	strings.
+
+2009-10-23  Ryan Mansfield  <rmansfield@qnx.com>
+
+	PR ld/10489
+	* emultempl/elf32.em (gld${EMULATION_NAME}_search_needed): Handle
+	drive specifiers for DOS based filesystems in rpath-link strings.
+
+2009-10-19  Nick Clifton  <nickc@redhat.com>
+
+	* Makefile.am: Remove spurious sanitization marker.
+	* Makefile.in: Regenerate.
+
+2009-10-16  Dimitry Gorbachev  <d.g.gorbachev@gmail.com>
+
+	* emultempl/pe.em (OPTION_EXCLUDE_ALL_SYMBOLS): New macro.
+	(gld${EMULATION_NAME}_add_options): Add new --exclude-all-symbols option
+	to exclude all symbols from automatic export.
+	(gld_${EMULATION_NAME}_list_options): Describe it.
+	(gld${EMULATION_NAME}_handle_option): Handle it.
+	* emultempl/pep.em: Likewise to all the above.
+	* pe-dll.c (pe_dll_exclude_all_symbols): New variable.
+	(process_def_file_and_drectve): Use it.
+	* pe-dll.h (pe_dll_exclude_all_symbols): Declare.
+	* pep-dll.c (pep_dll_exclude_all_symbols): Define pep_ alias.
+	* pep-dll.h (pe_dll_exclude_all_symbols): Declare.
+	* NEWS: Mention the new feature.
+	* ld.texinfo: Document the new command line switch.
+
+2009-10-14  Andreas Schwab  <schwab@linux-m68k.org>
+
+	* ldlex.l (yy_input): Remove second argument and return the value
+	instead.
+	(YY_INPUT): Adjust.
+
+2009-10-14  Alan Modra  <amodra@bigpond.net.au>
+
+	* emultempl/netbsd.em (gldnetbsd_before_parse): Typo fix.
+
+2009-10-14  Ryan Mansfield  <rmansfield@qnx.com>
+
+	* ldlang.c (load_symbols): Set whole_archive from entry when
+	parsing a linker script.
+
+2009-10-10  Alan Modra  <amodra@bigpond.net.au>
+
+	* scripttempl/elf32cr16.sc: Revert 2009-09-28 changes.
+	* scripttempl/elf32cr16c.sc: Likewise.
+	* scripttempl/elf32crx.sc: Likewise.
+	* scripttempl/tic54xcoff.sc: Likewise.
+	* scripttempl/aix.sc: Likewise.
+	* scripttempl/avr.sc: Likewise.
+	* scripttempl/elf32msp430.sc: Likewise.
+	* scripttempl/elf32msp430_3.sc: Likewise.
+	* scripttempl/elf32sh-symbian.sc: Likewise.
+	* scripttempl/elf_chaos.sc: Likewise.
+	* scripttempl/elfi370.sc: Likewise.
+	* scripttempl/nw.sc: Likewise.
+	* scripttempl/psos.sc: Likewise.
+	* scripttempl/armbpabi.sc: Likewise.
+	* scripttempl/elf.sc: Likewise.
+	* scripttempl/elf64hppa.sc: Likewise.
+	* scripttempl/elfd10v.sc: Likewise.
+	* scripttempl/elfd30v.sc: Likewise.
+	* scripttempl/elfm68hc11.sc: Likewise.
+	* scripttempl/elfm68hc12.sc: Likewise.
+	* scripttempl/elfmicroblaze.sc: Likewise.
+	* scripttempl/elfxtensa.sc: Likewise.
+	* scripttempl/iq2000.sc: Likewise.
+	* scripttempl/mep.sc: Likewise.
+	* scripttempl/xstormy16.sc: Likewise.
+
+2009-10-09  Alan Modra  <amodra@bigpond.net.au>
+
+	PR ld/10749
+	* ldlang.c (lang_size_sections_1): Zero section vmas only for COFF.
+
+2009-10-08  Alan Modra  <amodra@bigpond.net.au>
+
+	PR ld/10744
+	* ldlang.c (lang_new_phdr): Allow FILEHDR/PHDRS on more than the
+	first PT_LOAD header.
+	* ld.texinfo: Update.
+
+2009-10-06  Nathan Sidwell  <nathan@codesourcery.com>
+
+	* ldlang.c (lang_new_phdr): Check PHDRS and FILEHDR in loadable
+	segments do not appear after a different loadable segment.
+	* ld.texinfo (PHDRS): Document order of processing segments.
+	Document where PHDRS and FILEHDR may appear.
+
+2009-10-03  Alan Modra  <amodra@bigpond.net.au>
+
+	* emultempl/ppc32elf.em (emit_stub_syms): Init to -1.
+	(ppc_after_open): Set emit_stubs_syms by default when shared.
+	(OPTION_NO_STUBSYMS): Define.
+	(PARSE_AND_LIST_LONGOPTS, PARSE_AND_LIST_OPTIONS,
+	PARSE_AND_LIST_ARGS_CASES): Handle --no-emit-stub-syms.
+	* emultempl/ppc64elf.em (emit_stub_syms): Init to -1.
+	(gld${EMULATION_NAME}_finish): Set emit_stubs_syms by default.
+	(OPTION_NO_STUBSYMS): Define.
+	(PARSE_AND_LIST_LONGOPTS, PARSE_AND_LIST_OPTIONS,
+	PARSE_AND_LIST_ARGS_CASES): Handle --no-emit-stub-syms.
+
+2009-09-29  Joel Sherrill <joel.sherrill@oarcorp.com>
+
+	* emulparams/m68kelf.sh (NOP): Use 0x4e71 (nop) rather than 0x4e75
+	(rts).
+
+2009-09-29  DJ Delorie  <dj@redhat.com>
+
+	* Makefile.am: Add rules to build RX emulation.
+	* configure.tgt: Likewise.
+	* NEWS: Mention support for RX architecture.
+	* Makefile.in: Regenerate.
+	* emulparams/elf32rx.sh: New file.
+	* emultempl/rxelf.em: New file.
+
+2009-09-29  Alan Modra  <amodra@bigpond.net.au>
+
+	* ldlang.c (lang_size_sections_1): Allow scripts to specify a
+	non-zero vma even when relocatable.
+
+2009-09-28  Alan Modra  <amodra@bigpond.net.au>
+
+	* scripttempl/elf32cr16.sc: Emit empty script for ld -r and ld -Ur.
+	* scripttempl/elf32cr16c.sc: Likewise.
+	* scripttempl/elf32crx.sc: Likewise.
+	* scripttempl/tic54xcoff.sc: Likewise.
+	* scripttempl/aix.sc: Delete ${RELOCATING-0}.
+	* scripttempl/avr.sc: Likewise.
+	* scripttempl/elf32msp430.sc: Likewise.
+	* scripttempl/elf32msp430_3.sc: Likewise.
+	* scripttempl/elf32sh-symbian.sc: Likewise.
+	* scripttempl/elf_chaos.sc: Likewise.
+	* scripttempl/elfi370.sc: Likewise.
+	* scripttempl/nw.sc: Likewise.
+	* scripttempl/psos.sc: Likewise.
+	* scripttempl/armbpabi.sc: Delete ${RELOCATING-0} and ${CONSTRUCTING-0}.
+	* scripttempl/elf.sc: Likewise.
+	* scripttempl/elf64hppa.sc: Likewise.
+	* scripttempl/elfd10v.sc: Likewise.
+	* scripttempl/elfd30v.sc: Likewise.
+	* scripttempl/elfm68hc11.sc: Likewise.
+	* scripttempl/elfm68hc12.sc: Likewise.
+	* scripttempl/elfmicroblaze.sc: Likewise.
+	* scripttempl/elfxtensa.sc: Likewise.
+	* scripttempl/iq2000.sc: Likewise.
+	* scripttempl/mep.sc: Likewise.
+	* scripttempl/xstormy16.sc: Likewise.
+
+2009-09-27  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	PR ld/10634
+	* ldlang.c (lang_size_sections_1): Always force output vma to zero for
+	relocatable sections.
+	(lang_size_sections_1): Revert previous COFF-only accommodation for
+	relocatable sections.
+
+2009-09-25  Martin Thuresson  <martint@google.com>
+
+	Update sources to make arm targets compile cleanly with
+	-Wc++-compat:
+	* emultempl/armelf.em: Add casts.
+
+2009-09-23  Matt Rice  <ratmice@gmail.com>
+
+	* emultempl/elf32.em (gld${EMULATION_NAME}_add_options): Add --audit,
+	--depaudit, and -P options.
+	(gld${EULATION_NAME}_handle_options): Ditto.
+	(gld${EULATION_NAME}_list_options): Ditto.
+	(gld${EMULATION_NAME}_append_to_separated_string): New function for
+	handling rpath-like colon separated strings.
+	(gld${EMULATION_NAME}_before_allocation): Pass the audit and depaudit
+	libs to bfd.  Propagate DT_AUDIT from needed libs to depaudit.
+	* ld.texinfo: Document new options.
+
+2009-09-23  Nick Clifton  <nickc@redhat.com>
+
+	* po/vi.po: Updated Vietnamese translation.
+
+2009-09-22  Alan Modra  <amodra@bigpond.net.au>
+
+	* scripttempl/a29k.sc: Delete.
+	* scripttempl/ebmon29k.sc: Delete.
+	* scripttempl/m68klynx.sc: Delete.
+	* scripttempl/sa29200.sc: Delete.
+	* scripttempl/sparclynx.sc: Delete.
+
+2009-09-21  Alan Modra  <amodra@bigpond.net.au>
+
+	* emultempl/ppc32elf.em (no_tls_get_addr_opt): New var.
+	(ppc_before_allocation): Pass to ppc_elf_tls_setup.
+	(OPTION_NO_TLS_GET_ADDR_OPT): Define.  Redefine other options in
+	terms of previous option.
+	(PARSE_AND_LIST_LONGOPTS, PARSE_AND_LIST_OPTIONS): Add
+	--no-tls-get-addr-optimize.
+	(PARSE_AND_LIST_ARGS_CASES): Handle it.
+	* emultempl/ppc64elf.em (no_tls_get_addr_opt): New var.
+	(ppc_before_allocation): Pass to ppc64_elf_tls_setup.
+	(OPTION_NO_TLS_GET_ADDR_OPT): Define.
+	(PARSE_AND_LIST_LONGOPTS, PARSE_AND_LIST_OPTIONS): Add
+	--no-tls-get-addr-optimize.
+	(PARSE_AND_LIST_ARGS_CASES): Handle it.
+
+2009-09-18  Nick Clifton  <nickc@redhat.com>
+
+	* po/es.po: Updated Spanish translation.
+
+2009-09-13  Alan Modra  <amodra@bigpond.net.au>
+
+	PR ld/6766
+	* lexsup.c (parse_args <-e>): Revert 2009-03-18 change.
+	* ldemul.c (after_parse_default): Add entry symbol as undef.
+	* emultempl/alphaelf.em (alpha_after_parse): Call after_parse_default.
+	* emultempl/cr16elf.em (cr16elf_after_parse): Likewise.
+	* emultempl/crxelf.em (crxelf_after_parse): Likewise.
+	* emultempl/hppaelf.em (hppaelf_after_parse): Likewise.
+	* emultempl/ia64elf.em (gld${EMULATION_NAME}_after_parse): Likewise.
+	* emultempl/pe.em (gld_${EMULATION_NAME}_after_parse): Call
+	after_parse_default and delete now duplicate code.
+	* emultempl/pep.em (gld_${EMULATION_NAME}_after_parse): Likewise.
+	* scripttempl/elf32cr16.sc: No need to make entry extern.
+	* scripttempl/elf32cr16c.sc: Likewise.
+	* scripttempl/elf32crx.sc: Likewise.
+	* scripttempl/elf32xc16xs.sc: Only provide ENTRY on final link.
+
+2009-09-11  Nick Clifton  <nickc@redhat.com>
+
+	* po/ld.pot: Updated by the Translation project.
+	* po/fi.po: Updated Finnish translation.
+
+2009-09-11  Martin Thuresson  <martint@google.com>
+
+	Updated sources to compile cleanly with -Wc++-compat:
+	* ld.h (enum endian_enum,enum symbolic_enum,enum
+	dynamic_list_enum): Move to top level.
+	* ldcref.c: Add casts.
+	* ldctor.c: Add casts.
+	* ldexp.c
+	* ldexp.h (enum node_tree_enum,enum phase_enum): Move to top level.
+	* ldlang.c: Add casts. (lang_insert_orphan): Use enum name instead
+	of integer.
+	* ldlang.h (enum statement_enum): Move to top level.
+	* ldmain.c: Add casts.
+	* ldwrite.c: Add casts.
+	* lexsup.c: Add casts. (enum control_enum): Move to top level.
+	* mri.c: Add casts. (mri_draw_tree): Use enum name instead of
+	integer.
+
+2009-09-09  Alan Modra  <amodra@bigpond.net.au>
+
+	* scripttempl/aix.sc: Only provide ENTRY on final link.
+	* scripttempl/alpha.sc: Likewise.
+	* scripttempl/armcoff.sc: Likewise.
+	* scripttempl/crisaout.sc: Likewise.
+	* scripttempl/delta68.sc: Likewise.
+	* scripttempl/ebmon29k.sc: Likewise.
+	* scripttempl/elf32xc16x.sc: Likewise.
+	* scripttempl/elf32xc16xl.sc: Likewise.
+	* scripttempl/elfmicroblaze.sc: Likewise.
+	* scripttempl/epocpe.sc: Likewise.
+	* scripttempl/h8300.sc: Likewise.
+	* scripttempl/h8300h.sc: Likewise.
+	* scripttempl/h8300hn.sc: Likewise.
+	* scripttempl/h8300s.sc: Likewise.
+	* scripttempl/h8300sn.sc: Likewise.
+	* scripttempl/h8300sx.sc: Likewise.
+	* scripttempl/h8300sxn.sc: Likewise.
+	* scripttempl/hppaelf.sc: Likewise.
+	* scripttempl/i386beos.sc: Likewise.
+	* scripttempl/i386coff.sc: Likewise.
+	* scripttempl/i386go32.sc: Likewise.
+	* scripttempl/m68kaux.sc: Likewise.
+	* scripttempl/m68klynx.sc: Likewise.
+	* scripttempl/m88kbcs.sc: Likewise.
+	* scripttempl/maxqcoff.sc: Likewise.
+	* scripttempl/mcorepe.sc: Likewise.
+	* scripttempl/mips.sc: Likewise.
+	* scripttempl/ppcpe.sc: Likewise.
+	* scripttempl/sa29200.sc: Likewise.
+	* scripttempl/sparccoff.sc: Likewise.
+	* scripttempl/sparclynx.sc: Likewise.
+	* scripttempl/tic4xcoff.sc: Likewise.
+	* scripttempl/tic54xcoff.sc: Likewise.
+	* scripttempl/tic80coff.sc: Likewise.
+	* scripttempl/z8000.sc: Likewise.
+
+2009-09-07  Tristan Gingold  <gingold@adacore.com>
+
+	* po/ld.pot: Regenerate.
+
+2009-09-05  Martin Thuresson  <martin@mtme.org>
+
+	* emultempl/elf32.em (gld${EMULATION_NAME}_load_symbols,
+	gld${EMULATION_NAME}_try_needed): Rename variable class to
+	link_class.
+
+2009-09-04  Tristan Gingold  <gingold@adacore.com>
+
+	* NEWS: Add marker for 2.20.
+
+2009-09-04  Alan Modra  <amodra@bigpond.net.au>
+
+	* scripttempl/elf.sc (.text): Add cold text sections.
+
+2009-09-04  Jie Zhang  <jie.zhang@analog.com>
+
+	* emulparams/elf32bfinfd.sh (OTHER_SECTIONS): Add .l2.text
+	and .l2.data.
+
+2009-09-03  Dave Korn  <dave.korn.cygwin@gmail.com>
+
+	* scripttempl/pe.sc (.text): Add "*(.text.*)" in order to catch
+	new GCC hot/cold/unlikely partitions.
+	* scripttempl/pep.sc: Likewise.
+	* scripttempl/epocpe.sc: Likewise.
+	* scripttempl/mcorepe.sc: Likewise.
+	* scripttempl/ppcpe.sc: Likewise.
+
+2009-09-01  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+
+	* Makefile.am (ldgram.o, ldlex.o, deffilep.o): Supply correct
+	source file name for generated files which may be in $(srcdir).
+	* Makefile.in: Regenerate.
+
+2009-09-01  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* ldver.c (ldversion): Change to "Copyright 2009".
+
+2009-09-01  Jie Zhang  <jie.zhang@analog.com>
+
+	* scripttempl/elf.sc: Add ${USER_LABEL_PREFIX} to _start, etext,
+	_stack and __bss_start.
+	* emulparams/bfin.sh (ENTRY): Remove.
+
+2009-08-30  Alan Modra  <amodra@bigpond.net.au>
+
+	PR ld/10569
+	* ldexp.c (fold_name <MAXPAGESIZE>): Return config.maxpagesize.
+	(fold_name <COMMONPAGESIZE>): Similarly.
+	* ldlang.c (output_target): Make global.
+	* ldlang.h (output_target): Declare.
+	* ldmain.c (main): Set config.maxpagesize from bfd_emul_get_maxpagesize.
+	Similarly for config.commonpagesize.
+	* ldemul.c (set_output_arch_default): Call bfd_emul_set_maxpagesize
+	and bfd_emul_set_commonpagesize.
+	* emultempl/elf32.em (gld${EMULATION_NAME}_handle_option): Don't call
+	bfd_emul_set_maxpagesize or bfd_emul_set_commonpagesize here.
+
+2009-08-29  Martin Thuresson  <martin@mtme.org>
+
+	* ldexp.c (exp_intop, exp_bigintop, exp_relop, exp_binop)
+	(exp_trinop, exp_unop, exp_nameop, exp_assop): Rename variable new
+	to new_e.
+	* ldfile.c (ldfile_add_library_path): Rename variable new to
+	new_dirs. (ldfile_add_arch): Rename variable new to new_arch.
+	* ldlang.c (new_statement, lang_final, lang_add_wild)
+	(lang_target, lang_add_fill, lang_add_data, lang_add_assignment)
+	(lang_add_insert): Rename variable new to new_stmt. (new_afile):
+	Added missing cast. (lang_memory_region_lookup): Rename variable
+	new to new_region. (init_os): Rename variable new to
+	new_userdata. (lang_add_section): Rename variable new to
+	new_section. (ldlang_add_undef): Rename variable new to
+	new_undef. (realsymbol): Rename variable new to new_name.
+
+2009-08-26  Nick Clifton  <nickc@redhat.com>
+
+	PR ld/10555
+	* emultempl/elf32.em (_after_open): Do not create a
+	.note.gnu-build-id section if there are no input files.
+
+2009-08-24  Nick Clifton  <nickc@redhat.com>
+
+	* scripttempl/elfxtensa.sc (DISCARDED): Discard sections with
+	.gnu.lto_ prefix.
+	* scripttempl/armbpabi.sc: Likewise.
+	* scripttempl/elf32sh-symbian.sc: Likewise.
+	* scripttempl/elf64hppa.sc: Likewise.
+	* scripttempl/mep.sc: Likewise.
+
+2009-08-24  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+
+	* Makefile.am (ldmain.o, ldfile.o): Fix typos in non-fastdep
+	rules.
+	(eelf32_spu.o): Add dependency tracking.
+	* Makefile.in: Regenerate.
+
+	* Makefile.am (am__skiplex, am__skipyacc): New.
+	* Makefile.in: Regenerate.
+
+2009-08-22  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+
+	* Makefile.am (bin_PROGRAMS): Renamed from ...
+	(noinst_PROGRAMS): ... this.
+	(transform): Override, including the renaming of ld-new to ld.
+	(install-exec-local): Installation of ld in $(bindir) not needed
+	here any more.
+	(AM_CPPFLAGS): Renamed from ...
+	(INCLUDES): ... this.
+	(MAINTAINERCLEANFILES): Add ld.1.
+	* Makefile.in: Regenerate.
+
+	* Makefile.am (AUTOMAKE_OPTIONS): Remove cygnus.  Add
+	no-texinfo.tex, no-dist, foreign.
+	(TEXINFO_TEX): New variable.
+	(install-data-local): Removed, not needed any more.
+	(all): Dependencies upon info and ld.1 not needed any more.
+	(MKDEP, DEP, DEP1, dep.sed, dep, dep-in, dep-am): Removed.
+	(mkdep generated section): Removed.
+	(ldgram.o, ldlex.o, deffilep.o, ldmain.o, ldfile.o): Rewrite to
+	use automake dependency tracking mechanism.
+	(EXTRA_ld_new_SOURCES): Add pep-dll.c, pe-dll.c, and
+	$(ALL_EMULATIONS:.o=.c) $(ALL_64_EMULATIONS:.o=.c) so their
+	dependencies are tracked too.
+	(BUILT_SOURCES): New, list $(GENERATED_HFILES) to ensure they
+	are built early.
+	* configure.in: Use AM_MAINTAINER_MODE.
+	* aclocal.m4, configure, Makefile.in: Regenerate.
+
+	* Makefile.am (pdf__strip_dir, install-pdf, install-pdf-am)
+	(install-pdf-recursive, html__strip_dir, install-html)
+	(install-html-am, install-html-recursive): Remove.
+	* Makefile.in: Regenerate.
+
+	* Makefile.in: Regenerate.
+	* aclocal.m4: Likewise.
+	* config.in: Likewise.
+	* configure: Likewise.
+
+2009-08-21  Richard Guenther  <rguenther@suse.de>
+
+	* scripttempl/elf.sc: Discard sections with .gnu.lto_ prefix.
+
+2009-08-12  Tristan Gingold  <gingold@adacore.com>
+
+	* ld.h (fat_user_section_struct): Add map_symbol_def_count field.
+	* ldlang.c (hash_entry_addr_cmp): New function.
+	(print_all_symbols): Sort the symbols by address before printing them.
+
+2009-08-10  Alan Modra  <amodra@bigpond.net.au>
+
+	PR 10474
+	* ldemul.c (after_allocation_default): Run lang_relax_sections.
+	* ldlang.h (lang_relax_sections): Declare.
+	* ldlang.c (relax_sections): Delete.
+	(lang_relax_sections): New function.
+	(lang_process): Don't relax directly from here.
+	* emultempl/alphaelf.em (alpha_finish): Call finish_default.
+	* emultempl/armelf.em (arm_elf_after_allocation): Delete.  Move body..
+	(gld${EMULATION_NAME}_finish): ..to here.  Move existing code..
+	(gld${EMULATION_NAME}_after_allocation): ..to here.  New function.
+	(LDEMUL_AFTER_ALLOCATION): Update.
+	* emultempl/avrelf.em (avr_elf_finish, LDEMUL_FINISH): Delete.
+	(avr_elf_after_allocation): New function.
+	(LDEMUL_AFTER_ALLOCATION): Define.
+	* emultempl/elf-generic.em (gld${EMULATION_NAME}_map_segments): Call
+	lang_relax_sections.
+	* emultempl/elf32.em (gld${EMULATION_NAME}_finish): Delete.  Move..
+	(gld${EMULATION_NAME}_after_allocation): ..code to here.  New function.
+	(LDEMUL_AFTER_ALLOCATION, LDEMUL_FINISH): Update.
+	* emultempl/genelf.em (gld${EMULATION_NAME}_finish): Delete.  Move..
+	(gld${EMULATION_NAME}_after_allocation): ..code to here.  New function.
+	(LDEMUL_FINISH): Delete.
+	(LDEMUL_AFTER_ALLOCATION): Define.
+	* emultempl/hppaelf.em (gld${EMULATION_NAME}_finish): Delete.  Move..
+	(gld${EMULATION_NAME}_after_allocation): ..to here.  New function.
+	(LDEMUL_FINISH): Delete.
+	(LDEMUL_AFTER_ALLOCATION): Define.
+	* emultempl/m68hc1xelf.em (m68hc11elf_finish): Delete.  Move..
+	(m68hc11elf_after_allocation): ..to here.  New function.
+	(LDEMUL_FINISH): Delete.
+	(LDEMUL_AFTER_ALLOCATION): Define.
+	* emultempl/m68kelf.em (m68k_elf_after_allocation): Call
+	gld${EMULATION_NAME}_after_allocation.
+	* emultempl/mmix-elfnmmo.em (mmix_after_allocation): Call
+	gld${EMULATION_NAME}_after_allocation.
+	* emultempl/mmo.em (mmo_finish): Delete.  Move body..
+	(gld${EMULATION_NAME}_after_allocation): ..to here.  New function.
+	(LDEMUL_FINISH): Define.
+	* emultempl/ppc64elf.em (ppc_layout_sections_again): Set elf_gp.
+	(gld${EMULATION_NAME}_finish): Move code sizing sections..
+	(gld${EMULATION_NAME}_after_allocation): ..to here.
+	* emultempl/sh64elf.em (sh64_elf_${EMULATION_NAME}_after_allocation):
+	Call gld${EMULATION_NAME}_after_allocation.
+	* emultempl/spuelf.em (gld${EMULATION_NAME}_finish): Delete
+	bfd_elf_discard_info and map_segments call.
+
+2009-08-06  Michael Eager <eager@eagercon.com>
+
+	* Makefile.am: Add eelf32mb_linux.o, eelf32microblaze.o to
+	ALL_EMULATIONS, targets.
+	* Makefile.in: Regenerate.
+	* configure.tgt: Add microblaze*-linux*, microblaze* targets.
+	* emulparams/elf32mb_linux.sh: New.
+	* emulparams/elf32microblaze.sh. New.
+	* scripttempl/elfmicroblaze.sc: New.
+
+2009-08-05  Trevor Smigiel  <Trevor_Smigiel@playstation.sony.com>
+
+	* emulparams/elf32_spu.sh (OTHER_READONLY_SECTIONS): Add .fixup
+	section and __fixup_start symbol.
+	* emultempl/spuelf.em (params): Initialize emit_fixups member.
+	(spu_before_allocation): Call spu_elf_size_sections.
+	(OPTION_SPU_EMIT_FIXUPS): Define.
+	(PARSE_AND_LIST_LONGOPTS): Add --emit-fixups.
+	(PARSE_AND_LIST_ARGS_CASES): Handle --emit-fixups.
+	* ld.texinfo (--emit-fixups): Document.
+
+2009-08-04  Alan Modra  <amodra@bigpond.net.au>
+
+	PR 10474
+	* emultempl/ppc32elf.em (ppc_before_allocation): Test rawsize,
+	not size, after lang_reset_memory_regions.
+
+2009-07-30  Alan Modra  <amodra@bigpond.net.au>
+
+	* emulparams/elf32ppc.sh (PLT): Don't include ".iplt".
+	* emulparams/elf_i386.sh (IREL_IN_PLT): Define.
+	* emulparams/elf_x86_64.sh (IREL_IN_PLT): Define.
+	* scripttempl/elf.sc: Create separate .iplt and .rela.iplt sections
+	when !IREL_IN_PLT.
+
+2009-07-29  Hans-Peter Nilsson  <hp@bitrange.com>
+
+	* scripttempl/mmo.sc: For relocateable links, set $OUTPUT_FORMAT to
+	the new $RELOCATEABLE_OUTPUT_FORMAT, if set.
+	(OUTPUT_FORMAT): Use the variable $OUTPUT_FORMAT.
+	(ENTRY): Don't emit for relocateable links.
+	(/DISCARD/): Don't discard .gnu.warning.* for relocateable links.
+	* emulparams/mmo.sh (RELOCATEABLE_OUTPUT_FORMAT): Set, to
+	elf64-mmix.
+	* emulparams/elf64mmix.sh (OTHER_TEXT_SECTIONS): Empty, don't
+	provide "Main" or set "_start.", for relocateable links.
+
 2009-07-27  Nick Clifton  <nickc@redhat.com>
 
 	* (po/fi.po): Updated Finnish translation.
@@ -50,7 +623,7 @@
 
 	* scripttempl/pep.sc: Put .eh_frame in its own section.
 	* scripttempl/pe.sc: Ditto.
-	
+
 2009-06-26  Kai Tietz  <kai.tietz@onevision.com>
 
 	* scripttempl/pe.sc (.debug_pubtypes): Added section rule.
@@ -295,7 +868,7 @@
 
 2009-04-25  Alan Modra  <amodra@bigpond.net.au>
 
-     	PR 10061
+	PR 10061
 	* genscripts.sh: Don't pass $EMULATION_NAME as $CUSTOMIZER_SCRIPT
 	param.
 
@@ -583,7 +1156,7 @@
 2009-02-24  Sandra Loosemore  <sandra@codesourcery.com>
 
 	* ld.texinfo (Options): Correct typos in example.  Recommend
-	using joined forms of syntax for passing options with arguments 
+	using joined forms of syntax for passing options with arguments
 	from a driver.
 	(-a): Use consistent syntax for documenting option arguments.
 	Clean up indexing and markup.

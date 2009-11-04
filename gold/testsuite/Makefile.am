@@ -4,7 +4,8 @@
 # system and the host system are the same.  So these tests will not
 # work when building with a cross-compiler.
 
-AUTOMAKE_OPTIONS =
+# Ignore warning about AM_PROG_CC_C_O due to large_CFLAGS
+AUTOMAKE_OPTIONS = foreign -Wno-portability
 
 # The two_file_test tests -fmerge-constants, so we simply always turn
 # it on.  This may need to be controlled by a configure option
@@ -12,7 +13,7 @@ AUTOMAKE_OPTIONS =
 AM_CFLAGS = $(WARN_CFLAGS) $(LFS_CFLAGS) -fmerge-constants
 AM_CXXFLAGS = $(WARN_CXXFLAGS) $(LFS_CFLAGS) -fmerge-constants
 
-INCLUDES = \
+AM_CPPFLAGS = \
 	-I$(srcdir) -I$(srcdir)/.. -I$(srcdir)/../../include \
 	-I$(srcdir)/../../elfcpp -I.. \
 	-DLOCALEDIR="\"$(datadir)/locale\"" \
@@ -24,6 +25,7 @@ TEST_CXXFILT = $(top_builddir)/../binutils/cxxfilt
 TEST_STRIP = $(top_builddir)/../binutils/strip-new
 TEST_AR = $(top_builddir)/../binutils/ar
 TEST_NM = $(top_builddir)/../binutils/nm-new
+TEST_AS = $(top_builddir)/../gas/as-new
 
 if PLUGINS
 LIBDL = -ldl
@@ -41,7 +43,7 @@ endif
 # .o's), but not all of them (such as .so's and .err files).  We
 # improve on that here.  automake-1.9 info docs say "mostlyclean" is
 # the right choice for files 'make' builds that people rebuild.
-MOSTLYCLEANFILES = *.so
+MOSTLYCLEANFILES = *.so *.syms *.stdout
 
 
 # We will add to these later, for each individual test.  Note
@@ -106,6 +108,7 @@ flagstest_ndebug.o: constructor_test.cc
 
 check_SCRIPTS += gc_comdat_test.sh
 check_DATA += gc_comdat_test.stdout
+MOSTLYCLEANFILES += gc_comdat_test
 gc_comdat_test_1.o: gc_comdat_test_1.cc 
 	$(CXXCOMPILE) -O0 -c -ffunction-sections -g -o $@ $<
 gc_comdat_test_2.o: gc_comdat_test_2.cc 
@@ -115,6 +118,45 @@ gc_comdat_test: gc_comdat_test_1.o gc_comdat_test_2.o gcctestdir/ld
 gc_comdat_test.stdout: gc_comdat_test
 	$(TEST_NM) -C gc_comdat_test > gc_comdat_test.stdout
 
+check_SCRIPTS += gc_tls_test.sh
+check_DATA += gc_tls_test.stdout
+MOSTLYCLEANFILES += gc_tls_test
+gc_tls_test.o: gc_tls_test.cc
+	$(CXXCOMPILE) -O0 -c -g -o $@ $<
+gc_tls_test:gc_tls_test.o gcctestdir/ld
+	$(CXXLINK) -Bgcctestdir/ -Wl,--gc-sections gc_tls_test.o
+gc_tls_test.stdout: gc_tls_test
+	$(TEST_NM) -C gc_tls_test > gc_tls_test.stdout
+
+check_SCRIPTS += icf_test.sh
+check_DATA += icf_test.stdout
+MOSTLYCLEANFILES += icf_test
+icf_test.o: icf_test.cc 
+	$(CXXCOMPILE) -O0 -c -ffunction-sections -g -o $@ $<
+icf_test: icf_test.o gcctestdir/ld
+	$(CXXLINK) -Bgcctestdir/ -Wl,--icf=all icf_test.o
+icf_test.stdout: icf_test
+	$(TEST_NM) -C icf_test > icf_test.stdout
+
+check_SCRIPTS += icf_keep_unique_test.sh
+check_DATA += icf_keep_unique_test.stdout
+MOSTLYCLEANFILES += icf_keep_unique_test
+icf_keep_unique_test.o: icf_keep_unique_test.cc
+	$(CXXCOMPILE) -O0 -c -ffunction-sections -g -o $@ $<
+icf_keep_unique_test: icf_keep_unique_test.o gcctestdir/ld
+	$(CXXLINK) -Bgcctestdir/ -Wl,--icf=all -Wl,--keep-unique,_Z11unique_funcv icf_keep_unique_test.o
+icf_keep_unique_test.stdout: icf_keep_unique_test
+	$(TEST_NM) -C icf_keep_unique_test > icf_keep_unique_test.stdout
+
+check_SCRIPTS += icf_safe_test.sh
+check_DATA += icf_safe_test.stdout
+MOSTLYCLEANFILES += icf_safe_test
+icf_safe_test.o: icf_safe_test.cc 
+	$(CXXCOMPILE) -O0 -c -ffunction-sections -g -o $@ $<
+icf_safe_test: icf_safe_test.o gcctestdir/ld
+	$(CXXLINK) -Bgcctestdir/ -Wl,--icf=safe icf_safe_test.o
+icf_safe_test.stdout: icf_safe_test
+	$(TEST_NM) icf_safe_test > icf_safe_test.stdout
 
 check_PROGRAMS += basic_test
 check_PROGRAMS += basic_static_test
@@ -134,6 +176,11 @@ basic_pic_test: basic_pic_test.o gcctestdir/ld
 basic_static_pic_test: basic_pic_test.o gcctestdir/ld
 	$(CXXLINK) -Bgcctestdir/ -static basic_pic_test.o
 
+check_PROGRAMS += basic_pie_test
+basic_pie_test.o: basic_test.cc
+	$(CXXCOMPILE) -O0 -c -fpie -o $@ $<
+basic_pie_test: basic_pie_test.o gcctestdir/ld
+	$(CXXLINK) -Bgcctestdir/ -pie basic_pie_test.o
 
 check_PROGRAMS += constructor_test
 check_PROGRAMS += constructor_static_test
@@ -239,8 +286,22 @@ two_file_relocatable_test_LDADD = two_file_relocatable.o
 two_file_relocatable.o: gcctestdir/ld two_file_test_1.o two_file_test_1b.o two_file_test_2.o
 	gcctestdir/ld -r -o $@ two_file_test_1.o two_file_test_1b.o two_file_test_2.o
 
+check_PROGRAMS += two_file_pie_test
+two_file_test_1_pie.o: two_file_test_1.cc
+	$(CXXCOMPILE) -c -fpie -o $@ $<
+two_file_test_1b_pie.o: two_file_test_1b.cc
+	$(CXXCOMPILE) -c -fpie -o $@ $<
+two_file_test_2_pie.o: two_file_test_2.cc
+	$(CXXCOMPILE) -c -fpie -o $@ $<
+two_file_test_main_pie.o: two_file_test_main.cc
+	$(CXXCOMPILE) -c -fpie -o $@ $<
+two_file_pie_test: two_file_test_1_pie.o two_file_test_1b_pie.o \
+		two_file_test_2_pie.o two_file_test_main_pie.o gcctestdir/ld
+	$(CXXLINK) -Bgcctestdir/ -pie two_file_test_1_pie.o two_file_test_1b_pie.o two_file_test_2_pie.o two_file_test_main_pie.o
+
 check_SCRIPTS += two_file_shared.sh
 check_DATA += two_file_shared.dbg
+MOSTLYCLEANFILES += two_file_shared.dbg
 two_file_shared.dbg: two_file_shared.so
 	$(TEST_READELF) -w $< >$@ 2>/dev/null
 
@@ -396,6 +457,7 @@ weak_test_DEPENDENCIES = gcctestdir/ld
 weak_test_LDFLAGS = -Bgcctestdir/
 
 check_PROGRAMS += weak_undef_test
+MOSTLYCLEANFILES += alt/weak_undef_lib.so
 weak_undef_test_SOURCES = weak_undef_test.cc
 weak_undef_test_DEPENDENCIES = gcctestdir/ld weak_undef_lib.so alt/weak_undef_lib.so
 weak_undef_test_LDFLAGS = -Bgcctestdir/ -Wl,-R,alt
@@ -412,6 +474,7 @@ alt/weak_undef_lib.so: weak_undef_file2.o
 
 if FN_PTRS_IN_SO_WITHOUT_PIC
 check_PROGRAMS += weak_undef_nonpic_test
+MOSTLYCLEANFILES += alt/weak_undef_lib_nonpic.so
 weak_undef_nonpic_test_SOURCES = weak_undef_test.cc
 weak_undef_nonpic_test_DEPENDENCIES = gcctestdir/ld weak_undef_lib_nonpic.so alt/weak_undef_lib_nonpic.so
 weak_undef_nonpic_test_LDFLAGS = -Bgcctestdir/ -Wl,-R,alt
@@ -606,6 +669,7 @@ many_sections_test_DEPENDENCIES = gcctestdir/ld
 many_sections_test_LDFLAGS = -Bgcctestdir/ -rdynamic
 
 BUILT_SOURCES += many_sections_define.h
+MOSTLYCLEANFILES += many_sections_define.h
 many_sections_define.h:
 	(for i in `seq 1 70000`; do \
 	   echo "int var_$$i __attribute__((section(\"section_$$i\"))) = $$i;"; \
@@ -613,6 +677,7 @@ many_sections_define.h:
 	mv -f $@.tmp $@
 
 BUILT_SOURCES += many_sections_check.h
+MOSTLYCLEANFILES += many_sections_check.h
 many_sections_check.h:
 	(for i in `seq 1 1000 70000`; do \
 	   echo "assert(var_$$i == $$i);"; \
@@ -833,6 +898,7 @@ ver_test_10.so: gcctestdir/ld ver_test_2.o ver_test_10.script
 	$(CXXLINK) -Bgcctestdir/ -shared -Wl,--version-script,$(srcdir)/ver_test_10.script ver_test_2.o
 
 check_PROGRAMS += ver_test_11
+MOSTLYCLEANFILES += ver_test_11.a
 ver_test_11_SOURCES = ver_test_main_2.cc
 ver_test_11_DEPENDENCIES = gcctestdir/ld ver_test_11.a
 ver_test_11_LDFLAGS = -Bgcctestdir/ -Wl,-R,.
@@ -900,6 +966,7 @@ justsyms_2r.o: justsyms_2.o gcctestdir/ld $(srcdir)/justsyms.t
 	gcctestdir/ld -o $@ -r -T $(srcdir)/justsyms.t justsyms_2.o
 
 check_PROGRAMS += binary_test
+MOSTLYCLEANFILES += binary.txt
 binary_test_SOURCES = binary_test.cc
 binary_test_DEPENDENCIES = gcctestdir/ld binary.txt
 binary_test_LDFLAGS = -Bgcctestdir/ -Wl,--format,binary,binary.txt,--format,elf
@@ -928,7 +995,7 @@ script_test_3.stdout: script_test_3
 
 check_SCRIPTS += script_test_4.sh
 check_DATA += script_test_4.stdout
-MOSTLYCLEANFILES += script_test_4.stdout
+MOSTLYCLEANFILES += script_test_4
 script_test_4: basic_test.o gcctestdir/ld $(srcdir)/script_test_4.t
 	$(CXXLINK) -Bgcctestdir/ basic_test.o -T $(srcdir)/script_test_4.t
 script_test_4.stdout: script_test_4
@@ -936,18 +1003,44 @@ script_test_4.stdout: script_test_4
 
 check_SCRIPTS += script_test_5.sh
 check_DATA += script_test_5.stdout
-MOSTLYCLEANFILES += script_test_5.stdout
+MOSTLYCLEANFILES += script_test_5
 script_test_5: script_test_5.o gcctestdir/ld $(srcdir)/script_test_5.t
 	$(CXXLINK) -Bgcctestdir/ script_test_5.o -T $(srcdir)/script_test_5.t
 script_test_5.stdout: script_test_5
 	$(TEST_READELF) -SW script_test_5 > script_test_5.stdout
+
+check_SCRIPTS += script_test_6.sh
+check_DATA += script_test_6.stdout
+MOSTLYCLEANFILES += script_test_6
+script_test_6: basic_test.o gcctestdir/ld $(srcdir)/script_test_6.t
+	$(CXXLINK) -Bgcctestdir/ basic_test.o -T $(srcdir)/script_test_6.t \
+	-Wl,-Ttext=0x10001000 -Wl,-Tdata=0x10200000 -Wl,-Tbss=0x10400000
+script_test_6.stdout: script_test_6
+	$(TEST_READELF) -SlW script_test_6 > script_test_6.stdout
+
+check_SCRIPTS += script_test_7.sh
+check_DATA += script_test_7.stdout
+MOSTLYCLEANFILES += script_test_7
+script_test_7: basic_test.o gcctestdir/ld $(srcdir)/script_test_7.t
+	$(CXXLINK) -Bgcctestdir/ basic_test.o -T $(srcdir)/script_test_7.t
+script_test_7.stdout: script_test_7
+	$(TEST_READELF) -SlW script_test_7 > script_test_7.stdout
+
+check_SCRIPTS += script_test_8.sh
+check_DATA += script_test_8.stdout
+MOSTLYCLEANFILES += script_test_8
+script_test_8: basic_test.o gcctestdir/ld $(srcdir)/script_test_7.t
+	$(CXXLINK) -Bgcctestdir/ basic_test.o -T $(srcdir)/script_test_7.t \
+	-Wl,-Ttext=0x20001000 -Wl,-Tdata=0x20200000 -Wl,-Tbss=0x20400000
+script_test_8.stdout: script_test_8
+	$(TEST_READELF) -SlW script_test_8 > script_test_8.stdout
 
 # Test --dynamic-list, --dynamic-list-data, --dynamic-list-cpp-new,
 # and --dynamic-list-cpp-typeinfo
 
 check_SCRIPTS += dynamic_list.sh
 check_DATA += dynamic_list.stdout
-MOSTLYCLEANFILES += dynamic_list.stdout
+MOSTLYCLEANFILES += dynamic_list dynamic_list.stdout
 dynamic_list: basic_test.o gcctestdir/ld $(srcdir)/dynamic_list.t
 	$(CXXLINK) -Bgcctestdir/ basic_test.o \
 	  -Wl,--dynamic-list $(srcdir)/dynamic_list.t \
@@ -958,6 +1051,9 @@ dynamic_list.stdout: dynamic_list
 	$(TEST_READELF) -DWs dynamic_list > dynamic_list.stdout
 
 check_PROGRAMS += thin_archive_test_1
+MOSTLYCLEANFILES += libthin1.a libthin3.a libthinall.a \
+	alt/thin_archive_test_2.o alt/thin_archive_test_4.o \
+	alt/libthin2.a alt/libthin4.a
 thin_archive_test_1_SOURCES = thin_archive_main.cc
 thin_archive_test_1_DEPENDENCIES = gcctestdir/ld libthin1.a alt/libthin2.a
 thin_archive_test_1_LDFLAGS = -Bgcctestdir/ -Lalt
@@ -1023,7 +1119,7 @@ plugin_test_3.err: plugin_test_3
 check_PROGRAMS += plugin_test_4
 check_SCRIPTS += plugin_test_4.sh
 check_DATA += plugin_test_4.err
-MOSTLYCLEANFILES += plugin_test_4.err
+MOSTLYCLEANFILES += plugin_test_4.a plugin_test_4.err
 plugin_test_4: two_file_test_main.o plugin_test_4.a gcctestdir/ld plugin_test.so
 	$(CXXLINK) -Bgcctestdir/ -Wl,--no-demangle,--plugin,"./plugin_test.so",--plugin-opt,"_Z4f13iv" two_file_test_main.o -Wl,--whole-archive,plugin_test_4.a,--no-whole-archive 2>plugin_test_4.err
 plugin_test_4.err: plugin_test_4
@@ -1031,6 +1127,10 @@ plugin_test_4.err: plugin_test_4
 
 plugin_test_4.a: two_file_test_1.syms two_file_test_1b.syms two_file_test_2.syms
 	$(TEST_AR) cr $@ $^
+
+check_PROGRAMS += plugin_test_5
+plugin_test_5: two_file_test_main.o two_file_test_1.syms two_file_test_1b.syms two_file_test_2.syms unused.syms gcctestdir/ld plugin_test.so
+	$(CXXLINK) -Bgcctestdir/ -Wl,--no-demangle,--plugin,"./plugin_test.so",--plugin-opt,"_Z4f13iv",--gc-sections two_file_test_main.o two_file_test_1.syms two_file_test_1b.syms two_file_test_2.syms unused.syms
 
 plugin_test.so: plugin_test.o
 	$(LINK) -Bgcctestdir/ -shared plugin_test.o
@@ -1045,9 +1145,19 @@ two_file_test_1b.syms: two_file_test_1b.o
 	$(TEST_READELF) -sW $< >$@ 2>/dev/null
 two_file_test_2.syms: two_file_test_2.o
 	$(TEST_READELF) -sW $< >$@ 2>/dev/null
+
 empty.syms:
-	@echo "" >empty.syms
-	@echo "Symbol table" >>empty.syms
+	@echo "" >$@
+	@echo "Symbol table" >>$@
+
+MOSTLYCLEANFILES += unused.c
+unused.syms: unused.o
+	$(TEST_READELF) -sW $< >$@ 2>/dev/null
+	@echo "     1: 00000000     4 FUNC    GLOBAL DEFAULT    1 UNUSED" >>$@
+unused.o: unused.c
+	$(COMPILE) -c -o $@ $<
+unused.c:
+	@cp /dev/null $@
 
 endif PLUGINS
 
@@ -1100,5 +1210,148 @@ large_DEPENDENCIES = gcctestdir/ld
 large_LDFLAGS = -Bgcctestdir/
 endif MCMODEL_MEDIUM
 
+# Test that hidden and internal symbols in the main program cannot be
+# referenced by a shared library.
+check_SCRIPTS += hidden_test.sh
+check_DATA += hidden_test.err
+MOSTLYCLEANFILES += hidden_test hidden_test.err
+libhidden.so: hidden_test_1.c gcctestdir/ld
+	$(COMPILE) -Bgcctestdir/ -g -shared -fPIC -w -o $@ $(srcdir)/hidden_test_1.c
+hidden_test: hidden_test_main.o libhidden.so gcctestdir/ld
+	$(LINK) -Bgcctestdir/ -Wl,-R,. hidden_test_main.o libhidden.so 2>hidden_test.err
+hidden_test.err: hidden_test
+	@touch hidden_test.err
+
+# Test -retain-symbols-file.
+check_SCRIPTS += retain_symbols_file_test.sh
+check_DATA += retain_symbols_file_test.stdout
+MOSTLYCLEANFILES += retain_symbols_file_test retain_symbols_file_test.in \
+                    retain_symbols_file_test.stdout
+retain_symbols_file_test.so: basic_pic_test.o gcctestdir/ld
+	echo 'main' > retain_symbols_file_test.in
+	echo 't1' >> retain_symbols_file_test.in
+	echo '_ZN4t16bC1Ev' >> retain_symbols_file_test.in
+	echo '_ZNK4t20a3getEv' >> retain_symbols_file_test.in
+	echo '_Z3t18v' >> retain_symbols_file_test.in
+	echo '__tcf_0' >> retain_symbols_file_test.in	
+	$(CXXLINK) -Bgcctestdir/ -shared -Wl,-retain-symbols-file,retain_symbols_file_test.in basic_pic_test.o
+retain_symbols_file_test.stdout: retain_symbols_file_test.so
+	$(TEST_NM) -C retain_symbols_file_test.so > $@
+
+
+# Test that if the output file already exists and is empty,
+# it will get execute permission.
+check_PROGRAMS += permission_test
+permission_test: basic_test.o gcctestdir/ld
+	umask 022; \
+	rm -f $@; \
+	touch $@; \
+	chmod 600 $@; \
+	$(CXXLINK) -Bgcctestdir/ basic_test.o
+
+# Check -l:foo.a
+check_PROGRAMS += searched_file_test
+MOSTLYCLEANFILES += searched_file_test searched_file_test_lib.o \
+                    alt/searched_file_test_lib.a
+searched_file_test_SOURCES = searched_file_test.cc
+searched_file_test_DEPENDENCIES = alt/searched_file_test_lib.a
+searched_file_test_LDFLAGS = -Bgcctestdir/ -Lalt
+searched_file_test_LDADD = -l:searched_file_test_lib.a
+searched_file_test_lib.o: searched_file_test_lib.cc
+	$(CXXCOMPILE) -c -o $@ $<
+alt/searched_file_test_lib.a: searched_file_test_lib.o
+	test -d alt || mkdir -p alt
+	$(TEST_AR) rc $@ $^
+
+# Test that no .gnu.version sections are created when 
+# symbol versioning is not used.
+check_SCRIPTS += no_version_test.sh
+check_DATA += no_version_test.stdout
+MOSTLYCLEANFILES += libno_version_test.so no_version_test.stdout
+# We invoke the linker directly since gcc may include additional objects that
+# uses symbol versioning.
+libno_version_test.so: no_version_test.o gcctestdir/ld
+	gcctestdir/ld -shared -o $@ no_version_test.o
+no_version_test.o: no_version_test.c
+	$(COMPILE) -o $@ -c -fPIC $<
+no_version_test.stdout: libno_version_test.so
+	$(TEST_OBJDUMP) -h $< > $@
+
 endif GCC
 endif NATIVE_LINKER
+
+# These tests work with cross linkers.
+
+if DEFAULT_TARGET_I386
+
+check_SCRIPTS += split_i386.sh
+check_DATA += split_i386_1.stdout split_i386_2.stdout \
+	split_i386_3.stdout split_i386_4.stdout split_i386_r.stdout
+SPLIT_DEFSYMS = --defsym __morestack=0x100 --defsym __morestack_non_split=0x200
+split_i386_1.o: split_i386_1.s
+	$(TEST_AS) -o $@ $<
+split_i386_2.o: split_i386_2.s
+	$(TEST_AS) -o $@ $<
+split_i386_3.o: split_i386_3.s
+	$(TEST_AS) -o $@ $<
+split_i386_4.o: split_i386_4.s
+	$(TEST_AS) -o $@ $<
+split_i386_n.o: split_i386_n.s
+	$(TEST_AS) -o $@ $<
+split_i386_1: split_i386_1.o split_i386_n.o ../ld-new
+	../ld-new $(SPLIT_DEFSYMS) -o $@ split_i386_1.o split_i386_n.o
+split_i386_1.stdout: split_i386_1
+	$(TEST_OBJDUMP) -d $< > $@
+split_i386_2: split_i386_2.o split_i386_n.o ../ld-new
+	../ld-new $(SPLIT_DEFSYMS) -o $@ split_i386_2.o split_i386_n.o
+split_i386_2.stdout: split_i386_2
+	$(TEST_OBJDUMP) -d $< > $@
+split_i386_3.stdout: split_i386_3.o split_i386_n.o ../ld-new
+	../ld-new $(SPLIT_DEFSYMS) -o split_i386_3 split_i386_3.o split_i386_n.o > $@ 2>&1 || exit 0
+split_i386_4: split_i386_4.o split_i386_n.o ../ld-new
+	../ld-new $(SPLIT_DEFSYMS) -o $@ split_i386_4.o split_i386_n.o
+split_i386_4.stdout: split_i386_4
+	$(TEST_OBJDUMP) -d $< > $@
+split_i386_r.stdout: split_i386_1.o split_i386_n.o ../ld-new
+	../ld-new -r split_i386_1.o split_i386_n.o -o split_i386_r > $@ 2>&1 || exit 0
+MOSTLYCLEANFILES += split_i386_1 split_i386_2 split_i386_3 \
+	split_i386_4 split_i386_r
+
+endif DEFAULT_TARGET_I386
+
+if DEFAULT_TARGET_X86_64
+
+check_SCRIPTS += split_x86_64.sh
+check_DATA += split_x86_64_1.stdout split_x86_64_2.stdout \
+	split_x86_64_3.stdout split_x86_64_4.stdout split_x86_64_r.stdout
+SPLIT_DEFSYMS = --defsym __morestack=0x100 --defsym __morestack_non_split=0x200
+split_x86_64_1.o: split_x86_64_1.s
+	$(TEST_AS) -o $@ $<
+split_x86_64_2.o: split_x86_64_2.s
+	$(TEST_AS) -o $@ $<
+split_x86_64_3.o: split_x86_64_3.s
+	$(TEST_AS) -o $@ $<
+split_x86_64_4.o: split_x86_64_4.s
+	$(TEST_AS) -o $@ $<
+split_x86_64_n.o: split_x86_64_n.s
+	$(TEST_AS) -o $@ $<
+split_x86_64_1: split_x86_64_1.o split_x86_64_n.o ../ld-new
+	../ld-new $(SPLIT_DEFSYMS) -o $@ split_x86_64_1.o split_x86_64_n.o
+split_x86_64_1.stdout: split_x86_64_1
+	$(TEST_OBJDUMP) -d $< > $@
+split_x86_64_2: split_x86_64_2.o split_x86_64_n.o ../ld-new
+	../ld-new $(SPLIT_DEFSYMS) -o $@ split_x86_64_2.o split_x86_64_n.o
+split_x86_64_2.stdout: split_x86_64_2
+	$(TEST_OBJDUMP) -d $< > $@
+split_x86_64_3.stdout: split_x86_64_3.o split_x86_64_n.o ../ld-new
+	../ld-new $(SPLIT_DEFSYMS) -o split_x86_64_3 split_x86_64_3.o split_x86_64_n.o > $@ 2>&1 || exit 0
+split_x86_64_4: split_x86_64_4.o split_x86_64_n.o ../ld-new
+	../ld-new $(SPLIT_DEFSYMS) -o $@ split_x86_64_4.o split_x86_64_n.o
+split_x86_64_4.stdout: split_x86_64_4
+	$(TEST_OBJDUMP) -d $< > $@
+split_x86_64_r.stdout: split_x86_64_1.o split_x86_64_n.o ../ld-new
+	../ld-new -r split_x86_64_1.o split_x86_64_n.o -o split_x86_64_r > $@ 2>&1 || exit 0
+MOSTLYCLEANFILES += split_x86_64_1 split_x86_64_2 split_x86_64_3 \
+	split_x86_64_4 split_x86_64_r
+
+endif DEFAULT_TARGET_X86_64

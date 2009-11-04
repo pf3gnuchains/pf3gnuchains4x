@@ -361,6 +361,9 @@ mcore-*-pe)		targ_emul=mcorepe ;
 mcore-*-elf)		targ_emul=elf32mcore
 			;;
 mep-*-elf)		targ_emul=elf32mep ;;
+microblaze*-linux*)
+			targ_emul="elf32mb_linux" ;;
+microblaze*)		targ_emul=elf32microblaze ;;
 mips*-*-pe)		targ_emul=mipspe ;
 			targ_extra_ofiles="deffilep.o pe-dll.o" ;;
 mips*-dec-ultrix*)	targ_emul=mipslit ;;
@@ -500,6 +503,7 @@ powerpc-*-lynxos*)	targ_emul=ppclynx ;;
 rs6000-*-aix[5-9]*)	targ_emul=aix5rs6 ;;
 rs6000-*-aix*)		targ_emul=aixrs6
 			;;
+rx-*-*)			targ_emul=elf32rx ;;
 s390x-*-linux*)         targ_emul=elf64_s390
 			targ_extra_emuls=elf_s390
 			targ_extra_libpath=$targ_extra_emuls

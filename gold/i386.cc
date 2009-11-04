@@ -38,6 +38,7 @@
 #include "target-select.h"
 #include "tls.h"
 #include "freebsd.h"
+#include "gc.h"
 
 namespace
 {
@@ -66,8 +67,7 @@ class Target_i386 : public Target_freebsd<32, false>
   // Process the relocations to determine unreferenced sections for 
   // garbage collection.
   void
-  gc_process_relocs(const General_options& options,
-                    Symbol_table* symtab,
+  gc_process_relocs(Symbol_table* symtab,
                     Layout* layout,
                     Sized_relobj<32, false>* object,
                     unsigned int data_shndx,
@@ -81,8 +81,7 @@ class Target_i386 : public Target_freebsd<32, false>
 
   // Scan the relocations to look for symbol adjustments.
   void
-  scan_relocs(const General_options& options,
-	      Symbol_table* symtab,
+  scan_relocs(Symbol_table* symtab,
 	      Layout* layout,
 	      Sized_relobj<32, false>* object,
 	      unsigned int data_shndx,
@@ -96,7 +95,7 @@ class Target_i386 : public Target_freebsd<32, false>
 
   // Finalize the sections.
   void
-  do_finalize_sections(Layout*);
+  do_finalize_sections(Layout*, const Input_objects*);
 
   // Return the value to use for a dynamic which requires special
   // treatment.
@@ -113,12 +112,12 @@ class Target_i386 : public Target_freebsd<32, false>
 		   bool needs_special_offset_handling,
 		   unsigned char* view,
 		   elfcpp::Elf_types<32>::Elf_Addr view_address,
-		   section_size_type view_size);
+		   section_size_type view_size,
+		   const Reloc_symbol_changes*);
 
   // Scan the relocs during a relocatable link.
   void
-  scan_relocatable_relocs(const General_options& options,
-			  Symbol_table* symtab,
+  scan_relocatable_relocs(Symbol_table* symtab,
 			  Layout* layout,
 			  Sized_relobj<32, false>* object,
 			  unsigned int data_shndx,
@@ -168,6 +167,13 @@ class Target_i386 : public Target_freebsd<32, false>
     return Target::do_is_local_label_name(name);
   }
 
+  // Adjust -fstack-split code which calls non-stack-split code.
+  void
+  do_calls_non_split(Relobj* object, unsigned int shndx,
+		     section_offset_type fnoffset, section_size_type fnsize,
+		     unsigned char* view, section_size_type view_size,
+		     std::string* from, std::string* to) const;
+
   // Return the size of the GOT section.
   section_size_type
   got_size()
@@ -181,8 +187,7 @@ class Target_i386 : public Target_freebsd<32, false>
   struct Scan
   {
     inline void
-    local(const General_options& options, Symbol_table* symtab,
-	  Layout* layout, Target_i386* target,
+    local(Symbol_table* symtab, Layout* layout, Target_i386* target,
 	  Sized_relobj<32, false>* object,
 	  unsigned int data_shndx,
 	  Output_section* output_section,
@@ -190,8 +195,7 @@ class Target_i386 : public Target_freebsd<32, false>
 	  const elfcpp::Sym<32, false>& lsym);
 
     inline void
-    global(const General_options& options, Symbol_table* symtab,
-	   Layout* layout, Target_i386* target,
+    global(Symbol_table* symtab, Layout* layout, Target_i386* target,
 	   Sized_relobj<32, false>* object,
 	   unsigned int data_shndx,
 	   Output_section* output_section,
@@ -374,17 +378,6 @@ class Target_i386 : public Target_freebsd<32, false>
   // Get the dynamic reloc section, creating it if necessary.
   Reloc_section*
   rel_dyn_section(Layout*);
-
-  // Return true if the symbol may need a COPY relocation.
-  // References from an executable object to non-function symbols
-  // defined in a dynamic object may need a COPY relocation.
-  bool
-  may_need_copy_reloc(Symbol* gsym)
-  {
-    return (!parameters->options().shared()
-            && gsym->is_from_dynobj()
-            && gsym->type() != elfcpp::STT_FUNC);
-  }
 
   // Add a potential copy relocation.
   void
@@ -688,7 +681,7 @@ Output_data_plt_i386::do_write(Output_file* of)
   elfcpp::Elf_types<32>::Elf_Addr plt_address = this->address();
   elfcpp::Elf_types<32>::Elf_Addr got_address = this->got_plt_->address();
 
-  if (parameters->options().shared())
+  if (parameters->options().output_is_position_independent())
     memcpy(pov, dyn_first_plt_entry, plt_entry_size);
   else
     {
@@ -720,7 +713,7 @@ Output_data_plt_i386::do_write(Output_file* of)
     {
       // Set and adjust the PLT entry itself.
 
-      if (parameters->options().shared())
+      if (parameters->options().output_is_position_independent())
 	{
 	  memcpy(pov, dyn_plt_entry, plt_entry_size);
 	  elfcpp::Swap_unaligned<32, false>::writeval(pov + 2, got_offset);
@@ -886,8 +879,7 @@ Target_i386::Scan::unsupported_reloc_local(Sized_relobj<32, false>* object,
 // Scan a relocation for a local symbol.
 
 inline void
-Target_i386::Scan::local(const General_options&,
-			 Symbol_table* symtab,
+Target_i386::Scan::local(Symbol_table* symtab,
 			 Layout* layout,
 			 Target_i386* target,
 			 Sized_relobj<32, false>* object,
@@ -1177,8 +1169,7 @@ Target_i386::Scan::unsupported_reloc_global(Sized_relobj<32, false>* object,
 // Scan a relocation for a global symbol.
 
 inline void
-Target_i386::Scan::global(const General_options&,
-			  Symbol_table* symtab,
+Target_i386::Scan::global(Symbol_table* symtab,
 			  Layout* layout,
 			  Target_i386* target,
 			  Sized_relobj<32, false>* object,
@@ -1213,7 +1204,7 @@ Target_i386::Scan::global(const General_options&,
         // Make a dynamic relocation if necessary.
         if (gsym->needs_dynamic_reloc(Symbol::ABSOLUTE_REF))
           {
-            if (target->may_need_copy_reloc(gsym))
+            if (gsym->may_need_copy_reloc())
               {
 	        target->copy_reloc(symtab, layout, object,
 	                           data_shndx, output_section, gsym, reloc);
@@ -1259,7 +1250,7 @@ Target_i386::Scan::global(const General_options&,
           flags |= Symbol::FUNCTION_CALL;
         if (gsym->needs_dynamic_reloc(flags))
           {
-            if (target->may_need_copy_reloc(gsym))
+            if (gsym->may_need_copy_reloc())
               {
 	        target->copy_reloc(symtab, layout, object,
 	                           data_shndx, output_section, gsym, reloc);
@@ -1494,8 +1485,7 @@ Target_i386::Scan::global(const General_options&,
 // Process relocations for gc.
 
 void
-Target_i386::gc_process_relocs(const General_options& options,
-                               Symbol_table* symtab,
+Target_i386::gc_process_relocs(Symbol_table* symtab,
                                Layout* layout,
                                Sized_relobj<32, false>* object,
                                unsigned int data_shndx,
@@ -1509,7 +1499,6 @@ Target_i386::gc_process_relocs(const General_options& options,
 {
   gold::gc_process_relocs<32, false, Target_i386, elfcpp::SHT_REL,
 		          Target_i386::Scan>(
-    options,
     symtab,
     layout,
     this,
@@ -1526,8 +1515,7 @@ Target_i386::gc_process_relocs(const General_options& options,
 // Scan relocations for a section.
 
 void
-Target_i386::scan_relocs(const General_options& options,
-			 Symbol_table* symtab,
+Target_i386::scan_relocs(Symbol_table* symtab,
 			 Layout* layout,
 			 Sized_relobj<32, false>* object,
 			 unsigned int data_shndx,
@@ -1548,7 +1536,6 @@ Target_i386::scan_relocs(const General_options& options,
 
   gold::scan_relocs<32, false, Target_i386, elfcpp::SHT_REL,
 		    Target_i386::Scan>(
-    options,
     symtab,
     layout,
     this,
@@ -1565,7 +1552,7 @@ Target_i386::scan_relocs(const General_options& options,
 // Finalize the sections.
 
 void
-Target_i386::do_finalize_sections(Layout* layout)
+Target_i386::do_finalize_sections(Layout* layout, const Input_objects*)
 {
   // Fill in some more dynamic tags.
   Output_data_dynamic* const odyn = layout->dynamic_data();
@@ -2015,14 +2002,19 @@ Target_i386::Relocate::relocate_tls(const Relocate_info<32, false>* relinfo,
       break;
 
     case elfcpp::R_386_TLS_LDO_32:       // Alternate local-dynamic
-      // This reloc can appear in debugging sections, in which case we
-      // won't see the TLS_LDM reloc.  The local_dynamic_type field
-      // tells us this.
-      if (optimized_type == tls::TLSOPT_TO_LE
-          && this->local_dynamic_type_ != LOCAL_DYNAMIC_NONE)
+      if (optimized_type == tls::TLSOPT_TO_LE)
 	{
-          gold_assert(tls_segment != NULL);
-          value -= tls_segment->memsz();
+	  // This reloc can appear in debugging sections, in which
+	  // case we must not convert to local-exec.  We decide what
+	  // to do based on whether the section is marked as
+	  // containing executable code.  That is what the GNU linker
+	  // does as well.
+	  elfcpp::Shdr<32, false> shdr(relinfo->data_shdr);
+	  if ((shdr.get_sh_flags() & elfcpp::SHF_EXECINSTR) != 0)
+	    {
+	      gold_assert(tls_segment != NULL);
+	      value -= tls_segment->memsz();
+	    }
 	}
       Relocate_functions<32, false>::rel32(view, value);
       break;
@@ -2441,7 +2433,8 @@ Target_i386::relocate_section(const Relocate_info<32, false>* relinfo,
 			      bool needs_special_offset_handling,
 			      unsigned char* view,
 			      elfcpp::Elf_types<32>::Elf_Addr address,
-			      section_size_type view_size)
+			      section_size_type view_size,
+			      const Reloc_symbol_changes* reloc_symbol_changes)
 {
   gold_assert(sh_type == elfcpp::SHT_REL);
 
@@ -2455,7 +2448,8 @@ Target_i386::relocate_section(const Relocate_info<32, false>* relinfo,
     needs_special_offset_handling,
     view,
     address,
-    view_size);
+    view_size,
+    reloc_symbol_changes);
 }
 
 // Return the size of a relocation while scanning during a relocatable
@@ -2532,8 +2526,7 @@ Target_i386::Relocatable_size_for_reloc::get_size_for_reloc(
 // Scan the relocs during a relocatable link.
 
 void
-Target_i386::scan_relocatable_relocs(const General_options& options,
-				     Symbol_table* symtab,
+Target_i386::scan_relocatable_relocs(Symbol_table* symtab,
 				     Layout* layout,
 				     Sized_relobj<32, false>* object,
 				     unsigned int data_shndx,
@@ -2553,7 +2546,6 @@ Target_i386::scan_relocatable_relocs(const General_options& options,
 
   gold::scan_relocatable_relocs<32, false, elfcpp::SHT_REL,
       Scan_relocatable_relocs>(
-    options,
     symtab,
     layout,
     object,
@@ -2673,6 +2665,63 @@ Target_i386::do_code_fill(section_size_type length) const
   };
 
   return std::string(nops[length], length);
+}
+
+// FNOFFSET in section SHNDX in OBJECT is the start of a function
+// compiled with -fstack-split.  The function calls non-stack-split
+// code.  We have to change the function so that it always ensures
+// that it has enough stack space to run some random function.
+
+void
+Target_i386::do_calls_non_split(Relobj* object, unsigned int shndx,
+				section_offset_type fnoffset,
+				section_size_type fnsize,
+				unsigned char* view,
+				section_size_type view_size,
+				std::string* from,
+				std::string* to) const
+{
+  // The function starts with a comparison of the stack pointer and a
+  // field in the TCB.  This is followed by a jump.
+
+  // cmp %gs:NN,%esp
+  if (this->match_view(view, view_size, fnoffset, "\x65\x3b\x25", 3)
+      && fnsize > 7)
+    {
+      // We will call __morestack if the carry flag is set after this
+      // comparison.  We turn the comparison into an stc instruction
+      // and some nops.
+      view[fnoffset] = '\xf9';
+      this->set_view_to_nop(view, view_size, fnoffset + 1, 6);
+    }
+  // lea NN(%esp),%ecx
+  else if (this->match_view(view, view_size, fnoffset, "\x8d\x8c\x24", 3)
+	   && fnsize > 7)
+    {
+      // This is loading an offset from the stack pointer for a
+      // comparison.  The offset is negative, so we decrease the
+      // offset by the amount of space we need for the stack.  This
+      // means we will avoid calling __morestack if there happens to
+      // be plenty of space on the stack already.
+      unsigned char* pval = view + fnoffset + 3;
+      uint32_t val = elfcpp::Swap_unaligned<32, false>::readval(pval);
+      val -= parameters->options().split_stack_adjust_size();
+      elfcpp::Swap_unaligned<32, false>::writeval(pval, val);
+    }
+  else
+    {
+      if (!object->has_no_split_stack())
+	object->error(_("failed to match split-stack sequence at "
+			"section %u offset %0zx"),
+		      shndx, fnoffset);
+      return;
+    }
+
+  // We have to change the function so that it calls
+  // __morestack_non_split instead of __morestack.  The former will
+  // allocate additional stack space.
+  *from = "__morestack";
+  *to = "__morestack_non_split";
 }
 
 // The selector for i386 object files.

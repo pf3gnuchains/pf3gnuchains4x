@@ -524,7 +524,7 @@ class Output_section_element
 {
  public:
   // A list of input sections.
-  typedef std::list<std::pair<Relobj*, unsigned int> > Input_section_list;
+  typedef std::list<Output_section::Simple_input_section> Input_section_list;
 
   Output_section_element()
   { }
@@ -701,6 +701,7 @@ Output_section_element_dot_assignment::set_section_addresses(
 	  posd = new Output_data_const(this_fill, 0);
 	}
       output_section->add_output_section_data(posd);
+      layout->new_output_section_data_from_script(posd);
     }
   *dot_value = next_dot;
 }
@@ -736,7 +737,7 @@ class Output_data_expression : public Output_section_data
   Output_data_expression(int size, bool is_signed, Expression* val,
 			 const Symbol_table* symtab, const Layout* layout,
 			 uint64_t dot_value, Output_section* dot_section)
-    : Output_section_data(size, 0),
+    : Output_section_data(size, 0, true),
       is_signed_(is_signed), val_(val), symtab_(symtab),
       layout_(layout), dot_value_(dot_value), dot_section_(dot_section)
   { }
@@ -877,13 +878,11 @@ Output_section_element_data::set_section_addresses(
     Input_section_list*)
 {
   gold_assert(os != NULL);
-  os->add_output_section_data(new Output_data_expression(this->size_,
-							 this->is_signed_,
-							 this->val_,
-							 symtab,
-							 layout,
-							 *dot_value,
-							 *dot_section));
+  Output_data_expression* expression =
+    new Output_data_expression(this->size_, this->is_signed_, this->val_,
+			       symtab, layout, *dot_value, *dot_section);
+  os->add_output_section_data(expression);
+  layout->new_output_section_data_from_script(expression);
   *dot_value += this->size_;
 }
 
@@ -1169,13 +1168,68 @@ Output_section_element_input::match_name(const char* file_name,
 
 // Information we use to sort the input sections.
 
-struct Input_section_info
+class Input_section_info
 {
-  Relobj* relobj;
-  unsigned int shndx;
-  std::string section_name;
-  uint64_t size;
-  uint64_t addralign;
+ public:
+  Input_section_info(const Output_section::Simple_input_section& input_section)
+    : input_section_(input_section), section_name_(),
+      size_(0), addralign_(1)
+  { }
+
+  // Return the simple input section.
+  const Output_section::Simple_input_section&
+  input_section() const
+  { return this->input_section_; }
+
+  // Return the object.
+  Relobj*
+  relobj() const
+  { return this->input_section_.relobj(); }
+
+  // Return the section index.
+  unsigned int
+  shndx()
+  { return this->input_section_.shndx(); }
+
+  // Return the section name.
+  const std::string&
+  section_name() const
+  { return this->section_name_; }
+
+  // Set the section name.
+  void
+  set_section_name(const std::string name)
+  { this->section_name_ = name; }
+
+  // Return the section size.
+  uint64_t
+  size() const
+  { return this->size_; }
+
+  // Set the section size.
+  void
+  set_size(uint64_t size)
+  { this->size_ = size; }
+
+  // Return the address alignment.
+  uint64_t
+  addralign() const
+  { return this->addralign_; }
+
+  // Set the address alignment.
+  void
+  set_addralign(uint64_t addralign)
+  { this->addralign_ = addralign; }
+
+ private:
+  // Input section, can be a relaxed section.
+  Output_section::Simple_input_section input_section_;
+  // Name of the section. 
+  std::string section_name_;
+  // Section size.
+  uint64_t size_;
+  // Address alignment.
+  uint64_t addralign_;
 };
 
 // A class to sort the input sections.
@@ -1202,22 +1256,22 @@ Input_section_sorter::operator()(const Input_section_info& isi1,
   if (this->section_sort_ == SORT_WILDCARD_BY_NAME
       || this->section_sort_ == SORT_WILDCARD_BY_NAME_BY_ALIGNMENT
       || (this->section_sort_ == SORT_WILDCARD_BY_ALIGNMENT_BY_NAME
-	  && isi1.addralign == isi2.addralign))
+	  && isi1.addralign() == isi2.addralign()))
     {
-      if (isi1.section_name != isi2.section_name)
-	return isi1.section_name < isi2.section_name;
+      if (isi1.section_name() != isi2.section_name())
+	return isi1.section_name() < isi2.section_name();
     }
   if (this->section_sort_ == SORT_WILDCARD_BY_ALIGNMENT
       || this->section_sort_ == SORT_WILDCARD_BY_NAME_BY_ALIGNMENT
       || this->section_sort_ == SORT_WILDCARD_BY_ALIGNMENT_BY_NAME)
     {
-      if (isi1.addralign != isi2.addralign)
-	return isi1.addralign < isi2.addralign;
+      if (isi1.addralign() != isi2.addralign())
+	return isi1.addralign() < isi2.addralign();
     }
   if (this->filename_sort_ == SORT_WILDCARD_BY_NAME)
     {
-      if (isi1.relobj->name() != isi2.relobj->name())
-	return isi1.relobj->name() < isi2.relobj->name();
+      if (isi1.relobj()->name() != isi2.relobj()->name())
+	return (isi1.relobj()->name() < isi2.relobj()->name());
     }
 
   // Otherwise we leave them in the same order.
@@ -1231,7 +1285,7 @@ Input_section_sorter::operator()(const Input_section_info& isi1,
 void
 Output_section_element_input::set_section_addresses(
     Symbol_table*,
-    Layout*,
+    Layout* layout,
     Output_section* output_section,
     uint64_t subalign,
     uint64_t* dot_value,
@@ -1255,25 +1309,36 @@ Output_section_element_input::set_section_addresses(
   Input_section_list::iterator p = input_sections->begin();
   while (p != input_sections->end())
     {
+      Relobj* relobj = p->relobj();
+      unsigned int shndx = p->shndx();      
+      Input_section_info isi(*p);
+
       // Calling section_name and section_addralign is not very
       // efficient.
-      Input_section_info isi;
-      isi.relobj = p->first;
-      isi.shndx = p->second;
 
       // Lock the object so that we can get information about the
       // section.  This is OK since we know we are single-threaded
       // here.
       {
 	const Task* task = reinterpret_cast<const Task*>(-1);
-	Task_lock_obj<Object> tl(task, p->first);
+	Task_lock_obj<Object> tl(task, relobj);
 
-	isi.section_name = p->first->section_name(p->second);
-	isi.size = p->first->section_size(p->second);
-	isi.addralign = p->first->section_addralign(p->second);
+	isi.set_section_name(relobj->section_name(shndx));
+	if (p->is_relaxed_input_section())
+	  {
+	    // We use current data size because relxed section sizes may not
+	    // have finalized yet.
+	    isi.set_size(p->relaxed_input_section()->current_data_size());
+	    isi.set_addralign(p->relaxed_input_section()->addralign());
+	  }
+	else
+	  {
+	    isi.set_size(relobj->section_size(shndx));
+	    isi.set_addralign(relobj->section_addralign(shndx));
+	  }
       }
 
-      if (!this->match_file_name(isi.relobj->name().c_str()))
+      if (!this->match_file_name(relobj->name().c_str()))
 	++p;
       else if (this->input_section_patterns_.empty())
 	{
@@ -1287,7 +1352,7 @@ Output_section_element_input::set_section_addresses(
 	    {
 	      const Input_section_pattern&
 		isp(this->input_section_patterns_[i]);
-	      if (match(isi.section_name.c_str(), isp.pattern.c_str(),
+	      if (match(isi.section_name().c_str(), isp.pattern.c_str(),
 			isp.pattern_is_wildcard))
 		break;
 	    }
@@ -1307,6 +1372,7 @@ Output_section_element_input::set_section_addresses(
   // sections are otherwise equal.  Add each input section to the
   // output section.
 
+  uint64_t dot = *dot_value;
   for (size_t i = 0; i < input_pattern_count; ++i)
     {
       if (matching_sections[i].empty())
@@ -1327,29 +1393,36 @@ Output_section_element_input::set_section_addresses(
 	   p != matching_sections[i].end();
 	   ++p)
 	{
-	  uint64_t this_subalign = p->addralign;
+	  uint64_t this_subalign = p->addralign();
 	  if (this_subalign < subalign)
 	    this_subalign = subalign;
 
-	  uint64_t address = align_address(*dot_value, this_subalign);
+	  uint64_t address = align_address(dot, this_subalign);
 
-	  if (address > *dot_value && !fill->empty())
+	  if (address > dot && !fill->empty())
 	    {
 	      section_size_type length =
-		convert_to_section_size_type(address - *dot_value);
+		convert_to_section_size_type(address - dot);
 	      std::string this_fill = this->get_fill_string(fill, length);
 	      Output_section_data* posd = new Output_data_const(this_fill, 0);
 	      output_section->add_output_section_data(posd);
+	      layout->new_output_section_data_from_script(posd);
 	    }
 
-	  output_section->add_input_section_for_script(p->relobj,
-						       p->shndx,
-						       p->size,
+	  output_section->add_input_section_for_script(p->input_section(),
+						       p->size(),
 						       this_subalign);
 
-	  *dot_value = address + p->size;
+	  dot = address + p->size();
 	}
     }
+
+  // An SHF_TLS/SHT_NOBITS section does not take up any
+  // address space.
+  if (output_section == NULL
+      || (output_section->flags() & elfcpp::SHF_TLS) == 0
+      || output_section->type() != elfcpp::SHT_NOBITS)
+    *dot_value = dot;
 
   this->final_dot_value_ = *dot_value;
   this->final_dot_section_ = *dot_section;
@@ -2202,7 +2275,7 @@ Orphan_output_section::set_section_addresses(Symbol_table*, Layout*,
 					     uint64_t* dot_value,
                                              uint64_t* load_address)
 {
-  typedef std::list<std::pair<Relobj*, unsigned int> > Input_section_list;
+  typedef std::list<Output_section::Simple_input_section> Input_section_list;
 
   bool have_load_address = *load_address != *dot_value;
 
@@ -2231,23 +2304,33 @@ Orphan_output_section::set_section_addresses(Symbol_table*, Layout*,
       // object.
       {
 	const Task* task = reinterpret_cast<const Task*>(-1);
-	Task_lock_obj<Object> tl(task, p->first);
-	addralign = p->first->section_addralign(p->second);
-	size = p->first->section_size(p->second);
+	Task_lock_obj<Object> tl(task, p->relobj());
+	addralign = p->relobj()->section_addralign(p->shndx());
+	if (p->is_relaxed_input_section())
+	  // We use current data size because relxed section sizes may not
+	  // have finalized yet.
+	  size = p->relaxed_input_section()->current_data_size();
+	else
+	  size = p->relobj()->section_size(p->shndx());
       }
 
       address = align_address(address, addralign);
-      this->os_->add_input_section_for_script(p->first, p->second, size,
-                                              addralign);
+      this->os_->add_input_section_for_script(*p, size, addralign);
       address += size;
     }
 
-  if (!have_load_address)
-    *load_address = address;
-  else
-    *load_address += address - *dot_value;
+  // An SHF_TLS/SHT_NOBITS section does not take up any address space.
+  if (this->os_ == NULL
+      || (this->os_->flags() & elfcpp::SHF_TLS) == 0
+      || this->os_->type() != elfcpp::SHT_NOBITS)
+    {
+      if (!have_load_address)
+	*load_address = address;
+      else
+	*load_address += address - *dot_value;
 
-  *dot_value = address;
+      *dot_value = address;
+    }
 }
 
 // Get the list of segments to use for an allocated section when using
@@ -2333,6 +2416,11 @@ class Phdrs_element
   segment()
   { return this->segment_; }
 
+  // Release the segment.
+  void
+  release_segment()
+  { this->segment_ = NULL; }
+
   // Set the segment flags if appropriate.
   void
   set_flags_if_valid()
@@ -2399,7 +2487,8 @@ Script_sections::Script_sections()
     orphan_section_placement_(NULL),
     data_segment_align_start_(),
     saw_data_segment_align_(false),
-    saw_relro_end_(false)
+    saw_relro_end_(false),
+    saw_segment_start_expression_(false)
 {
 }
 
@@ -2452,6 +2541,15 @@ Script_sections::add_dot_assignment(Expression* val)
     this->output_section_->add_dot_assignment(val);
   else
     {
+      // The GNU linker permits assignments to . to appears outside of
+      // a SECTIONS clause, and treats it as appearing inside, so
+      // sections_elements_ may be NULL here.
+      if (this->sections_elements_ == NULL)
+	{
+	  this->sections_elements_ = new Sections_elements;
+	  this->saw_sections_clause_ = true;
+	}
+
       Sections_element* p = new Sections_element_dot_assignment(val);
       this->sections_elements_->push_back(p);
     }
@@ -2753,10 +2851,52 @@ Script_sections::set_section_addresses(Symbol_table* symtab, Layout* layout)
   // For a relocatable link, we implicitly set dot to zero.
   uint64_t dot_value = 0;
   uint64_t load_address = 0;
+
+  // Check to see if we want to use any of -Ttext, -Tdata and -Tbss options
+  // to set section addresses.  If the script has any SEGMENT_START
+  // expression, we do not set the section addresses.
+  bool use_tsection_options =
+    (!this->saw_segment_start_expression_
+     && (parameters->options().user_set_Ttext()
+	 || parameters->options().user_set_Tdata()
+	 || parameters->options().user_set_Tbss()));
+
   for (Sections_elements::iterator p = this->sections_elements_->begin();
        p != this->sections_elements_->end();
        ++p)
-    (*p)->set_section_addresses(symtab, layout, &dot_value, &load_address);
+    {
+      Output_section* os = (*p)->get_output_section();
+
+      // Handle -Ttext, -Tdata and -Tbss options.  We do this by looking for
+      // the special sections by names and doing dot assignments. 
+      if (use_tsection_options
+	  && os != NULL
+	  && (os->flags() & elfcpp::SHF_ALLOC) != 0)
+	{
+	  uint64_t new_dot_value = dot_value;
+
+	  if (parameters->options().user_set_Ttext()
+	      && strcmp(os->name(), ".text") == 0)
+	    new_dot_value = parameters->options().Ttext();
+	  else if (parameters->options().user_set_Tdata()
+	      && strcmp(os->name(), ".data") == 0)
+	    new_dot_value = parameters->options().Tdata();
+	  else if (parameters->options().user_set_Tbss()
+	      && strcmp(os->name(), ".bss") == 0)
+	    new_dot_value = parameters->options().Tbss();
+
+	  // Update dot and load address if necessary.
+	  if (new_dot_value < dot_value)
+	    gold_error(_("dot may not move backward"));
+	  else if (new_dot_value != dot_value)
+	    {
+	      dot_value = new_dot_value;
+	      load_address = new_dot_value;
+	    }
+	}
+
+      (*p)->set_section_addresses(symtab, layout, &dot_value, &load_address);
+    } 
 
   if (this->phdrs_elements_ != NULL)
     {
@@ -3165,12 +3305,15 @@ Script_sections::attach_sections_using_phdrs_clause(Layout* layout)
   // Output sections in the script which do not list segments are
   // attached to the same set of segments as the immediately preceding
   // output section.
+  
   String_list* phdr_names = NULL;
+  bool load_segments_only = false;
   for (Sections_elements::const_iterator p = this->sections_elements_->begin();
        p != this->sections_elements_->end();
        ++p)
     {
       bool orphan;
+      String_list* old_phdr_names = phdr_names;
       Output_section* os = (*p)->allocate_to_segment(&phdr_names, &orphan);
       if (os == NULL)
 	continue;
@@ -3181,6 +3324,11 @@ Script_sections::attach_sections_using_phdrs_clause(Layout* layout)
 	  continue;
 	}
 
+      // We see a list of segments names.  Disable PT_LOAD segment only
+      // filtering.
+      if (old_phdr_names != phdr_names)
+	load_segments_only = false;
+		
       // If this is an orphan section--one that was not explicitly
       // mentioned in the linker script--then it should not inherit
       // any segment type other than PT_LOAD.  Otherwise, e.g., the
@@ -3189,17 +3337,9 @@ Script_sections::attach_sections_using_phdrs_clause(Layout* layout)
       // we trust the linker script.
       if (orphan)
 	{
-	  String_list::iterator q = phdr_names->begin();
-	  while (q != phdr_names->end())
-	    {
-	      Name_to_segment::const_iterator r = name_to_segment.find(*q);
-	      // We give errors about unknown segments below.
-	      if (r == name_to_segment.end()
-		  || r->second->type() == elfcpp::PT_LOAD)
-		++q;
-	      else
-		q = phdr_names->erase(q);
-	    }
+	  // Enable PT_LOAD segments only filtering until we see another
+	  // list of segment names.
+	  load_segments_only = true;
 	}
 
       bool in_load_segment = false;
@@ -3212,6 +3352,10 @@ Script_sections::attach_sections_using_phdrs_clause(Layout* layout)
 	    gold_error(_("no segment %s"), q->c_str());
 	  else
 	    {
+	      if (load_segments_only
+		  && r->second->type() != elfcpp::PT_LOAD)
+		continue;
+
 	      elfcpp::Elf_Word seg_flags =
 		Layout::section_flags_to_segment(os->flags());
 	      r->second->add_output_section(os, seg_flags);
@@ -3364,6 +3508,21 @@ Script_sections::get_output_section_info(const char* name, uint64_t* address,
                                       size))
       return true;
   return false;
+}
+
+// Release all Output_segments.  This remove all pointers to all
+// Output_segments.
+
+void
+Script_sections::release_segments()
+{
+  if (this->saw_phdrs_clause())
+    {
+      for (Phdrs_elements::const_iterator p = this->phdrs_elements_->begin();
+	   p != this->phdrs_elements_->end();
+	   ++p)
+	(*p)->release_segment();
+    }
 }
 
 // Print the SECTIONS clause to F for debugging.
