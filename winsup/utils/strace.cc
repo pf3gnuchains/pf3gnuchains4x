@@ -31,7 +31,7 @@ details. */
 #define alloca __builtin_alloca
 
 // Version string.
-static const char version[] = "$Revision$";
+static const char version[] = "$Revision: 1.21 $";
 
 static const char *pgm;
 static int forkdebug = 1;
@@ -264,6 +264,7 @@ ctrl_c (DWORD)
 
 extern "C" {
 unsigned long (*cygwin_internal) (int, ...);
+WCHAR cygwin_dll_path[32768];
 };
 
 static int
@@ -282,6 +283,7 @@ load_cygwin ()
       errno = ENOENT;
       return 0;
     }
+  GetModuleFileNameW (h, cygwin_dll_path, 32768);
   if (!(cygwin_internal = (DWORD (*) (int, ...)) GetProcAddress (h, "cygwin_internal")))
     {
       errno = ENOSYS;
