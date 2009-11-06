@@ -1,28 +1,3 @@
-2009-11-12  Nick Clifton  <nickc@redhat.com>
-
-	* po/id.po: Updated Indonesian translation.
-
-2009-11-11  H.J. Lu  <hongjiu.lu@intel.com>
-
-	* config/tc-i386.c (build_modrm_byte): Don't set register
-	operand twice.
-
-2009-11-11  Jan Kratochvil  <jan.kratochvil@redhat.com>
-
-	* configure.in: Call ACX_LARGEFILE.  Stop calling AC_SYS_LARGEFILE.
-	* aclocal.m4: Regenerate.
-	* configure: Regenerate.
-
-2009-11-10  Maxim Kuvyrkov  <maxim@codesourcery.com>
-
-	* config/m68k-parse.h (enum m68k_register): Add ACR[4-7], RGPIOBAR.
-	* config/tc-m68k.c (mcf5206_ctrl): Fix whitespace.
-	(mcf52223_ctrl): Remove non-existent registers. 
-	(mcf54418): Define.
-	(mcf54455): Remove MBAR.
-	(m68k_cpus): Add lines for MCF5441x family.
-	(m68k_ip, init_table): Handle RGPIOBAR, ACR[4-7].
-	
 2009-11-06  H.J. Lu  <hongjiu.lu@intel.com>
 
 	* doc/c-i386.texi: Move .lwp.
