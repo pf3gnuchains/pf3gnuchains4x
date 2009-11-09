@@ -1,3 +1,9 @@
+2009-11-09  H.J. Lu  <hongjiu.lu@intel.com>
+
+	PR ld/10911
+	* elflink.c (elf_link_output_extsym): Don't return on
+	STT_GNU_IFUNC symbol when stripping.
+
 2009-11-08  John David Anglin  <dave.anglin@nrc-cnrc.gc.ca>
 
 	* elf32-hppa.c (elf32_hppa_final_link): Don't sort unwind information
