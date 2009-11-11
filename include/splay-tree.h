@@ -93,7 +93,7 @@ typedef void *(*splay_tree_allocate_fn) (int, void *);
 typedef void (*splay_tree_deallocate_fn) (void *, void *);
 
 /* The nodes in the splay tree.  */
-struct GTY(()) splay_tree_node_s {
+struct splay_tree_node_s GTY(()) {
   /* The key.  */
   splay_tree_key GTY ((use_param1)) key;
 
@@ -106,7 +106,7 @@ struct GTY(()) splay_tree_node_s {
 };
 
 /* The splay tree itself.  */
-struct GTY(()) splay_tree_s {
+struct splay_tree_s GTY(()) {
   /* The root of the tree.  */
   splay_tree_node GTY ((use_params)) root;
 
