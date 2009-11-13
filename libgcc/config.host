@@ -426,6 +426,8 @@ mips-wrs-vxworks)
 	;;
 mipstx39-*-elf* | mipstx39el-*-elf*)
 	;;
+mips*-*-toppers* | mips*el-*-toppers*)
+	;;
 mmix-knuth-mmixware)
 	;;
 mn10300-*-*)
