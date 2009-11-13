@@ -1657,6 +1657,11 @@ mips-*-elf* | mipsel-*-elf*)
 	tm_file="elfos.h ${tm_file} mips/elf.h"
 	tmake_file="mips/t-elf mips/t-libgcc-mips16"
 	;;
+mips64-*-toppers* | mips64el-*-toppers*)
+	tm_file="elfos.h ${tm_file} mips/elf.h"
+	tmake_file="mips/t-elf mips/t-libgcc-mips16"
+	tm_defines="${tm_defines} MIPS_ABI_DEFAULT=ABI_N32"
+	;;
 mips64-*-elf* | mips64el-*-elf*)
 	tm_file="elfos.h ${tm_file} mips/elf.h"
 	tmake_file="mips/t-elf mips/t-libgcc-mips16"

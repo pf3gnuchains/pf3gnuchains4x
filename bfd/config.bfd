@@ -973,6 +973,16 @@ case "${targ}" in
     targ_selvecs="bfd_elf32_tradlittlemips_vec bfd_elf32_ntradbigmips_vec bfd_elf32_ntradlittlemips_vec bfd_elf64_tradbigmips_vec bfd_elf64_tradlittlemips_vec"
     want64=true
     ;;
+  mips*el-*-toppers*)    
+    targ_defvec=bfd_elf32_ntradlittlemips_vec
+    targ_selvecs="bfd_elf32_ntradbigmips_vec bfd_elf32_tradbigmips_vec bfd_elf32_tradlittlemips_vec bfd_elf64_tradbigmips_vec bfd_elf64_tradlittlemips_vec"
+    want64=true
+    ;;  
+  mips*-*-toppers*)
+    targ_defvec=bfd_elf32_ntradbigmips_vec
+    targ_selvecs="bfd_elf32_ntradlittlemips_vec bfd_elf32_tradbigmips_vec bfd_elf32_tradlittlemips_vec bfd_elf64_tradbigmips_vec bfd_elf64_tradlittlemips_vec"
+    want64=true
+    ;;
   mips*el-*-elf* | mips*el-*-vxworks* | mips*-*-chorus*)
     targ_defvec=bfd_elf32_littlemips_vec
     targ_selvecs="bfd_elf32_bigmips_vec bfd_elf64_bigmips_vec bfd_elf64_littlemips_vec"
