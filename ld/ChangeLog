@@ -1,3 +1,32 @@
+2009-11-11  Nick Clifton  <nickc@redhat.com>
+
+	* po/id.po: Updated Indonesian translation.
+
+2009-11-11  Jan Kratochvil  <jan.kratochvil@redhat.com>
+
+	* configure.in: Call ACX_LARGEFILE.  Stop calling AC_SYS_LARGEFILE.
+	* aclocal.m4: Regenerate.
+	* configure: Regenerate.
+
+2009-11-10  Nick Clifton  <nickc@redhat.com>
+
+	PR ld/10864
+	* ld.texinfo (Entry Point): Mention that the default entry symbol
+	is not 'start' on some targets.
+
+2009-11-06  H.J. Lu  <hongjiu.lu@intel.com>
+
+	PR ld/10912
+	* ldmain.c (add_DT_NEEDED_for_dynamic): Default to TRUE.
+
+2009-11-06  Kai Tietz  <kai.tietz@onevision.com>
+
+	* pe.em (DEFAULT_PSEUDO_RELOC_VERSION): New macro.
+	(gld_XXX_before_parse): Set pseudo-relocation default
+	version to DEFAULT_PSEUDO_RELOC_VERSION.
+	(gldXXX_handle_option): Likewise.
+
+
 2009-11-05  Nick Clifton  <nickc@redhat.com>
 
 	* lexsup.c: Rename --add-needed to --copy-dt-needed-entries.

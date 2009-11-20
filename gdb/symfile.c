@@ -1308,12 +1308,22 @@ get_debug_link_info (struct objfile *objfile, unsigned long *crc32_out)
 
 static int
 separate_debug_file_exists (const char *name, unsigned long crc,
-			    const char *parent_name)
+			    struct objfile *parent_objfile)
 {
   unsigned long file_crc = 0;
   bfd *abfd;
   gdb_byte buffer[8*1024];
   int count;
+  struct stat parent_stat, abfd_stat;
+
+  /* Find a separate debug info file as if symbols would be present in
+     PARENT_OBJFILE itself this function would not be called.  .gnu_debuglink
+     section can contain just the basename of PARENT_OBJFILE without any
+     ".debug" suffix as "/usr/lib/debug/path/to/file" is a separate tree where
+     the separate debug infos with the same basename can exist. */
+
+  if (strcmp (name, parent_objfile->name) == 0)
+    return 0;
 
   if (remote_filename_p (name))
     abfd = remote_bfd_open (name, gnutarget);
@@ -1322,6 +1332,26 @@ separate_debug_file_exists (const char *name, unsigned long crc,
 
   if (!abfd)
     return 0;
+
+  /* Verify symlinks were not the cause of strcmp name difference above.
+
+     Some operating systems, e.g. Windows, do not provide a meaningful
+     st_ino; they always set it to zero.  (Windows does provide a
+     meaningful st_dev.)  Do not indicate a duplicate library in that
+     case.  While there is no guarantee that a system that provides
+     meaningful inode numbers will never set st_ino to zero, this is
+     merely an optimization, so we do not need to worry about false
+     negatives.  */
+
+  if (bfd_stat (abfd, &abfd_stat) == 0
+      && bfd_stat (parent_objfile->obfd, &parent_stat) == 0
+      && abfd_stat.st_dev == parent_stat.st_dev
+      && abfd_stat.st_ino == parent_stat.st_ino
+      && abfd_stat.st_ino != 0)
+    {
+      bfd_close (abfd);
+      return 0;
+    }
 
   while ((count = bfd_bread (buffer, sizeof (buffer), abfd)) > 0)
     file_crc = gnu_debuglink_crc32 (file_crc, buffer, count);
@@ -1332,7 +1362,7 @@ separate_debug_file_exists (const char *name, unsigned long crc,
     {
       warning (_("the debug information found in \"%s\""
 		 " does not match \"%s\" (CRC mismatch).\n"),
-	       name, parent_name);
+	       name, parent_objfile->name);
       return 0;
     }
 
@@ -1422,7 +1452,7 @@ find_separate_debug_file (struct objfile *objfile)
   strcpy (debugfile, dir);
   strcat (debugfile, basename);
 
-  if (separate_debug_file_exists (debugfile, crc32, objfile->name))
+  if (separate_debug_file_exists (debugfile, crc32, objfile))
     goto cleanup_return_debugfile;
 
   /* Then try in the subdirectory named DEBUG_SUBDIRECTORY.  */
@@ -1431,7 +1461,7 @@ find_separate_debug_file (struct objfile *objfile)
   strcat (debugfile, "/");
   strcat (debugfile, basename);
 
-  if (separate_debug_file_exists (debugfile, crc32, objfile->name))
+  if (separate_debug_file_exists (debugfile, crc32, objfile))
     goto cleanup_return_debugfile;
 
   /* Then try in the global debugfile directories.
@@ -1457,7 +1487,7 @@ find_separate_debug_file (struct objfile *objfile)
       strcat (debugfile, dir);
       strcat (debugfile, basename);
 
-      if (separate_debug_file_exists (debugfile, crc32, objfile->name))
+      if (separate_debug_file_exists (debugfile, crc32, objfile))
 	goto cleanup_return_debugfile;
 
       /* If the file is in the sysroot, try using its base path in the
@@ -1472,7 +1502,7 @@ find_separate_debug_file (struct objfile *objfile)
 	  strcat (debugfile, "/");
 	  strcat (debugfile, basename);
 
-	  if (separate_debug_file_exists (debugfile, crc32, objfile->name))
+	  if (separate_debug_file_exists (debugfile, crc32, objfile))
 	    goto cleanup_return_debugfile;
 	}
 
@@ -2402,6 +2432,8 @@ reread_symbols (void)
 	      objfile->psymbol_cache = bcache_xmalloc ();
 	      bcache_xfree (objfile->macro_cache);
 	      objfile->macro_cache = bcache_xmalloc ();
+	      bcache_xfree (objfile->filename_cache);
+	      objfile->filename_cache = bcache_xmalloc ();
 	      if (objfile->demangled_names_hash != NULL)
 		{
 		  htab_delete (objfile->demangled_names_hash);
@@ -2424,6 +2456,7 @@ reread_symbols (void)
 
 	      objfile->psymbol_cache = bcache_xmalloc ();
 	      objfile->macro_cache = bcache_xmalloc ();
+	      objfile->filename_cache = bcache_xmalloc ();
 	      /* obstack_init also initializes the obstack so it is
 	         empty.  We could use obstack_specify_allocation but
 	         gdb_obstack.h specifies the alloc/dealloc
@@ -2746,12 +2779,11 @@ allocate_symtab (char *filename, struct objfile *objfile)
   symtab = (struct symtab *)
     obstack_alloc (&objfile->objfile_obstack, sizeof (struct symtab));
   memset (symtab, 0, sizeof (*symtab));
-  symtab->filename = obsavestring (filename, strlen (filename),
-				   &objfile->objfile_obstack);
+  symtab->filename = (char *) bcache (filename, strlen (filename) + 1,
+				      objfile->filename_cache);
   symtab->fullname = NULL;
   symtab->language = deduce_language_from_filename (filename);
-  symtab->debugformat = obsavestring ("unknown", 7,
-				      &objfile->objfile_obstack);
+  symtab->debugformat = "unknown";
 
   /* Hook it to the objfile it comes from */
 
@@ -2763,7 +2795,7 @@ allocate_symtab (char *filename, struct objfile *objfile)
 }
 
 struct partial_symtab *
-allocate_psymtab (char *filename, struct objfile *objfile)
+allocate_psymtab (const char *filename, struct objfile *objfile)
 {
   struct partial_symtab *psymtab;
 
@@ -2778,8 +2810,8 @@ allocate_psymtab (char *filename, struct objfile *objfile)
 		     sizeof (struct partial_symtab));
 
   memset (psymtab, 0, sizeof (struct partial_symtab));
-  psymtab->filename = obsavestring (filename, strlen (filename),
-				    &objfile->objfile_obstack);
+  psymtab->filename = (char *) bcache (filename, strlen (filename) + 1,
+				       objfile->filename_cache);
   psymtab->symtab = NULL;
 
   /* Prepend it to the psymtab list for the objfile it belongs to.
@@ -3077,7 +3109,8 @@ again2:
 
 struct partial_symtab *
 start_psymtab_common (struct objfile *objfile,
-		      struct section_offsets *section_offsets, char *filename,
+		      struct section_offsets *section_offsets,
+		      const char *filename,
 		      CORE_ADDR textlow, struct partial_symbol **global_syms,
 		      struct partial_symbol **static_syms)
 {
@@ -3106,9 +3139,15 @@ add_psymbol_to_bcache (char *name, int namelength, domain_enum domain,
 		       enum language language, struct objfile *objfile,
 		       int *added)
 {
-  struct partial_symbol psymbol;
+  /* psymbol is static so that there will be no uninitialized gaps in the
+     structure which might contain random data, causing cache misses in
+     bcache. */
+  static struct partial_symbol psymbol;
 
-  memset (&psymbol, 0, sizeof (struct partial_symbol));
+  /* However, we must ensure that the entire 'value' field has been
+     zeroed before assigning to it, because an assignment may not
+     write the entire field.  */
+  memset (&psymbol.ginfo.value, 0, sizeof (psymbol.ginfo.value));
   /* val and coreaddr are mutually exclusive, one of them *will* be zero */
   if (val != 0)
     {

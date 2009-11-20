@@ -1,3 +1,34 @@
+2009-11-11  Nick Clifton  <nickc@redhat.com>
+
+	* po/id.po: Updated Indonesian translation.
+
+2009-11-11  Jan Kratochvil  <jan.kratochvil@redhat.com>
+
+	* configure.in: Stop checking for fopen64 and stat64.
+	* strings.c (file_off, file_open, statbuf, file_stat): Remove.
+	(strings_file): Change file_off to file_ptr, file_open to fopen,
+	statbuf to struct stat and file_stat to stat.
+	(get_char): Change parameter type file_off * to file_ptr *.
+	(print_strings): Change parameter and variable `start' type file_off to
+	file_ptr.
+	* configure: Regenerate.
+	* config.in: Regenerate.
+
+2009-11-11  Jan Kratochvil  <jan.kratochvil@redhat.com>
+
+	* configure.in: Call ACX_LARGEFILE.  Stop calling AC_PLUGINS,
+	AC_SYS_LARGEFILE and checking the Solaris largefile exception.
+	* aclocal.m4: Regenerate.
+	* configure: Regenerate.
+
+2009-11-09  Jan Kratochvil  <jan.kratochvil@redhat.com>
+
+	* bucomm.c (get_file_size): Update comment for the error return value.
+
+2009-11-08  John David Anglin  <dave.anglin@nrc-cnrc.gc.ca>
+
+	* readelf.c (slurp_hppa_unwind_table): Don't relocate address twice.
+
 2009-11-05  Kai Tietz  <kai.tietz@onevision.com>
 
 	* dllwrap.c (is_leading_underscore): New variable.
