@@ -699,7 +699,6 @@ BUILD_CFLAGS= @BUILD_CFLAGS@ -DGENERATOR_FILE
 
 # Native linker and preprocessor flags.  For x-fragment overrides.
 BUILD_LDFLAGS=@BUILD_LDFLAGS@
-BUILD_CPPFLAGS=$(ALL_CPPFLAGS)
 
 # Actual name to use when installing a native compiler.
 GCC_INSTALL_NAME := $(shell echo gcc|sed '$(program_transform_name)')
@@ -904,6 +903,7 @@ ALL_CFLAGS = $(T_CFLAGS) \
 # puts -I options in CPPFLAGS, our include files in the srcdir will always
 # win against random include files in /usr/include.
 ALL_CPPFLAGS = $(INCLUDES) $(CPPFLAGS)
+BUILD_CPPFLAGS = $(BUILD_INCLUDES) $(CPPFLAGS)
 
 # Build and host support libraries.
 LIBIBERTY = ../libiberty/libiberty.a
@@ -945,10 +945,11 @@ BUILD_ERRORS = build/errors.o
 # -I$(@D) and -I$(srcdir)/$(@D) cause the subdirectory of the file
 # currently being compiled, in both source trees, to be examined as well.
 # libintl.h will be found in ../intl if we are using the included libintl.
-INCLUDES = -I. -I$(@D) -I$(srcdir) -I$(srcdir)/$(@D) \
+BUILD_INCLUDES = -I. -I$(@D) -I$(srcdir) -I$(srcdir)/$(@D) \
 	   -I$(srcdir)/../include @INCINTL@ \
-	   $(CPPINC) $(GMPINC) $(DECNUMINC) \
-	   $(PPLINC) $(CLOOGINC)
+	   $(CPPINC)
+INCLUDES = $(BUILD_INCLUDES) $(GMPINC) \
+	   $(DECNUMINC) $(PPLINC) $(CLOOGINC)
 
 .c.o:
 	$(CC) -c $(ALL_CFLAGS) $(ALL_CPPFLAGS) $< $(OUTPUT_OPTION)

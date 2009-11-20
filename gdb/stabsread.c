@@ -673,14 +673,18 @@ define_symbol (CORE_ADDR valu, char *string, int desc, int type,
       switch (string[1])
 	{
 	case 't':
-	  SYMBOL_SET_LINKAGE_NAME (sym, "this");
+	  SYMBOL_SET_LINKAGE_NAME
+	    (sym, obsavestring ("this", strlen ("this"),
+				&objfile->objfile_obstack));
 	  break;
 
 	case 'v':		/* $vtbl_ptr_type */
 	  goto normal;
 
 	case 'e':
-	  SYMBOL_SET_LINKAGE_NAME (sym, "eh_throw");
+	  SYMBOL_SET_LINKAGE_NAME
+	    (sym, obsavestring ("eh_throw", strlen ("eh_throw"),
+				&objfile->objfile_obstack));
 	  break;
 
 	case '_':

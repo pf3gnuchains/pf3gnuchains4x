@@ -417,8 +417,6 @@ class Foo
   int times (int y);
 };
 
-typedef Foo ByAnyOtherName;
-
 class Bar : public Base1, public Foo {
  public:
   int z;
@@ -433,7 +431,7 @@ int Foo::st = 100;
 
 Foo::operator int() { return x; }
 
-ByAnyOtherName foo(10, 11);
+Foo foo(10, 11);
 Bar bar(20, 21, 22);
 
 class ClassWithEnum {

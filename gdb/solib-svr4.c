@@ -1436,11 +1436,8 @@ enable_break (struct svr4_info *info)
       msymbol = lookup_minimal_symbol (*bkpt_namep, NULL, symfile_objfile);
       if ((msymbol != NULL) && (SYMBOL_VALUE_ADDRESS (msymbol) != 0))
 	{
-	  sym_addr = SYMBOL_VALUE_ADDRESS (msymbol);
-	  sym_addr = gdbarch_convert_from_func_ptr_addr (target_gdbarch,
-							 sym_addr,
-							 &current_target);
-	  create_solib_event_breakpoint (target_gdbarch, sym_addr);
+	  create_solib_event_breakpoint (target_gdbarch,
+					 SYMBOL_VALUE_ADDRESS (msymbol));
 	  return 1;
 	}
     }
@@ -1450,11 +1447,8 @@ enable_break (struct svr4_info *info)
       msymbol = lookup_minimal_symbol (*bkpt_namep, NULL, symfile_objfile);
       if ((msymbol != NULL) && (SYMBOL_VALUE_ADDRESS (msymbol) != 0))
 	{
-	  sym_addr = SYMBOL_VALUE_ADDRESS (msymbol);
-	  sym_addr = gdbarch_convert_from_func_ptr_addr (target_gdbarch,
-							 sym_addr,
-							 &current_target);
-	  create_solib_event_breakpoint (target_gdbarch, sym_addr);
+	  create_solib_event_breakpoint (target_gdbarch,
+					 SYMBOL_VALUE_ADDRESS (msymbol));
 	  return 1;
 	}
     }

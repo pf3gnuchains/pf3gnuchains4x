@@ -438,8 +438,9 @@ mi_on_resume (ptid_t ptid)
      In future (MI3), we'll be outputting "^done" here.  */
   if (!running_result_record_printed && mi_proceeded)
     {
-      fprintf_unfiltered (raw_stdout, "%s^running\n",
-			  current_token ? current_token : "");
+      if (current_token)
+	fputs_unfiltered (current_token, raw_stdout);
+      fputs_unfiltered ("^running\n", raw_stdout);
     }
 
   if (PIDGET (ptid) == -1)

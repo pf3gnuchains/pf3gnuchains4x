@@ -1,0 +1,9 @@
+# Multilibs for TOPPERS.
+#
+MULTILIB_OPTIONS = EL/EB mips32/mips64/mips64r2 mabi=eabi  msoft-float
+MULTILIB_DIRNAMES = el eb mips32 mips64 mips64r2 eabi soft-float
+MULTILIB_MATCHES = EL=mel EB=meb
+
+MUTLILIB_EXTRA_OPTS = -G 0 -mno-branch-likely
+
+MULTILIB_EXCLUSIONS := mips32/!mabi=eabi

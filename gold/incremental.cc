@@ -388,8 +388,8 @@ open_incremental_binary(Output_file* file)
       return NULL;
     }
 
-  int size = 0;
-  bool big_endian = false;
+  int size;
+  bool big_endian;
   std::string error;
   if (!elfcpp::Elf_recognizer::is_valid_header(p, want, &size, &big_endian,
                                                &error))

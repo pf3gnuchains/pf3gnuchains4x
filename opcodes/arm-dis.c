@@ -113,8 +113,7 @@ enum opcode_sentinel_enum
   SENTINEL_GENERIC_START
 } opcode_sentinels;
 
-#define UNDEFINED_INSTRUCTION      "undefined instruction %0-31x"
-#define UNPREDICTABLE_INSTRUCTION  "\t; <UNPREDICTABLE>"
+#define UNDEFINED_INSTRUCTION "undefined instruction %0-31x"
 
 /* Common coprocessor opcodes shared between Arm and Thumb-2.  */
 
@@ -777,7 +776,6 @@ static const struct opcode32 neon_opcodes[] =
 
    %a			print address for ldr/str instruction
    %s                   print address for ldr/str halfword/signextend instruction
-   %S                   like %s but allow UNPREDICTABLE addressing
    %b			print branch destination
    %c			print condition code (always bits 28-31)
    %m			print register mask for ldm/stm instruction
@@ -825,8 +823,8 @@ static const struct opcode32 arm_opcodes[] =
   {ARM_EXT_V6T2, 0x07c0001f, 0x0fe0007f, "bfc%c\t%12-15r, %E"},
   {ARM_EXT_V6T2, 0x07c00010, 0x0fe00070, "bfi%c\t%12-15r, %0-3r, %E"},
   {ARM_EXT_V6T2, 0x00600090, 0x0ff000f0, "mls%c\t%16-19r, %0-3r, %8-11r, %12-15r"},
-  {ARM_EXT_V6T2, 0x006000b0, 0x0f7000f0, "strht%c\t%12-15r, %S"},
-  {ARM_EXT_V6T2, 0x00300090, 0x0f300090, "ldr%6's%5?hbt%c\t%12-15r, %S"},
+  {ARM_EXT_V6T2, 0x006000b0, 0x0f7000f0, "strht%c\t%12-15r, %s"},
+  {ARM_EXT_V6T2, 0x00300090, 0x0f300090, "ldr%6's%5?hbt%c\t%12-15r, %s"},
   {ARM_EXT_V6T2, 0x03000000, 0x0ff00000, "movw%c\t%12-15r, %V"},
   {ARM_EXT_V6T2, 0x03400000, 0x0ff00000, "movt%c\t%12-15r, %V"},
   {ARM_EXT_V6T2, 0x06ff0f30, 0x0fff0ff0, "rbit%c\t%12-15r, %0-3r"},
@@ -1703,16 +1701,6 @@ arm_decode_shift (long given, fprintf_ftype func, void *stream,
     }
 }
 
-#define W_BIT 21
-#define I_BIT 22
-#define U_BIT 23
-#define P_BIT 24
-
-#define WRITEBACK_BIT_SET   (given & (1 << W_BIT))
-#define IMMEDIATE_BIT_SET   (given & (1 << I_BIT))
-#define NEGATIVE_BIT_SET   ((given & (1 << U_BIT)) == 0)
-#define PRE_BIT_SET         (given & (1 << P_BIT))
-
 /* Print one coprocessor instruction on INFO->STREAM.
    Return TRUE if the instuction matched, FALSE if this is not a
    recognised coprocessor instruction.  */
@@ -1813,15 +1801,15 @@ print_insn_coprocessor (bfd_vma pc,
 		    func (stream, "[%s", arm_regnames [(given >> 16) & 0xf]);
 
 		    value_in_comment = offset * 4;
-		    if (NEGATIVE_BIT_SET)
+		    if ((given & 0x00800000) == 0)
 		      value_in_comment = - value_in_comment;
 		    
-		    if (PRE_BIT_SET)
+		    if ((given & (1 << 24)) != 0)
 		      {
 			if (offset)
 			  func (stream, ", #%d]%s",
 				value_in_comment,
-				WRITEBACK_BIT_SET ? "!" : "");
+				((given & 0x00200000) != 0 ? "!" : ""));
 			else
 			  func (stream, "]");
 		      }
@@ -1829,7 +1817,7 @@ print_insn_coprocessor (bfd_vma pc,
 		      {
 			func (stream, "]");
 
-			if (WRITEBACK_BIT_SET)
+			if (given & (1 << 21))
 			  {
 			    if (offset)
 			      func (stream, ", #%d", value_in_comment);
@@ -1861,13 +1849,14 @@ print_insn_coprocessor (bfd_vma pc,
 		  {
 		    int rn = (given >> 16) & 0xf;
 		    int offset = (given & 0xff) * 4;
+		    int add = (given >> 23) & 1;
 
 		    func (stream, "[%s", arm_regnames[rn]);
 
 		    if (offset)
 		      {
-			if (NEGATIVE_BIT_SET)
-			  offset = - offset;
+			if (!add)
+			  offset = -offset;
 			func (stream, ", #%d", offset);
 			if (rn != 15)
 			  value_in_comment = offset;
@@ -2170,20 +2159,20 @@ print_insn_coprocessor (bfd_vma pc,
 		      if (multiplier > 1)
 			{
 			  value_in_comment = offset * multiplier;
-			  if (NEGATIVE_BIT_SET)
+			  if ((given & 0x00800000) == 0)
 			    value_in_comment = - value_in_comment;
 			}
 
 		      if (offset)
 			{
-			  if (PRE_BIT_SET)
+			  if ((given & 0x01000000) != 0)
 			    func (stream, ", #%s%d]%s",
-				  NEGATIVE_BIT_SET ? "-" : "",
+				  ((given & 0x00800000) == 0 ? "-" : ""),
 				  offset * multiplier,
-				  WRITEBACK_BIT_SET ? "!" : "");
+				  ((given & 0x00200000) != 0 ? "!" : ""));
 			  else
 			    func (stream, "], #%s%d",
-				  NEGATIVE_BIT_SET ? "-" : "",
+				  ((given & 0x00800000) == 0 ? "-" : ""),
 				  offset * multiplier);
 			}
 		      else
@@ -2194,8 +2183,8 @@ print_insn_coprocessor (bfd_vma pc,
 		  case 'r':
 		    {
 		      int imm4 = (given >> 4) & 0xf;
-		      int puw_bits = ((given >> 22) & 6) | ((given >> W_BIT) & 1);
-		      int ubit = ! NEGATIVE_BIT_SET;
+		      int puw_bits = ((given >> 22) & 6) | ((given >> 21) & 1);
+		      int ubit = (given >> 23) & 1;
 		      const char *rm = arm_regnames [given & 0xf];
 		      const char *rn = arm_regnames [(given >> 16) & 0xf];
 
@@ -2270,9 +2259,9 @@ print_arm_address (bfd_vma pc, struct disassemble_info *info, long given)
 
       func (stream, "[pc");
 
-      if (PRE_BIT_SET)
+      if (given & 0x01000000)
 	{
-	  if (NEGATIVE_BIT_SET)
+	  if ((given & 0x00800000) == 0)
 	    offset = - offset;
 
 	  /* Pre-indexed.  */
@@ -2284,14 +2273,15 @@ print_arm_address (bfd_vma pc, struct disassemble_info *info, long given)
 	     being used.  Probably a very dangerous thing
 	     for the programmer to do, but who are we to
 	     argue ?  */
-	  if (WRITEBACK_BIT_SET)
+	  if (given & 0x00200000)
 	    func (stream, "!");
 	}
-      else  /* Post indexed.  */
+      else
 	{
+	  /* Post indexed.  */
 	  func (stream, "], #%d", offset);
 
-	  /* Ie ignore the offset.  */
+	  /* ie ignore the offset.  */
 	  offset = pc + 8;
 	}
 
@@ -2303,25 +2293,26 @@ print_arm_address (bfd_vma pc, struct disassemble_info *info, long given)
     {
       func (stream, "[%s",
 	    arm_regnames[(given >> 16) & 0xf]);
-
-      if (PRE_BIT_SET)
+      if ((given & 0x01000000) != 0)
 	{
 	  if ((given & 0x02000000) == 0)
 	    {
 	      offset = given & 0xfff;
 	      if (offset)
 		func (stream, ", #%s%d",
-		      NEGATIVE_BIT_SET ? "-" : "", offset);
+		      (((given & 0x00800000) == 0)
+		       ? "-" : ""), offset);
 	    }
 	  else
 	    {
 	      func (stream, ", %s",
-		    NEGATIVE_BIT_SET ? "-" : "");
+		    (((given & 0x00800000) == 0)
+		     ? "-" : ""));
 	      arm_decode_shift (given, func, stream, TRUE);
 	    }
 
 	  func (stream, "]%s",
-		WRITEBACK_BIT_SET ? "!" : "");
+		((given & 0x00200000) != 0) ? "!" : "");
 	}
       else
 	{
@@ -2330,14 +2321,16 @@ print_arm_address (bfd_vma pc, struct disassemble_info *info, long given)
 	      offset = given & 0xfff;
 	      if (offset)
 		func (stream, "], #%s%d",
-		      NEGATIVE_BIT_SET ? "-" : "", offset);
+		      (((given & 0x00800000) == 0)
+		       ? "-" : ""), offset);
 	      else
 		func (stream, "]");
 	    }
 	  else
 	    {
 	      func (stream, "], %s",
-		    NEGATIVE_BIT_SET ? "-" : "");
+		    (((given & 0x00800000) == 0)
+		     ? "-" : ""));
 	      arm_decode_shift (given, func, stream, TRUE);
 	    }
 	}
@@ -2676,16 +2669,16 @@ print_insn_neon (struct disassemble_info *info, long given, bfd_boolean thumb)
                                 valbytes[3] = (value >> 24) & 0xff;
                                 
                                 floatformat_to_double 
-                                  (& floatformat_ieee_single_little, valbytes,
-                                  & fvalue);
+                                  (&floatformat_ieee_single_little, valbytes,
+                                  &fvalue);
                                                                 
                                 func (stream, "#%.7g\t; 0x%.8lx", fvalue,
                                       value);
                               }
                             else
                               func (stream, "#%ld\t; 0x%.8lx",
-				    (long) (NEGATIVE_BIT_SET ? value | ~0xffffffffL : value),
-				    value);
+				(long) ((value & 0x80000000)
+					? value | ~0xffffffffl : value), value);
                             break;
 
                           case 64:
@@ -2848,8 +2841,6 @@ print_insn_arm (bfd_vma pc, struct disassemble_info *info, long given)
 	    {
 	      if (*c == '%')
 		{
-		  bfd_boolean allow_unpredictable = FALSE;
-
 		  switch (*++c)
 		    {
 		    case '%':
@@ -2863,54 +2854,58 @@ print_insn_arm (bfd_vma pc, struct disassemble_info *info, long given)
 		    case 'P':
 		      /* Set P address bit and use normal address
 			 printing routine.  */
-		      value_in_comment = print_arm_address (pc, info, given | (1 << P_BIT));
+		      value_in_comment = print_arm_address (pc, info, given | (1 << 24));
 		      break;
 
-		    case 'S':
-		      allow_unpredictable = TRUE;
 		    case 's':
                       if ((given & 0x004f0000) == 0x004f0000)
 			{
                           /* PC relative with immediate offset.  */
 			  int offset = ((given & 0xf00) >> 4) | (given & 0xf);
 
-			  if (NEGATIVE_BIT_SET)
-			    offset = - offset;
+			  if ((given & 0x00800000) == 0)
+			    offset = -offset;
 
 			  func (stream, "[pc, #%d]\t; ", offset);
 			  info->print_address_func (offset + pc + 8, info);
 			}
 		      else
 			{
+			  bfd_boolean negative = (given & 0x00800000) == 0;
 			  int offset = ((given & 0xf00) >> 4) | (given & 0xf);
 
-			  if (NEGATIVE_BIT_SET)
-			    offset = - offset;
+			  if (negative)
+			    offset = -offset;
 
 			  func (stream, "[%s",
 				arm_regnames[(given >> 16) & 0xf]);
 
-			  if (PRE_BIT_SET)
+			  if ((given & 0x01000000) != 0)
 			    {
                               /* Pre-indexed.  */
-			      if (IMMEDIATE_BIT_SET)
+			      if ((given & 0x00400000) == 0x00400000)
 				{
+                                  /* Immediate.  */
 				  if (offset)
 				    func (stream, ", #%d", offset);
 				  value_in_comment = offset;
 				}
-			      else /* Register.  */
-				func (stream, ", %s%s",
-				      NEGATIVE_BIT_SET ? "-" : "",
-				      arm_regnames[given & 0xf]);
+			      else
+				{
+                                  /* Register.  */
+				  func (stream, ", %s%s", negative ? "-" : "",
+                                        arm_regnames[given & 0xf]);
+				}
 
 			      func (stream, "]%s",
-				    WRITEBACK_BIT_SET ? "!" : "");
+				    ((given & 0x00200000) != 0) ? "!" : "");
 			    }
-			  else /* Post-indexed.  */
+			  else
 			    {
-			      if (IMMEDIATE_BIT_SET)
+                              /* Post-indexed.  */
+			      if ((given & 0x00400000) == 0x00400000)
 				{
+                                  /* Immediate.  */
 				  if (offset)
 				    func (stream, "], #%d", offset);
 				  else
@@ -2918,13 +2913,12 @@ print_insn_arm (bfd_vma pc, struct disassemble_info *info, long given)
 
 				  value_in_comment = offset;
 				}
-			      else /* Register.  */
-				func (stream, "], %s%s",
-				      NEGATIVE_BIT_SET ? "-" : "",
-				      arm_regnames[given & 0xf]);
-
-			      if (WRITEBACK_BIT_SET && ! allow_unpredictable)
-				func (stream, UNPREDICTABLE_INSTRUCTION);
+			      else
+				{
+                                  /* Register.  */
+				  func (stream, "], %s%s", negative ? "-" : "",
+                                        arm_regnames[given & 0xf]);
+				}
 			    }
 			}
 		      break;
@@ -2994,17 +2988,17 @@ print_insn_arm (bfd_vma pc, struct disassemble_info *info, long given)
 			int offset = given & 0xff;
 
 			value_in_comment = offset * 4;
-			if (NEGATIVE_BIT_SET)
+			if ((given & 0x00800000) == 0)
 			  value_in_comment = - value_in_comment;
 
 			func (stream, "[%s", arm_regnames [(given >> 16) & 0xf]);
 
-			if (PRE_BIT_SET)
+			if ((given & (1 << 24)) != 0)
 			  {
 			    if (offset)
 			      func (stream, ", #%d]%s",
 				    value_in_comment,
-				    WRITEBACK_BIT_SET ? "!" : "");
+				    ((given & 0x00200000) != 0 ? "!" : ""));
 			    else
 			      func (stream, "]");
 			  }
@@ -3012,7 +3006,7 @@ print_insn_arm (bfd_vma pc, struct disassemble_info *info, long given)
 			  {
 			    func (stream, "]");
 
-			    if (WRITEBACK_BIT_SET)
+			    if (given & (1 << 21))
 			      {
 				if (offset)
 				  func (stream, ", #%d", value_in_comment);
@@ -3032,7 +3026,7 @@ print_insn_arm (bfd_vma pc, struct disassemble_info *info, long given)
 			bfd_vma address;
 			bfd_vma offset = 0;
 
-			if (! NEGATIVE_BIT_SET)
+			if (given & 0x00800000)
 			  /* Is signed, hi bits should be ones.  */
 			  offset = (-1) ^ 0x00ffffff;
 
@@ -3549,9 +3543,9 @@ print_insn_thumb32 (bfd_vma pc, struct disassemble_info *info, long given)
 		  switch (mod)
 		    {
 		    case 0: imm = imm8; break;
-		    case 1: imm = ((imm8 << 16) | imm8); break;
-		    case 2: imm = ((imm8 << 24) | (imm8 << 8)); break;
-		    case 3: imm = ((imm8 << 24) | (imm8 << 16) | (imm8 << 8) | imm8); break;
+		    case 1: imm = ((imm8<<16) | imm8); break;
+		    case 2: imm = ((imm8<<24) | (imm8 << 8)); break;
+		    case 3: imm = ((imm8<<24) | (imm8 << 16) | (imm8 << 8) | imm8); break;
 		    default:
 		      mod  = (bits & 0xf80) >> 7;
 		      imm8 = (bits & 0x07f) | 0x80;
@@ -3627,7 +3621,7 @@ print_insn_thumb32 (bfd_vma pc, struct disassemble_info *info, long given)
 	      case 'a':
 		{
 		  unsigned int Rn  = (given & 0x000f0000) >> 16;
-		  unsigned int U   = ! NEGATIVE_BIT_SET;
+		  unsigned int U   = (given & 0x00800000) >> 23;
 		  unsigned int op  = (given & 0x00000f00) >> 8;
 		  unsigned int i12 = (given & 0x00000fff);
 		  unsigned int i8  = (given & 0x000000ff);
@@ -3709,14 +3703,14 @@ print_insn_thumb32 (bfd_vma pc, struct disassemble_info *info, long given)
 
 	      case 'A':
 		{
-		  unsigned int U   = ! NEGATIVE_BIT_SET;
-		  unsigned int W   = WRITEBACK_BIT_SET;
+		  unsigned int P   = (given & 0x01000000) >> 24;
+		  unsigned int U   = (given & 0x00800000) >> 23;
+		  unsigned int W   = (given & 0x00400000) >> 21;
 		  unsigned int Rn  = (given & 0x000f0000) >> 16;
 		  unsigned int off = (given & 0x000000ff);
 
 		  func (stream, "[%s", arm_regnames[Rn]);
-
-		  if (PRE_BIT_SET)
+		  if (P)
 		    {
 		      if (off || !U)
 			{
@@ -3851,7 +3845,7 @@ print_insn_thumb32 (bfd_vma pc, struct disassemble_info *info, long given)
 
 		  shift |= (given & 0x000000c0u) >> 6;
 		  shift |= (given & 0x00007000u) >> 10;
-		  if (WRITEBACK_BIT_SET)
+		  if (given & 0x00200000u)
 		    func (stream, ", asr #%u", shift);
 		  else if (shift)
 		    func (stream, ", lsl #%u", shift);
