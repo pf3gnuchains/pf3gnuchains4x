@@ -1746,10 +1746,12 @@ parse_type (int fd, union aux_ext *ax, unsigned int aux_index, int *bs,
       TYPE_NFIELDS (tp) = 2;
       TYPE_FIELDS (tp) = ((struct field *)
 			  TYPE_ALLOC (tp, 2 * sizeof (struct field)));
-      TYPE_FIELD_NAME (tp, 0) = "Low";
+      TYPE_FIELD_NAME (tp, 0) = obsavestring ("Low", strlen ("Low"),
+					    &current_objfile->objfile_obstack);
       TYPE_LOW_BOUND (tp) = AUX_GET_DNLOW (bigend, ax);
       ax++;
-      TYPE_FIELD_NAME (tp, 1) = "High";
+      TYPE_FIELD_NAME (tp, 1) = obsavestring ("High", strlen ("High"),
+					    &current_objfile->objfile_obstack);
       TYPE_HIGH_BOUND (tp) = AUX_GET_DNHIGH (bigend, ax);
       ax++;
     }
@@ -4678,7 +4680,8 @@ new_symtab (char *name, int maxlines, struct objfile *objfile)
     BLOCKVECTOR_BLOCK (BLOCKVECTOR (s), GLOBAL_BLOCK);
 
   s->free_code = free_linetable;
-  s->debugformat = "ECOFF";
+  s->debugformat = obsavestring ("ECOFF", 5,
+				 &objfile->objfile_obstack);
   return (s);
 }
 

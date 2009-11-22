@@ -457,13 +457,10 @@ execute_command (char *p, int from_tty)
 
     }
 
-  /* Tell the user if the language has changed (except first time).
-     First make sure that a new frame has been selected, in case this
-     command or the hooks changed the program state.  */
-  deprecated_safe_get_selected_frame ();
+  /* Tell the user if the language has changed (except first time).  */
   if (current_language != expected_language)
     {
-      if (language_mode == language_mode_auto && info_verbose)
+      if (language_mode == language_mode_auto)
 	{
 	  language_info (1);	/* Print what changed.  */
 	}

@@ -26,13 +26,18 @@ set bug_id 0
 
 gdb_exit
 gdb_start
-set testfile "actions"
-set srcfile ${testfile}.c
-set binfile $objdir/$subdir/tracecmd
-if { [gdb_compile "$srcdir/$subdir/$srcfile" $binfile \
-	  executable {debug nowarnings}] != "" } {
-    untested tracecmd.exp
-    return -1
+if [istarget "m68k-*-elf"] then {
+    set srcfile gdb_c_test.c
+    set binfile [board_info target d490_binfile];
+} else {
+    set testfile "actions"
+    set srcfile ${testfile}.c
+    set binfile $objdir/$subdir/tracecmd
+    if { [gdb_compile "$srcdir/$subdir/$srcfile" $binfile \
+	    executable {debug nowarnings}] != "" } {
+	untested tracecmd.exp
+	return -1
+    }
 }
 gdb_reinitialize_dir $srcdir/$subdir
 

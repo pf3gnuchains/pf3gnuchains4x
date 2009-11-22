@@ -1997,7 +1997,6 @@ static const char *data_prefix;
 static const char *addr_prefix;
 static const char *repz_prefix;
 static const char *repnz_prefix;
-static const char **all_prefixes[5];
 static disassemble_info *the_info;
 static struct
   {
@@ -2133,7 +2132,7 @@ static const struct dis386 reg_table[][8] = {
   /* REG_8F */
   {
     { "popU",	{ stackEv } },
-    { XOP_8F_TABLE (XOP_09) },
+    { "(bad)",	{ XX } },
     { "(bad)",	{ XX } },
     { "(bad)",	{ XX } },
     { "(bad)",	{ XX } },
@@ -9573,16 +9572,13 @@ static const struct dis386 rm_table[][8] = {
 static void
 ckprefix (void)
 {
-  int newrex, i;
+  int newrex;
   rex = 0;
   rex_original = 0;
   rex_ignored = 0;
   prefixes = 0;
   used_prefixes = 0;
   rex_used = 0;
-  for (i = 0; i < (int) ARRAY_SIZE (all_prefixes); i++)
-    all_prefixes[i] = 0;
-  i = 0;
   while (1)
     {
       FETCH_DATA (the_info, codep + 1);
@@ -9612,27 +9608,12 @@ ckprefix (void)
 	      return;
 	  break;
 	case 0xf3:
-	  if ((prefixes & PREFIX_REPZ) == 0)
-	    {
-	      all_prefixes[i] = &repz_prefix;
-	      i++;
-	    }
 	  prefixes |= PREFIX_REPZ;
 	  break;
 	case 0xf2:
-	  if ((prefixes & PREFIX_REPNZ) == 0)
-	    {
-	      all_prefixes[i] = &repnz_prefix;
-	      i++;
-	    }
 	  prefixes |= PREFIX_REPNZ;
 	  break;
 	case 0xf0:
-	  if ((prefixes & PREFIX_LOCK) == 0)
-	    {
-	      all_prefixes[i] = &lock_prefix;
-	      i++;
-	    }
 	  prefixes |= PREFIX_LOCK;
 	  break;
 	case 0x2e:
@@ -9654,19 +9635,9 @@ ckprefix (void)
 	  prefixes |= PREFIX_GS;
 	  break;
 	case 0x66:
-	  if ((prefixes & PREFIX_DATA) == 0)
-	    {
-	      all_prefixes[i] = &data_prefix;
-	      i++;
-	    }
 	  prefixes |= PREFIX_DATA;
 	  break;
 	case 0x67:
-	  if ((prefixes & PREFIX_ADDR) == 0)
-	    {
-	      all_prefixes[i] = &addr_prefix;
-	      i++;
-	    }
 	  prefixes |= PREFIX_ADDR;
 	  break;
 	case FWAIT_OPCODE:
@@ -10012,11 +9983,14 @@ get_valid_dis386 (const struct dis386 *dp, disassemble_info *info)
       codep++;
       index = *codep++;
       dp = &xop_table[vex_table_index][index];
-
-      FETCH_DATA (info, codep + 1);
-      modrm.mod = (*codep >> 6) & 3;
-      modrm.reg = (*codep >> 3) & 7;
-      modrm.rm = *codep & 7;
+      /* There is no MODRM byte for VEX [82|77].  */
+      if (index != 0x77 && index != 0x82)
+	{
+	  FETCH_DATA (info, codep + 1);
+	  modrm.mod = (*codep >> 6) & 3;
+	  modrm.reg = (*codep >> 3) & 7;
+	  modrm.rm = *codep & 7;
+	}
       break;
 
     case USE_VEX_C4_TABLE:
@@ -10466,9 +10440,16 @@ print_insn (bfd_vma pc, disassemble_info *info)
 
   prefix_obuf[0] = 0;
   prefix_obufp = prefix_obuf;
-  for (i = 0; i < (int) ARRAY_SIZE (all_prefixes); i++)
-    if (all_prefixes[i] && *all_prefixes[i])
-      prefix_obufp = stpcpy (prefix_obufp, *all_prefixes[i]);
+  if (lock_prefix)
+    prefix_obufp = stpcpy (prefix_obufp, lock_prefix);
+  if (repz_prefix)
+    prefix_obufp = stpcpy (prefix_obufp, repz_prefix);
+  if (repnz_prefix)
+    prefix_obufp = stpcpy (prefix_obufp, repnz_prefix);
+  if (addr_prefix)
+    prefix_obufp = stpcpy (prefix_obufp, addr_prefix);
+  if (data_prefix)
+    prefix_obufp = stpcpy (prefix_obufp, data_prefix);
 
   if (prefix_obuf[0] != 0)
     (*info->fprintf_func) (info->stream, "%s", prefix_obuf);
