@@ -10,6 +10,8 @@ Disassembly of section .text:
 [ 	]*[a-f0-9]+:	c4 e3 ed 69 39 60    	vfmaddpd \(%rcx\),%ymm6,%ymm2,%ymm7
 [ 	]*[a-f0-9]+:	c4 e3 ed 68 fc 60    	vfmaddps %ymm4,%ymm6,%ymm2,%ymm7
 [ 	]*[a-f0-9]+:	c4 e3 ed 68 39 60    	vfmaddps \(%rcx\),%ymm6,%ymm2,%ymm7
+[ 	]*[a-f0-9]+:	c4 63 41 68 5c da 01 40 	vfmaddps %xmm4,0x1\(%rdx,%rbx,8\),%xmm7,%xmm11
+[ 	]*[a-f0-9]+:	c4 e3 49 68 a4 81 80 00 00 00 80 	vfmaddps %xmm8,0x80\(%rcx,%rax,4\),%xmm6,%xmm4
 [ 	]*[a-f0-9]+:	c4 e3 ed 5d fc 60    	vfmaddsubpd %ymm4,%ymm6,%ymm2,%ymm7
 [ 	]*[a-f0-9]+:	c4 e3 ed 5d 39 60    	vfmaddsubpd \(%rcx\),%ymm6,%ymm2,%ymm7
 [ 	]*[a-f0-9]+:	c4 e3 ed 5c fc 60    	vfmaddsubps %ymm4,%ymm6,%ymm2,%ymm7
@@ -63,4 +65,7 @@ Disassembly of section .text:
 [ 	]*[a-f0-9]+:	c4 e3 69 7a 39 40    	vfnmaddss %xmm4,\(%rcx\),%xmm2,%xmm7
 [ 	]*[a-f0-9]+:	c4 e3 e9 7e fc 60    	vfnmsubss %xmm4,%xmm6,%xmm2,%xmm7
 [ 	]*[a-f0-9]+:	c4 e3 e9 7e 39 60    	vfnmsubss \(%rcx\),%xmm6,%xmm2,%xmm7
+[ 	]*[a-f0-9]+:	c4 c3 e1 69 64 0d 00 b0[ 	]+vfmaddpd 0x0\(%r13,%rcx,1\),%xmm11,%xmm3,%xmm4
+[ 	]*[a-f0-9]+:	c4 c3 f1 69 bc c1 be 00 00 00 90[ 	]+vfmaddpd 0xbe\(%r9,%rax,8\),%xmm9,%xmm1,%xmm7
+[ 	]*[a-f0-9]+:	c4 c3 e1 6d 64 0d 00 b0[ 	]+vfmsubpd 0x0\(%r13,%rcx,1\),%xmm11,%xmm3,%xmm4
 #pass

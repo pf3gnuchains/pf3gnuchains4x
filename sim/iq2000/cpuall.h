@@ -2,7 +2,7 @@
 
 THIS FILE IS MACHINE GENERATED WITH CGEN.
 
-Copyright 1996-2009 Free Software Foundation, Inc.
+Copyright 1996-2010 Free Software Foundation, Inc.
 
 This file is part of the GNU simulators.
 
@@ -29,14 +29,12 @@ This file is part of the GNU simulators.
 
 #ifdef WANT_CPU_IQ2000BF
 #include "eng.h"
-#include "cgen-engine.h"
 #include "cpu.h"
 #include "decode.h"
 #endif
 
 #ifdef WANT_CPU_IQ10BF
 #include "eng.h"
-#include "cgen-engine.h"
 #include "cpu.h"
 #include "decode.h"
 #endif

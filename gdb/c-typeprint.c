@@ -1,6 +1,6 @@
 /* Support for printing C and C++ types for GDB, the GNU debugger.
    Copyright (C) 1986, 1988, 1989, 1991, 1992, 1993, 1994, 1995, 1996, 1998,
-   1999, 2000, 2001, 2002, 2003, 2006, 2007, 2008, 2009
+   1999, 2000, 2001, 2002, 2003, 2006, 2007, 2008, 2009, 2010
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -761,6 +761,9 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
 	}
       else if (show > 0 || TYPE_TAG_NAME (type) == NULL)
 	{
+	  struct type *basetype;
+	  int vptr_fieldno;
+
 	  cp_type_print_derivation_info (stream, type);
 
 	  fprintf_filtered (stream, "{\n");
@@ -848,12 +851,16 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
 	     do not print the field that it occupies.  */
 
 	  len = TYPE_NFIELDS (type);
+	  vptr_fieldno = get_vptr_fieldno (type, &basetype);
 	  for (i = TYPE_N_BASECLASSES (type); i < len; i++)
 	    {
 	      QUIT;
-	      /* Don't print out virtual function table.  */
-	      if (strncmp (TYPE_FIELD_NAME (type, i), "_vptr", 5) == 0
-		  && is_cplus_marker ((TYPE_FIELD_NAME (type, i))[5]))
+
+	      /* If we have a virtual table pointer, omit it.  Even if
+		 virtual table pointers are not specifically marked in
+		 the debug info, they should be artificial.  */
+	      if ((type == basetype && i == vptr_fieldno)
+		  || TYPE_FIELD_ARTIFICIAL (type, i))
 		continue;
 
 	      /* If this is a C++ class we can print the various C++ section

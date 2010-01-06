@@ -105,6 +105,17 @@ flagstest_debug.o: constructor_test.cc
 flagstest_ndebug.o: constructor_test.cc
 	$(CXXCOMPILE) -O0 -c -o $@ $<
 
+check_SCRIPTS += incremental_test.sh
+check_DATA += incremental_test.stdout
+MOSTLYCLEANFILES += incremental_test
+incremental_test_1.o: incremental_test_1.c
+	$(COMPILE) -O0 -c -ffunction-sections -g -o $@ $<
+incremental_test_2.o: incremental_test_2.c
+	$(COMPILE) -O0 -c -ffunction-sections -g -o $@ $<
+incremental_test: incremental_test_1.o incremental_test_2.o gcctestdir/ld
+	$(LINK) -Bgcctestdir/ -Wl,-incremental incremental_test_1.o incremental_test_2.o -Wl,-debug 2> incremental_test.cmdline
+incremental_test.stdout: incremental_test ../incremental-dump
+	../incremental-dump incremental_test > $@
 
 check_SCRIPTS += gc_comdat_test.sh
 check_DATA += gc_comdat_test.stdout
@@ -187,10 +198,12 @@ check_PROGRAMS += constructor_static_test
 constructor_test_SOURCES = constructor_test.cc
 constructor_test_DEPENDENCIES = gcctestdir/ld
 constructor_test_LDFLAGS = -Bgcctestdir/
+constructor_test_LDADD =
 
 constructor_static_test_SOURCES = $(constructor_test_SOURCES)
 constructor_static_test_DEPENDENCIES = $(constructor_test_DEPENDENCIES)
 constructor_static_test_LDFLAGS = $(constructor_test_LDFLAGS) -static
+constructor_static_test_LDADD = $(constructor_test_LDADD)
 
 
 check_PROGRAMS += two_file_test
@@ -204,10 +217,12 @@ two_file_test_SOURCES = \
 	two_file_test.h
 two_file_test_DEPENDENCIES = gcctestdir/ld
 two_file_test_LDFLAGS = -Bgcctestdir/
+two_file_test_LDADD =
 
 two_file_static_test_SOURCES = $(two_file_test_SOURCES)
 two_file_static_test_DEPENDENCIES = $(two_file_test_DEPENDENCIES)
 two_file_static_test_LDFLAGS = $(two_file_test_LDFLAGS) -static
+two_file_static_test_LDADD = $(two_file_test_LDADD)
 
 two_file_pic_test_SOURCES = two_file_test_main.cc
 two_file_pic_test_DEPENDENCIES = \
@@ -248,7 +263,7 @@ two_file_shared_2_test_LDADD = two_file_shared_2.so
 
 two_file_shared_1_pic_2_test_SOURCES = two_file_test_main.cc
 two_file_shared_1_pic_2_test_DEPENDENCIES = \
-	gcctestdir/ld two_file_shared_1.so two_file_test_1_pic.o two_file_test_1b_pic.o
+	gcctestdir/ld two_file_shared_2.so two_file_test_1_pic.o two_file_test_1b_pic.o
 two_file_shared_1_pic_2_test_LDFLAGS = -Bgcctestdir/ -Wl,-R,.
 two_file_shared_1_pic_2_test_LDADD = two_file_test_1_pic.o two_file_test_1b_pic.o two_file_shared_2.so
 
@@ -390,6 +405,21 @@ check_PROGRAMS += common_test_1
 common_test_1_SOURCES = common_test_1.c
 common_test_1_DEPENDENCIES = gcctestdir/ld
 common_test_1_LDFLAGS = -Bgcctestdir/
+common_test_1_LDADD =
+
+check_PROGRAMS += common_test_2
+common_test_2_SOURCES = common_test_1.c
+common_test_2_DEPENDENCIES = common_test_2.so common_test_3.so gcctestdir/ld
+common_test_2_LDFLAGS = -Bgcctestdir/ -Wl,-R,.
+common_test_2_LDADD = common_test_2.so common_test_3.so
+common_test_2_pic.o: common_test_2.c
+	$(COMPILE) -c -fpic -o $@ $<
+common_test_2.so: common_test_2_pic.o common_test_3.so gcctestdir/ld
+	$(LINK) -Bgcctestdir/ -shared common_test_2_pic.o common_test_3.so
+common_test_3_pic.o: common_test_3.c
+	$(COMPILE) -c -fpic -o $@ $<
+common_test_3.so: common_test_3_pic.o ver_test_2.script gcctestdir/ld
+	$(LINK) -Bgcctestdir/ -shared common_test_3_pic.o -Wl,--version-script,$(srcdir)/ver_test_2.script
 
 check_PROGRAMS += exception_test
 check_PROGRAMS += exception_static_test
@@ -416,10 +446,12 @@ exception_test_SOURCES = \
 	exception_test.h
 exception_test_DEPENDENCIES = gcctestdir/ld
 exception_test_LDFLAGS = -Bgcctestdir/
+exception_test_LDADD =
 
 exception_static_test_SOURCES = $(exception_test_SOURCES)
 exception_static_test_DEPENDENCIES = $(exception_test_DEPENDENCIES)
 exception_static_test_LDFLAGS = $(exception_test_LDFLAGS) -static
+exception_static_test_LDADD = $(exception_test_LDADD)
 
 exception_shared_1_test_SOURCES = exception_test_2.cc exception_test_main.cc
 exception_shared_1_test_DEPENDENCIES = gcctestdir/ld exception_shared_1.so
@@ -455,6 +487,7 @@ check_PROGRAMS += weak_test
 weak_test_SOURCES = weak_test.cc
 weak_test_DEPENDENCIES = gcctestdir/ld
 weak_test_LDFLAGS = -Bgcctestdir/
+weak_test_LDADD =
 
 check_PROGRAMS += weak_undef_test
 MOSTLYCLEANFILES += alt/weak_undef_lib.so
@@ -667,6 +700,7 @@ check_PROGRAMS += many_sections_test
 many_sections_test_SOURCES = many_sections_test.cc
 many_sections_test_DEPENDENCIES = gcctestdir/ld
 many_sections_test_LDFLAGS = -Bgcctestdir/ -rdynamic
+many_sections_test_LDADD =
 
 BUILT_SOURCES += many_sections_define.h
 MOSTLYCLEANFILES += many_sections_define.h
@@ -696,6 +730,7 @@ check_PROGRAMS += initpri1
 initpri1_SOURCES = initpri1.c
 initpri1_DEPENDENCIES = gcctestdir/ld
 initpri1_LDFLAGS = -Bgcctestdir/
+initpri1_LDADD =
 
 endif
 
@@ -950,16 +985,19 @@ check_PROGRAMS += script_test_1
 script_test_1_SOURCES = script_test_1.cc
 script_test_1_DEPENDENCIES = gcctestdir/ld script_test_1.t
 script_test_1_LDFLAGS = -Bgcctestdir/ -Wl,-R,. -T $(srcdir)/script_test_1.t
+script_test_1_LDADD =
 
 check_PROGRAMS += script_test_2
 script_test_2_SOURCES = script_test_2.cc script_test_2a.cc script_test_2b.cc
 script_test_2_DEPENDENCIES = gcctestdir/ld script_test_2.t
 script_test_2_LDFLAGS = -Bgcctestdir/ -Wl,-R,. -T $(srcdir)/script_test_2.t
+script_test_2_LDADD =
 
 check_PROGRAMS += justsyms
 justsyms_SOURCES = justsyms_1.cc
 justsyms_DEPENDENCIES = gcctestdir/ld justsyms_2r.o
 justsyms_LDFLAGS = -Bgcctestdir/ -Wl,-R,justsyms_2r.o
+justsyms_LDADD =
 justsyms_2.o: justsyms_2.cc
 	$(CXXCOMPILE) -c -o $@ $<
 justsyms_2r.o: justsyms_2.o gcctestdir/ld $(srcdir)/justsyms.t
@@ -970,6 +1008,7 @@ MOSTLYCLEANFILES += binary.txt
 binary_test_SOURCES = binary_test.cc
 binary_test_DEPENDENCIES = gcctestdir/ld binary.txt
 binary_test_LDFLAGS = -Bgcctestdir/ -Wl,--format,binary,binary.txt,--format,elf
+binary_test_LDADD =
 # Copy the file to the build directory to avoid worrying about the
 # full pathname in the generated symbols.
 binary.txt: $(srcdir)/binary.in
@@ -979,7 +1018,7 @@ binary.txt: $(srcdir)/binary.in
 check_SCRIPTS += ver_matching_test.sh
 check_DATA += ver_matching_test.stdout
 MOSTLYCLEANFILES += ver_matching_test.stdout
-ver_matching_def.so: ver_matching_def.cc gcctestdir/ld
+ver_matching_def.so: ver_matching_def.cc $(srcdir)/version_script.map gcctestdir/ld
 	$(CXXLINK) -O0 -Bgcctestdir/ -shared $(srcdir)/ver_matching_def.cc -Wl,--version-script=$(srcdir)/version_script.map
 ver_matching_test.stdout: ver_matching_def.so
 	$(TEST_OBJDUMP) -T ver_matching_def.so | $(TEST_CXXFILT) > ver_matching_test.stdout
@@ -1208,6 +1247,7 @@ large_SOURCES = large.c
 large_CFLAGS = -mcmodel=medium
 large_DEPENDENCIES = gcctestdir/ld
 large_LDFLAGS = -Bgcctestdir/
+large_LDADD =
 endif MCMODEL_MEDIUM
 
 # Test that hidden and internal symbols in the main program cannot be

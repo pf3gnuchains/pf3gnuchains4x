@@ -1,5 +1,5 @@
 ; General cpu info generator support.
-; Copyright (C) 2000, 2002, 2005 Red Hat, Inc.
+; Copyright (C) 2000, 2002, 2005, 2009 Red Hat, Inc.
 ; This file is part of CGEN.
 
 ; Global state variables.
@@ -7,12 +7,30 @@
 ; Specify which application.
 (set! APPLICATION 'OPCODES)
 
+; Records the -OPC arg which specifies the path to the .opc file.
+(define /opc-file-path #f)
+(define (opc-file-path)
+  (if /opc-file-path
+      /opc-file-path
+      (error ".opc file unspecified, missing -OPC argument"))
+)
+(define (set-opc-file-path! path)
+  (set! /opc-file-path path)
+)
+
+; Return #t if the -OPC parameter was specified.
+
+(define (opc-file-provided?)
+  (and /opc-file-path #t)
+)
+
 ; Boolean indicating if we're to build the operand instance table.
 ; The default is no, since only the m32r uses it at present.
 ; ??? Simulator tracing support could use it.
 ; ??? Might be lazily built at runtime by parsing the semantic code
 ; (which would be recorded in the insn table).
-(define -opcodes-build-operand-instance-table? #f)
+; FIXME: Referenced outside this file in opc-opinst.scm.
+(define /opcodes-build-operand-instance-table? #f)
 
 ; String containing copyright text.
 (define CURRENT-COPYRIGHT #f)
@@ -23,7 +41,7 @@
 ; Initialize the options.
 
 (define (option-init!)
-  (set! -opcodes-build-operand-instance-table? #f)
+  (set! /opcodes-build-operand-instance-table? #f)
   (set! CURRENT-COPYRIGHT copyright-fsf)
   (set! CURRENT-PACKAGE package-gnu-binutils-gdb)
   *UNSPECIFIED*
@@ -33,7 +51,7 @@
 
 (define (option-set! name value)
   (case name
-    ((opinst) (set! -opcodes-build-operand-instance-table? #t))
+    ((opinst) (set! /opcodes-build-operand-instance-table? #t))
     ((copyright) (cond ((equal?  value '("fsf"))
 			(set! CURRENT-COPYRIGHT copyright-fsf))
 		       ((equal? value '("redhat"))
@@ -100,12 +118,18 @@
 	  "")
       (if encode
 	  (string-append "        value = "
+			 ;; NOTE: ENCODE is either, e.g.,
+			 ;; ((value pc) (sra DI value 1))
+			 ;; or
+			 ;; (((<mode> value) (<mode> pc)) (sra DI value 1))
 			 (let ((expr (cadr encode))
-			       (value (caar encode))
-			       (pc (cadar encode)))
-			   (rtl-c DFLT expr
-				  (list (list value (obj:name (ifld-encode-mode self)) "value")
-					(list pc 'IAI "pc"))))
+			       (value (if (symbol? (caar encode)) (caar encode) (cadr (caar encode))))
+			       (pc (if (symbol? (cadar encode)) (cadar encode) (cadr (cadar encode)))))
+			   (rtl-c DFLT
+				  (obj-isa-list self)
+				  (list (list value (obj:name (ifld-decode-mode self)) "value")
+					(list pc 'IAI "pc"))
+				  expr))
 			 ";\n")
 	  "")
       (if need-extra?
@@ -128,7 +152,7 @@
 			  (obj-atlist self))
 		      gen-attr-mask)
       ", " (number->string (ifld-word-offset self))
-      ", " (number->string (ifld-start self #f))
+      ", " (number->string (ifld-start self))
       ", " (number->string (ifld-length self))
       ", " (number->string (ifld-word-length self))
       ", total_length"
@@ -167,7 +191,7 @@
 			  (obj-atlist self))
 		      gen-attr-mask)
       ", " (number->string (ifld-word-offset self))
-      ", " (number->string (ifld-start self #f))
+      ", " (number->string (ifld-start self))
       ", " (number->string (ifld-length self))
       ", " (number->string (ifld-word-length self))
       ", total_length"
@@ -179,12 +203,18 @@
       ");\n"
       (if decode
 	  (string-append "        value = "
+			 ;; NOTE: DECODE is either, e.g.,
+			 ;; ((value pc) (sll DI value 1))
+			 ;; or
+			 ;; (((<mode> value) (<mode> pc)) (sll DI value 1))
 			 (let ((expr (cadr decode))
-			       (value (caar decode))
-			       (pc (cadar decode)))
-			   (rtl-c DFLT expr
+			       (value (if (symbol? (caar decode)) (caar decode) (cadr (caar decode))))
+			       (pc (if (symbol? (cadar decode)) (cadar decode) (cadr (cadar decode)))))
+			   (rtl-c DFLT
+				  (obj-isa-list self)
 				  (list (list value (obj:name (ifld-decode-mode self)) "value")
-					(list pc 'IAI "pc"))))
+					(list pc 'IAI "pc"))
+				  expr))
 			 ";\n")
 	  "")
       (if need-extra?
@@ -209,13 +239,15 @@
 			 (let ((expr (cadr encode))
 			       (value (caar encode))
 			       (pc (cadar encode)))
-			   (rtl-c DFLT expr
-				  (list (list value (obj:name (ifld-encode-mode self)) varname)
-					(list pc 'IAI "pc"))))
+			   (rtl-c DFLT
+				  (obj-isa-list self)
+				  (list (list value (obj:name (ifld-decode-mode self)) varname)
+					(list pc 'IAI "pc"))
+				  expr))
 			 ";\n")
 	  "")
       (let ((expr (elm-get self 'insert)))
-	(rtl-c VOID expr nil))
+	(rtl-c VOID (obj-isa-list self) nil expr))
       (string-list-map (lambda (subfld)
 			 (string-list
 			  "  "
@@ -253,15 +285,17 @@
 			  ))
 		       (elm-get self 'subfields))
       (let ((expr (elm-get self 'extract)))
-	(rtl-c VOID expr nil))
+	(rtl-c VOID (obj-isa-list self) nil expr))
       (if need-extra?
 	  (string-append "        " varname " = "
 			 (let ((expr (cadr decode))
 			       (value (caar decode))
 			       (pc (cadar decode)))
-			   (rtl-c DFLT expr
+			   (rtl-c DFLT
+				  (obj-isa-list self)
 				  (list (list value (obj:name (ifld-decode-mode self)) varname)
-					(list pc 'IAI "pc"))))
+					(list pc 'IAI "pc"))
+				  expr))
 			 ";\n")
 	  "")
       "      }\n"
@@ -321,7 +355,7 @@
 ; PARSE-FN is the name of the function to call or #f to use the default.
 ; OP-ENUM is the enum of the operand.
 
-(define (-gen-parse-number mode parse-fn op-enum result-var-name)
+(define (/gen-parse-number mode parse-fn op-enum result-var-name)
   (string-append
    "      errmsg = "
    ; Use operand's special parse function if there is one, otherwise compute
@@ -352,7 +386,7 @@
 ; PARSE-FN is the name of the function to call or #f to use the default.
 ; OP-ENUM is the enum of the operand.
 
-(define (-gen-parse-address parse-fn op-enum result-var-name)
+(define (/gen-parse-address parse-fn op-enum result-var-name)
   (string-append
    "      {\n"
    "        bfd_vma value = 0;\n"
@@ -381,10 +415,10 @@
 	    ((ifield) (gen-operand-result-var (op-ifield operand)))
 	    (else "junk"))))
      (if (address? (op:type operand))
-	 (-gen-parse-address (send operand 'gen-function-name 'parse)
+	 (/gen-parse-address (send operand 'gen-function-name 'parse)
 			     (op-enum operand)
 			     result-var)
-	 (-gen-parse-number mode (send operand 'gen-function-name 'parse)
+	 (/gen-parse-number mode (send operand 'gen-function-name 'parse)
 			    (op-enum operand)
 			    result-var))))
 )
@@ -623,7 +657,6 @@
    "      abort();\n") ; should never be called
 )
 
-
 ; Need to call op:type to resolve the hardware reference.
 ;(method-make-forward! <operand> 'type '(gen-parse gen-print))
 
@@ -653,7 +686,6 @@
 
 (method-make-forward! <operand> 'index '(gen-insert gen-extract))
 ; But: <derived-operand> has its own gen-insert / gen-extract.
-
 
 ; Return the value of PC.
 ; Used by insert/extract fields.
@@ -699,7 +731,7 @@
   ; Still need to traverse the semantics to derive machine computed attributes.
   (arch-analyze-insns! CURRENT-ARCH
 		       #t ; include aliases
-		       -opcodes-build-operand-instance-table?)
+		       /opcodes-build-operand-instance-table?)
 
   *UNSPECIFIED*
 )

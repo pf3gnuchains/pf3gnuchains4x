@@ -1,5 +1,5 @@
 ; Top level file for reading and recording .cpu file contents.
-; Copyright (C) 2000, 2001, 2006 Red Hat, Inc.
+; Copyright (C) 2000, 2001, 2006, 2009 Red Hat, Inc.
 ; This file is part of CGEN.
 ; See file COPYING.CGEN for details.
 
@@ -63,120 +63,92 @@
 ; Variables representing misc. global constants.
 
 ; A list of three numbers designating the cgen version: major minor fixlevel.
-(define -CGEN-VERSION '(0 7 2))
-(define (cgen-major) (car -CGEN-VERSION))
-(define (cgen-minor) (cadr -CGEN-VERSION))
-(define (cgen-fixlevel) (caddr -CGEN-VERSION))
+; The "50" is a generic indicator that we're between 1.1 and 1.2.
+(define /CGEN-VERSION '(1 1 50))
+(define (cgen-major) (car /CGEN-VERSION))
+(define (cgen-minor) (cadr /CGEN-VERSION))
+(define (cgen-fixlevel) (caddr /CGEN-VERSION))
 
-; A list of three numbers designating the description language version.
-; Note that this is different from -CGEN-VERSION.
-(define -CGEN-LANG-VERSION '(0 7 2))
-(define (cgen-lang-major) (car -CGEN-LANG-VERSION))
-(define (cgen-lang-minor) (cadr -CGEN-LANG-VERSION))
-(define (cgen-lang-fixlevel) (caddr -CGEN-LANG-VERSION))
+; A list of two numbers designating the description language version.
+; Note that this is different from /CGEN-VERSION.
+; See section "RTL Versions" of the docs.
+(define /CGEN-RTL-VERSION #f)
+(define /default-rtl-version '(0 7))
+(define (cgen-rtl-version) /CGEN-RTL-VERSION)
+(define (cgen-rtl-major) (car /CGEN-RTL-VERSION))
+(define (cgen-rtl-minor) (cadr /CGEN-RTL-VERSION))
+
+;; Utilities for testing the rtl version.
+(define (rtl-version-equal? major minor)
+  (equal? (cgen-rtl-version) (list major minor))
+)
+(define (rtl-version-at-least? major minor)
+  (let ((rmajor (cgen-rtl-major))
+	(rminor (cgen-rtl-major)))
+    (or (> rmajor major)
+	(and (= rmajor major)
+	     (>= rminor minor))))
+)
+(define (rtl-version-older? major minor)
+  (not (rtl-version-at-least? major minor))
+)
+
+;; List of supported versions
+(define /supported-rtl-versions '((0 7) (0 8)))
+
+(define (/cmd-define-rtl-version major minor)
+  (if (not (non-negative-integer? major))
+      (parse-error #f "Invalid major version number" major))
+  (if (not (non-negative-integer? minor))
+      (parse-error #f "Invalid minor version number" minor))
+
+  (let ((new-version (list major minor)))
+    (if (not (member new-version /supported-rtl-versions))
+	(parse-error #f "Unsupported/invalid rtl version" new-version))
+    (if (not (equal? new-version /CGEN-RTL-VERSION))
+	(logit 1 "Setting RTL version to " major "." minor " ...\n"))
+    (set! /CGEN-RTL-VERSION new-version))
+)
 
 ; Which application is in use (UNKNOWN, DESC, OPCODES, SIMULATOR, ???).
 ; This is mostly for descriptive purposes.
 (define APPLICATION 'UNKNOWN)
 
-; Things are organized so that files can be compiled with Hobbit for
-; experimentation.  Thus we need one file that loads all the other files.
-; This is that file, though it would make sense to move the code in this
-; file to another.
+;; Load the base cgen files.
 
-; If a routine to initialize compiled-in code is defined, run it.
-(if (defined? 'cgen-init-c) (cgen-init-c))
-
-; If this is set to #f, the file is always loaded.
-; Don't override any current setting, e.g. from dev.scm.
-(if (not (defined? 'CHECK-LOADED?))
-    (define CHECK-LOADED? #t))
-
-; Unlink file if we're reloaded (say in an interactive session).
-; Dynamic loading is enabled by setting LIBCPU.SO to the pathname of the .so.
-(if (and (defined? 'libcpu.so) (dynamic-object? libcpu.so))
-    (dynamic-unlink libcpu.so))
-(define libcpu.so #f)
-(if (and (defined? 'LIBCPU.SO)
-	 (file-exists? LIBCPU.SO))
-    (set! libcpu.so (dynamic-link LIBCPU.SO))
-)
-
-; List of loaded files.
-
-(if (not (defined? '-loaded-file-list))
-    (define -loaded-file-list '()))
-
-; Return non-zero if FILE was loaded last time through.
-
-(define (-loaded-file? file)
-  (->bool (memq (string->symbol file) -loaded-file-list))
-)
-
-; Record FILE as compiled in.
-
-(define (-loaded-file-record! file)
-  (let ((file (string->symbol file)))
-    (if (not (memq file -loaded-file-list))
-	(set! -loaded-file-list (cons file -loaded-file-list))))
-)
-
-; Load FILE if SYM is not compiled in.
-
-(define (maybe-load file init-func sym)
-  ; Return non-#f if FUNC is present in DYNOBJ.
-  (define (dynamic-func? func dynobj)
-    (catch #t
-	   (lambda () (dynamic-func func dynobj))
-	   (lambda args #f))
-    )
-
-  (let ((init-func (string-append "init_" (if init-func init-func file))))
-    (cond ((and libcpu.so
-		(dynamic-func? init-func libcpu.so))
-	   (dynamic-call init-func libcpu.so)
-	   (display (string-append "Skipping " file ", dynamically loaded.\n")))
-	  ((or (not CHECK-LOADED?)
-	       (not (defined? sym))
-	       (-loaded-file? file))
-	   (-loaded-file-record! file)
-	   (load file))
-	  (else
-	   (display (string-append "Skipping " file ", already loaded.\n")))))
-)
-
-(maybe-load "pmacros" #f 'define-pmacro)
-(maybe-load "cos" #f 'make)
-(maybe-load "slib/logical" #f 'logical:logand)
-(maybe-load "slib/sort" #f 'sort)
+(load "pmacros")
+(load "cos")
+(load "slib/logical")
+(load "slib/sort")
 ; Used to pretty-print debugging messages.
-(maybe-load "slib/pp" #f 'pretty-print)
+(load "slib/pp")
 ; Used by pretty-print.
-(maybe-load "slib/random" #f 'random)
-(maybe-load "slib/genwrite" #f 'generic-write)
-(maybe-load "utils" #f 'logit)
-(maybe-load "utils-cgen" "utils_cgen" 'obj:name)
-(maybe-load "attr" #f '<attribute>)
-(maybe-load "enum" #f '<enum>)
-(maybe-load "mach" #f '<mach>)
-(maybe-load "model" #f '<model>)
-(maybe-load "types" #f '<scalar>)
-(maybe-load "mode" #f '<mode>)
-(maybe-load "ifield" #f '<ifield>)
-(maybe-load "iformat" #f '<iformat>)
-(maybe-load "hardware" #f '<hardware-base>)
-(maybe-load "operand" #f '<operand>)
-(maybe-load "insn" #f '<insn>)
-(maybe-load "minsn" #f '<macro-insn>)
-(maybe-load "decode" #f 'decode-build-table)
-(maybe-load "rtl" "rtl" '<rtx-func>)
-(maybe-load "rtl-traverse" "rtl_traverse" 'rtx-traverse)
-(maybe-load "rtx-funcs" "rtx_funcs" 'def-rtx-funcs)
-(maybe-load "rtl-c" "rtl_c" '<c-expr>)
-(maybe-load "semantics" #f 'semantic-compile)
-(maybe-load "sem-frags" "sem_frags" 'gen-threaded-engine)
-(maybe-load "utils-gen" "utils_gen" 'attr-gen-decl)
-(maybe-load "pgmr-tools" "pgmr_tools" 'pgmr-pretty-print-insn-format)
+(load "slib/random")
+(load "slib/genwrite")
+(load "utils")
+(load "utils-cgen")
+(load "attr")
+(load "enum")
+(load "mach")
+(load "model")
+(load "types")
+(load "mode")
+(load "ifield")
+(load "iformat")
+(load "hardware")
+(load "operand")
+(load "insn")
+(load "minsn")
+(load "decode")
+(load "rtl")
+(load "rtl-traverse")
+(load "rtl-xform")
+(load "rtx-funcs")
+(load "rtl-c")
+(load "semantics")
+(load "sem-frags")
+(load "utils-gen")
+(load "pgmr-tools")
 
 ; Reader state data.
 ; All state regarding the reading of a .cpu file is kept in an object of
@@ -212,9 +184,9 @@
 )
 
 ; A pair of two lists: machs to keep, machs to drop.
-; Keep all machs, drop none.
+; The default is "keep all machs", "drop none".
 
-(define -keep-all-machs '((all)))
+(define /keep-all-machs '((all)))
 
 ; Main reader state class.
 
@@ -230,10 +202,19 @@
 	       ; variants in the architecture, it is the default value of the
 	       ; MACH attribute.  If `all' is present the drop list is still
 	       ; processed.
-	       (cons 'keep-mach -keep-all-machs)
+	       (cons 'keep-mach /keep-all-machs)
 
 	       ; Selected isas to keep or `all'.
 	       '(keep-isa . (all))
+
+	       ; Boolean indicating if command tracing is on.
+	       (cons 'trace-commands? #f)
+
+	       ; Boolean indicating if pmacro tracing is on.
+	       (cons 'trace-pmacros? #f)
+
+	       ; Issue diagnostics for instruction format issues.
+	       (cons 'verify-iformat? #f)
 
 	       ; Currently select cpu family, computed from `keep-mach'.
 	       ; Some applications don't care, and this is moderately
@@ -244,14 +225,25 @@
 	       ; (e.g. define-insn, etc.).
 	       ; Each entry is (name . command-object).
 	       (cons 'commands nil)
+
+	       ; The current source location.
+	       ; This is recorded here by the higher level reader and is
+	       ; fetched by commands as necessary.
+	       'location
 	       )
 	      nil)
 )
 
 ; Accessors.
 
-(define-getters <reader> reader (keep-mach keep-isa current-cpu commands))
-(define-setters <reader> reader (keep-mach keep-isa current-cpu commands))
+(define-getters <reader> reader
+  (keep-mach keep-isa
+   trace-commands? trace-pmacros? verify-iformat?
+   current-cpu commands location))
+(define-setters <reader> reader
+  (keep-mach keep-isa
+   trace-commands? trace-pmacros? verify-iformat?
+   current-cpu commands location))
 
 (define (reader-add-command! name comment attrs arg-spec handler)
   (reader-set-commands! CURRENT-READER
@@ -261,7 +253,7 @@
 			       (reader-commands CURRENT-READER)))
 )
 
-(define (reader-lookup-command name)
+(define (/reader-lookup-command name)
   (assq-ref (reader-commands CURRENT-READER) name)
 )
 
@@ -269,84 +261,195 @@
 
 (define CURRENT-READER #f)
 
-; Signal an error while reading a .cpu file.
+; Return the current source location in readable form.
+; FIXME: Currently unused, keep for reference for awhile.
 
-(define (reader-error msg expr help-text)
-  (let ((errmsg
-	 (string-append (or (port-filename (current-input-port))
+(define (/readable-current-location)
+  (let ((loc (current-reader-location)))
+    (if loc
+	(location->string loc)
+	;; Blech, we don't have a current reader location.  That's odd.
+	;; Fall back to the current input port's location.
+	(string-append (or (port-filename (current-input-port))
 			    "<input>")
 			":"
 			(number->string (port-line (current-input-port)))
-			": "
-			msg
 			":")))
-    (error (string-append errmsg "\n" help-text)
-	   expr))
 )
 
-; Signal a parse error while reading a .cpu file.
+;; Subroutine of parse-error, parse-warning to simplify them.
+;; Flag an error or a warning.
+;; EMITTER is a function of one argument, the message to print.
 
-(define (parse-error errtxt message . args)
-  (reader-error (string-append errtxt ": " message ":") args "")
+(define (/parse-diagnostic emitter context message expr maybe-help-text)
+  (if (not context)
+      (set! context (make <context> (current-reader-location) #f)))
+
+  (let* ((loc (or (context-location context) (unspecified-location)))
+	 (top-sloc (location-top loc))
+	 (intro "While reading description")
+	 (prefix (or (context-prefix context) "Error"))
+	 (text (string-append prefix ": " message)))
+
+    (emitter
+     (simple-format
+      #f
+      "\n~A:\n@ ~A:\n\n~A: ~A: ~S~A"
+      intro
+      (location->string loc)
+      (single-location->simple-string top-sloc)
+      text
+      expr
+      (if maybe-help-text
+	  (string-append "\n\n" maybe-help-text)
+	  ""))))
+)
+
+;; Signal a parse error while reading a .cpu file.
+;; Processing stops immediately.
+;; If CONTEXT is #f, use a default context of the current reader location
+;; and an empty prefix.
+;; If MAYBE-HELP-TEXT is specified, elide the last trailing \n.
+;; Multiple lines of help text need embedded newlines, and should be no longer
+;; than 79 characters.
+
+(define (parse-error context errmsg expr . maybe-help-text)
+  (/parse-diagnostic error
+		     context
+		     errmsg
+		     expr
+		     (if (null? maybe-help-text) "" (car maybe-help-text)))
+)
+
+;; Same as parse-error, but continue processing.
+
+(define (parse-error-continuable context errmsg expr . maybe-help-text)
+  (set! /continuable-error-found? #t)
+  (/parse-diagnostic (lambda (text) (message "Error: " text "\n"))
+		     context
+		     errmsg
+		     expr
+		     (if (null? maybe-help-text) #f (car maybe-help-text)))
+)
+
+;; Signal a parse warning while reading a .cpu file.
+;; If CONTEXT is #f, use a default context of the current reader location
+;; and an empty prefix.
+;; If MAYBE-HELP-TEXT is specified, elide the last trailing \n.
+;; Multiple lines of help text need embedded newlines, and should be no longer
+;; than 79 characters.
+
+(define (parse-warning context errmsg expr . maybe-help-text)
+  (/parse-diagnostic (lambda (text) (message "Warning: " text "\n"))
+		     context
+		     errmsg
+		     expr
+		     (if (null? maybe-help-text) #f (car maybe-help-text)))
+)
+
+; Return the current source location.
+;
+; If CURRENT-READER is uninitialized, return "unspecified" location.
+; This is done so that things like define-pmacro work in interactive mode.
+
+(define (current-reader-location)
+  (if CURRENT-READER
+      (reader-location CURRENT-READER)
+      (unspecified-location))
 )
 
 ; Process a macro-expanded entry.
 
-(define (-reader-process-expanded-1 entry)
-  (logit 4 (with-output-to-string (lambda () (pretty-print entry))))
-  (let ((command (reader-lookup-command (car entry))))
-    (if command
-	(let* ((handler (command-handler command))
-	       (arg-spec (command-arg-spec command))
-	       (num-args (num-args arg-spec)))
-	  (if (cdr num-args)
-	      ; Variable number of trailing arguments.
-	      (if (< (length (cdr entry)) (car num-args))
-		  (reader-error (string-append "Incorrect number of arguments to "
-					       (car entry)
-					       ", expecting at least "
-					       (number->string (car num-args)))
-				entry
-				(command-help command))
-		  (apply handler (cdr entry)))
-	      ; Fixed number of arguments.
-	      (if (!= (length (cdr entry)) (car num-args))
-		  (reader-error (string-append "Incorrect number of arguments to "
-					       (car entry)
-					       ", expecting "
-					       (number->string (car num-args)))
-				entry
-				(command-help command))
-		  (apply handler (cdr entry)))))
-	(reader-error "unknown entry type" entry "")))
+(define (/reader-process-expanded-1! entry)
+  (let ((location (location-property entry)))
+
+    ;; Set the current source location for better diagnostics.
+    ;; Access with current-reader-location.
+    (reader-set-location! CURRENT-READER location)
+
+    (if (reader-trace-commands? CURRENT-READER)
+	(message "Processing command:\n  @ "
+		 (if location (location->string location) "location unknown")
+		 "\n"
+		 (with-output-to-string (lambda () (pretty-print entry)))))
+
+    (let ((command (/reader-lookup-command (car entry)))
+	  (context (make-current-context #f)))
+
+      (if command
+
+	  (let* ((handler (command-handler command))
+		 (arg-spec (command-arg-spec command))
+		 (num-args (num-args arg-spec)))
+	    (if (cdr num-args)
+		;; Variable number of trailing arguments.
+		(if (< (length (cdr entry)) (car num-args))
+		    (parse-error context
+				 (string-append "Incorrect number of arguments to "
+						(symbol->string (car entry))
+						", expecting at least "
+						(number->string (car num-args)))
+				 entry
+				 (command-help command))
+		    (apply handler (cdr entry)))
+		;; Fixed number of arguments.
+		(if (!= (length (cdr entry)) (car num-args))
+		    (parse-error context
+				 (string-append "Incorrect number of arguments to "
+						(symbol->string (car entry))
+						", expecting "
+						(number->string (car num-args)))
+				 entry
+				 (command-help command))
+		    (apply handler (cdr entry)))))
+
+	  (parse-error context "unknown entry type" entry))))
+
   *UNSPECIFIED*
 )
 
-; Process 1 or more macro-expanded entries.
+;; Process 1 or more macro-expanded entries.
+;; ENTRY is expected to have a location-property object property.
 
-(define (-reader-process-expanded entry)
-  ; `begin' is used to group a collection of entries into one, since pmacro
-  ; can only return one expression (borrowed from Scheme of course).
-  ; ??? Maybe someday (begin ...) will be equivalent to (sequence () ...)
-  ; but not yet.
-  ; Recurse in case there are nested begins.
-  (if (eq? (car entry) 'begin)
-      (for-each -reader-process-expanded
-		(cdr entry))
-      (-reader-process-expanded-1 entry))
+;; NOTE: This is "public" so the .eval pmacro can use it.
+;; This is also used by /cmd-if.
+
+(define (reader-process-expanded! entry)
+  ;; () is used to indicate a no-op
+  (cond ((null? entry)
+	 #f) ;; nothing to do
+	;; `begin' is used to group a collection of entries into one,
+	;; since pmacro can only return one expression (borrowed from
+	;; Scheme of course).
+	;; Recurse in case there are nested begins.
+	((eq? (car entry) 'begin)
+	 (for-each reader-process-expanded!
+		   (cdr entry)))
+	(else
+	 (/reader-process-expanded-1! entry)))
+
+  *UNSPECIFIED*
 )
 
 ; Process file entry ENTRY.
+; LOC is a <location> object for ENTRY.
 
-(define (reader-process entry)
+(define (/reader-process! entry loc)
   (if (not (form? entry))
-      (reader-error "improperly formed entry" entry ""))
+      (parse-error loc "improperly formed entry" entry))
 
   ; First do macro expansion, but not if define-pmacro of course.
+  ; ??? Singling out define-pmacro this way seems a bit odd.  The way to look
+  ; at it, I guess, is to think of define-pmacro as (currently) the only
+  ; "syntactic" command (it doesn't pre-evaluate its arguments).
   (let ((expansion (if (eq? (car entry) 'define-pmacro)
-		       entry
-		       (pmacro-expand entry))))
-    (-reader-process-expanded expansion))
+		       (begin (location-property-set! entry loc) entry)
+		       (if (reader-trace-pmacros? CURRENT-READER)
+			   (pmacro-trace entry loc)
+			   (pmacro-expand entry loc)))))
+    (reader-process-expanded! expansion))
+
+  *UNSPECIFIED*
 )
 
 ; Read in and process FILE.
@@ -361,12 +464,19 @@
 		    (if (eof-object? entry)
 			#t ; done
 			(begin
-			  (reader-process entry)
+			  ;; ??? The location we pass here isn't ideal.
+			  ;; Ideally we'd pass the start location of the
+			  ;; expression, instead we currently pass the end
+			  ;; location (it's easier).
+			  ;; ??? Use source-properties of entry, and only if
+			  ;; not present fall back on current-input-location.
+			  (/reader-process! entry (current-input-location #t))
 			  (loop (read)))))))
 	)
 
-    (with-input-from-file file readit)
-    *UNSPECIFIED*)
+    (with-input-from-file file readit))
+
+  *UNSPECIFIED*
 )
 
 ; Cpu data is recorded in an object of class <arch>.
@@ -397,7 +507,7 @@
 ; MACH-NAME-LIST is a comma separated string of machines to keep and drop
 ; (if prefixed with !).
 
-(define (-keep-mach-set! mach-name-list)
+(define (/keep-mach-set! mach-name-list)
   (let* ((mach-name-list (string-cut mach-name-list #\,))
 	 (keep (find (lambda (name) (not (char=? (string-ref name 0) #\!)))
 		     mach-name-list))
@@ -477,7 +587,7 @@
   (let ((machs (atlist-attr-value-no-default atlist 'MACH obj)))
     (if (null? machs)
 	#t
-	(keep-mach? (bitset-attr->list machs))))
+	(keep-mach? machs)))
 )
 
 ; Return a boolean indicating if the object containing ATLIST is to be kept.
@@ -504,7 +614,7 @@
 ; Return a boolean indicating if everything is kept.
 
 (define (keep-all?)
-  (equal? (reader-keep-mach CURRENT-READER) -keep-all-machs)
+  (equal? (reader-keep-mach CURRENT-READER) /keep-all-machs)
 )
 
 ; Ensure all cpu families were kept, necessary for generating files that
@@ -534,7 +644,7 @@
 ; has to remember.  On the other hand, !drop support is moderately complicated,
 ; and it can be added in an upward compatible manner later.
 
-(define (-keep-isa-set! isa-name-list)
+(define (/keep-isa-set! isa-name-list)
   (let ((isa-name-list (map string->symbol (string-cut isa-name-list #\,))))
     (reader-set-keep-isa! CURRENT-READER isa-name-list)
     )
@@ -575,8 +685,10 @@
 ; isa.
 
 (define (keep-isa? isa-list)
+  ;; If unspecified, the default is the first one in the list.
   (if (null? isa-list)
       (set! isa-list (list (car (current-arch-isa-name-list)))))
+
   (let* ((keep (reader-keep-isa CURRENT-READER))
 	 (keep? (map (lambda (i)
 		       (or (memq i keep)
@@ -593,7 +705,7 @@
 
 (define (keep-isa-atlist? atlist obj)
   (let ((isas (atlist-attr-value atlist 'ISA obj)))
-    (keep-isa? (bitset-attr->list isas)))
+    (keep-isa? isas))
 )
 
 ; Return non-#f if object OBJ is to be kept, according to its ISA attribute.
@@ -615,6 +727,72 @@
 
 (define (current-keep-isa-name-list)
   (reader-keep-isa CURRENT-READER)
+)
+
+;; Tracing support.
+;; This is akin to the "logit" support, but is for specific things that
+;; can be named (whereas logit support is based on a simple integer verbosity
+;; level).
+
+;;; Enable the specified tracing.
+;;; TRACE-OPTIONS is a comma-separated list of things to trace.
+;;;
+;;; Currently supported tracing:
+;;; commands - trace invocation of description file commands (e.g. define-insn)
+;;; pmacros  - trace pmacro expansion
+;;; all      - trace everything
+;;;
+;;; [If we later need to support disabling some tracing, one way is to
+;;; recognize an "-" in front of an option.]
+
+(define (/set-trace-options! trace-options)
+  (let ((all (list "commands" "pmacros"))
+	(requests (string-cut trace-options #\,)))
+    (if (member "all" requests)
+	(append! requests all))
+    (for-each (lambda (item)
+	      (cond ((string=? "commands" item)
+		     (reader-set-trace-commands?! CURRENT-READER #t))
+		    ((string=? "pmacros" item)
+		     (reader-set-trace-pmacros?! CURRENT-READER #t))
+		    ((string=? "all" item)
+		     #t) ;; handled above
+		    (else
+		     (cgen-usage 'unknown (string-append "-t " item)
+				 common-arguments))))
+	      requests))
+
+  *UNSPECIFIED*
+)
+
+;; Diagnostic support.
+
+;;; Enable the specified diagnostics.
+;;; DIAGNOSTIC-OPTIONS is a comma-separated list of things to trace.
+;;;
+;;; Currently supported diagnostics:
+;;; iformat - issue diagnostics for iformat issues
+;;; all - turn on all diagnostics
+;;;
+;;; [If we later need to support disabling some diagnostic, one way is to
+;;; recognize an "-" in front of an option.]
+
+(define (/set-diagnostic-options! diagnostic-options)
+  (let ((all (list "iformat"))
+	(requests (string-cut diagnostic-options #\,)))
+    (if (member "all" requests)
+	(append! requests all))
+    (for-each (lambda (item)
+	      (cond ((string=? "iformat" item)
+		     (reader-set-verify-iformat?! CURRENT-READER #t))
+		    ((string=? "all" item)
+		     #t) ;; handled above
+		    (else
+		     (cgen-usage 'unknown (string-append "-w " item)
+				 common-arguments))))
+	      requests))
+
+  *UNSPECIFIED*
 )
 
 ; If #f, treat reserved fields as operands and extract them with the insn.
@@ -654,23 +832,69 @@
 ; ??? Class local variables would provide a more efficient way to do this.
 ; Assuming one wants to continue on this route.
 
-(define -cpu-new-class-list nil)
+(define /cpu-new-class-list nil)
 
 (define (set-for-new! parent child)
-  (set! -cpu-new-class-list (acons parent child -cpu-new-class-list))
+  (set! /cpu-new-class-list (acons parent child /cpu-new-class-list))
 )
 
 ; Lookup the class registered with set-for-new!
 ; If none registered, return PARENT.
 
 (define (lookup-for-new parent)
-  (let ((child (assq-ref -cpu-new-class-list parent)))
+  (let ((child (assq-ref /cpu-new-class-list parent)))
     (if child
 	child
 	parent))
 )
 
 ; .cpu file loader support
+
+;; #t if an error was found (but processing continued)
+(define /continuable-error-found? #f)
+
+;; Initialize a new <reader> object.
+;; This doesn't add cgen-specific commands, leaving each element (ifield,
+;; hardware, etc.) to add their own.
+;; The "result" is stored in global CURRENT-READER.
+
+(define (/init-reader!)
+  (set! CURRENT-READER (new <reader>))
+
+  (set! /CGEN-RTL-VERSION /default-rtl-version)
+
+  (set! /continuable-error-found? #f)
+
+  (reader-add-command! 'define-rtl-version
+		       "Specify the RTL version being used.\n"
+		       nil '(major minor) /cmd-define-rtl-version)
+
+  (reader-add-command! 'include
+		       "Include a file.\n"
+		       nil '(file) /cmd-include)
+  (reader-add-command! 'if
+		       "(if test then . else)\n"
+		       nil '(test then . else) /cmd-if)
+
+  ; Rather than add cgen-internal specific stuff to pmacros.scm, we create
+  ; the pmacro commands here.
+  (pmacros-init!)
+  (reader-add-command! 'define-pmacro
+		       "\
+Define a preprocessor-style macro.
+"
+		       nil '(name arg1 . arg-rest) define-pmacro)
+
+  *UNSPECIFIED*
+)
+
+;; Called at the end of .cpu file loading.
+
+(define (/finish-reader! file)
+  (if /continuable-error-found?
+      (error (string-append "Error loading " file)))
+  *UNSPECIFIED*
+)
 
 ; Prepare to parse a .cpu file.
 ; This initializes the application independent tables.
@@ -679,33 +903,13 @@
 ; OPTIONS is a list of options to control code generation.
 ; The values are application dependent.
 
-(define (-init-parse-cpu! keep-mach keep-isa options)
-  (set! -cpu-new-class-list nil)
+(define (/init-parse-cpu! keep-mach keep-isa options)
+  (set! /cpu-new-class-list nil)
 
-  (set! CURRENT-READER (new <reader>))
   (set! CURRENT-ARCH (new <arch>))
-  (-keep-mach-set! keep-mach)
-  (-keep-isa-set! keep-isa)
+  (/keep-mach-set! keep-mach)
+  (/keep-isa-set! keep-isa)
   (set-cgen-options! options)
-
-  (reader-add-command! 'include
-		       "Include a file.\n"
-		       nil '(file) include
-  )
-  (reader-add-command! 'if
-		       "(if test then . else)\n"
-		       nil '(test then . else) cmd-if
-
-  )
-
-  ; Rather than add cgen specific stuff to pmacros.scm, we create
-  ; a define-pmacro command here.
-  (pmacros-init!)
-  (reader-add-command! 'define-pmacro
-		       "\
-Define a preprocessor-style macro.
-"
-		       nil '(name arg1 . arg-rest) define-pmacro)
 
   ; The order here is important.
   (arch-init!) ; Must be done first.
@@ -728,7 +932,7 @@ Define a preprocessor-style macro.
 )
 
 ; Install any builtin objects.
-; This is defered until define-arch is read.
+; This is deferred until define-arch is read.
 ; One reason is that attributes MACH and ISA don't exist until then.
 
 (define (reader-install-builtin!)
@@ -749,7 +953,7 @@ Define a preprocessor-style macro.
 ; The lists get cons'd in reverse order.  One thing this does is change them
 ; back to file order, it makes things easier for the human viewer.
 
-(define (-finish-parse-cpu!)
+(define (/finish-parse-cpu!)
   ; The order here is generally the reverse of init-parse-cpu!.
   (rtl-finish!)
   (minsn-finish!)
@@ -770,7 +974,7 @@ Define a preprocessor-style macro.
 
 ; Perform a global error checking pass after the .cpu file has been read in.
 
-(define (-global-error-checks)
+(define (/global-error-checks)
   ; ??? None yet.
   ; TODO:
   ; - all hardware elements with same name must have same rank and
@@ -780,9 +984,9 @@ Define a preprocessor-style macro.
 
 ; .cpu file include mechanism
 
-(define (include file)
-  (logit 1 "Including file " (string-append arch-path file) " ...\n")
-  (reader-read-file! (string-append arch-path file))
+(define (/cmd-include file)
+  (logit 1 "Including file " (string-append arch-path "/" file) " ...\n")
+  (reader-read-file! (string-append arch-path "/" file))
   (logit 2 "Resuming previous file ...\n")
 )
 
@@ -790,33 +994,36 @@ Define a preprocessor-style macro.
 ; This is a work-in-progress.  Its presence in the description file is ok,
 ; but the implementation will need to evolve.
 
-(define (cmd-if test then . else)
+(define (/cmd-if test then . else)
   (if (> (length else) 1)
-      (reader-error "wrong number of arguments to `if'"
-		    (cons 'if (cons test (cons then else)))
-		    ""))
+      (parse-error #f
+		   "wrong number of arguments to `if'"
+		   (cons 'if (cons test (cons then else)))))
   ; ??? rtx-eval test
-  (if (not (memq (car test) '(keep-isa? keep-mach? application-is?)))
-      (reader-error "only (if (keep-mach?|keep-isa?|application-is? ...) ...) are currently supported" test ""))
+  (if (or (not (pair? test))
+	  (not (memq (car test) '(keep-isa? keep-mach? application-is?))))
+      (parse-error #f
+		   "only (if (keep-mach?|keep-isa?|application-is? ...) ...) are currently supported"
+		   test))
   (case (car test)
     ((keep-isa?)
      (if (keep-isa? (cadr test))
-	 (eval1 then)
+	 (reader-process-expanded! then)
 	 (if (null? else)
 	     #f
-	     (eval1 (car else)))))
+	     (reader-process-expanded! (car else)))))
     ((keep-mach?)
      (if (keep-mach? (cadr test))
-	 (eval1 then)
+	 (reader-process-expanded! then)
 	 (if (null? else)
 	     #f
-	     (eval1 (car else)))))
+	     (reader-process-expanded! (car else)))))
     ((application-is?)
      (if (eq? APPLICATION (cadr test))
-	 (eval1 then)
+	 (reader-process-expanded! then)
 	 (if (null? else)
 	     #f
-	     (eval1 (car else))))))
+	     (reader-process-expanded! (car else))))))
 )
 
 ; Top level routine for loading .cpu files.
@@ -825,6 +1032,8 @@ Define a preprocessor-style macro.
 ; (or not keep if prefixed with !).
 ; KEEP-ISA is a string of comma separated isas to keep.
 ; OPTIONS is the OPTIONS argument to -init-parse-cpu!.
+; TRACE-OPTIONS is a random list of things to trace.
+; DIAGNOSTIC-OPTIONS is a random list of things to warn/error about.
 ; APP-INITER! is an application specific zero argument proc (thunk)
 ; to call after -init-parse-cpu!
 ; APP-FINISHER! is an application specific zero argument proc to call after
@@ -832,17 +1041,30 @@ Define a preprocessor-style macro.
 ; ANALYZER! is a zero argument proc to call after loading the .cpu file.
 ; It is expected to set up various tables and things useful for the application
 ; in question.
+;
+; This function isn't local because it's used by dev.scm.
 
 (define (cpu-load file keep-mach keep-isa options
+		  trace-options diagnostic-options
 		  app-initer! app-finisher! analyzer!)
-  (-init-parse-cpu! keep-mach keep-isa options)
+  (/init-reader!)
+  (/init-parse-cpu! keep-mach keep-isa options)
+  (/set-trace-options! trace-options)
+  (/set-diagnostic-options! diagnostic-options)
   (app-initer!)
-  (logit 1 "Loading cpu description " file "\n")
+  (logit 1 "Loading cpu description " file " ...\n")
+  (logit 1 "machs:   " keep-mach "\n")
+  (logit 1 "isas:    " keep-isa "\n")
+  (logit 1 "options: " options "\n")
+  (logit 1 "trace:   " trace-options "\n")
+  (logit 1 "diags:   " diagnostic-options "\n")
+  (set! arch-path (dirname file))
   (reader-read-file! file)
-  (logit 2 "Processing cpu description " file "\n")
-  (-finish-parse-cpu!)
+  (/finish-parse-cpu!)
+  (/finish-reader! file)
+  (logit 1 "Processing cpu description " file " ...\n")
   (app-finisher!)
-  (-global-error-checks)
+  (/global-error-checks)
   (analyzer!)
   *UNSPECIFIED*
 )
@@ -862,10 +1084,20 @@ Define a preprocessor-style macro.
       (else (display "Unknown error!\n" cep)))
     (display "Usage: cgen arguments ...\n" cep)
     (for-each (lambda (arg)
-		(display (string-append (car arg)
-					" " (if (cadr arg) (cadr arg) "")
-					"  - " (caddr arg)
-					"\n")
+		(display (string-append
+			  (let ((arg-str (string-append (car arg) " "
+							(or (cadr arg) ""))))
+			    (if (< (string-length arg-str) 16)
+				(string-take 16 arg-str)
+				arg-str))
+			  "  - " (caddr arg)
+			  (apply string-append
+				 (map (lambda (text)
+					(string-append "\n"
+						       (string-take 20 "")
+						       text))
+				      (cdddr arg)))
+			  "\n")
 			 cep))
 	      arguments)
     (display "...\n" cep)
@@ -893,7 +1125,7 @@ Define a preprocessor-style macro.
 ; `help-text' is a string that is printed with the usage information.
 ; Elements beyond `help-text' are ignored.
 
-(define (-getopt argv opt-spec)
+(define (/getopt argv opt-spec)
   (if (null? argv)
       (cons (cons #f #f) #f)
       (let ((opt (assoc (car argv) opt-spec)))
@@ -910,74 +1142,9 @@ Define a preprocessor-style macro.
 (define (option-arg args)
   (if (and (pair? args) (pair? (cdr args)))
       (cadr args)
-      (parse-error "option processing" "missing argument to" (car args)))
-)
-
-; Record of arguments passed to debug-repl, so they can be accessed in
-; the repl loop.
-
-(define debug-env #f)
-
-; Return list of recorded variables for debugging.
-
-(define (debug-var-names) (map car debug-env))
-
-; Return value of recorded var NAME.
-
-(define (debug-var name) (assq-ref debug-env name))
-
-; A handle on /dev/tty, so we can be sure we're talking with the user.
-; We open this the first time we actually need it.
-(define debug-tty #f)
-
-; Return the port we should use for interacting with the user,
-; opening it if necessary.
-(define (debug-tty-port)
-  (if (not debug-tty)
-      (set! debug-tty (open-file "/dev/tty" "r+")))
-  debug-tty)
-
-; Enter a repl loop for debugging purposes.
-; Use (quit) to exit cgen completely.
-; Use (debug-quit) or (quit 0) to exit the debugging session and
-; resume argument processing.
-;
-; ENV-ALIST can be anything, but it is intended to be an alist of values
-; the caller will want to be able to access in the repl loop.
-; It is stored in global `debug-env'.
-;
-; FIXME: Move to utils.scm.
-
-(define (debug-repl env-alist)
-  (with-input-and-output-to
-   (debug-tty-port)
-   (lambda ()
-     (set! debug-env env-alist)
-     (let loop ()
-       (let ((rc (top-repl)))
-	 (if (null? rc)
-	     (quit 1))			; indicate error to `make'
-	 (if (not (equal? rc '(0)))
-	     (loop))))))
-)
-
-; Utility for debug-repl.
-
-(define (debug-quit)
-  ; Keep around for later debugging.
-  ;(set! debug-env #f)
-
-  (quit 0)
-)
-
-; Macro to simplify calling debug-repl.
-; Usage: (debug-repl-env var-name1 var-name2 ...)
-
-(defmacro debug-repl-env var-names
-  (let ((env (map (lambda (var-name)
-		    (list 'cons (list 'quote var-name) var-name))
-		  var-names)))
-    (list 'debug-repl (cons 'list env)))
+      (parse-error (make-prefix-context "option processing")
+		   "missing argument to"
+		   (car args)))
 )
 
 ; List of common arguments.
@@ -995,14 +1162,29 @@ Define a preprocessor-style macro.
     ("-i" "isa-list"  "specify isa-list entries to keep")
     ("-m" "mach-list" "specify mach-list entries to keep")
     ("-s" "srcdir"    "set srcdir")
+    ("-t" "trace-options" "specify list of things to trace"
+                       "Options:"
+                       "commands - trace cgen commands (e.g. define-insn)"
+                       "pmacros  - trace pmacro expansion"
+		       "all      - trace everything")
     ("-v" #f          "increment verbosity level")
+    ("-w" "diagnostic-options" "specify list of things to issue diagnostics about"
+                       "Options:"
+                       "iformat - verify instruction formats are valid"
+		       "all     - turn on all diagnostics")
+
     ("--version" #f   "print version info")
     )
 )
 
-(define arch-path (string-append srcdir "/cpu/"))
+; Default place to look.
+; This gets overridden to point to the directory of the loaded .cpu file.
+; ??? Ideally this would be local to this file.
+
+(define arch-path (string-append srcdir "/cpu"))
 
 ; Accessors for application option specs
+
 (define (opt-get-first-pass opt)
   (or (list-ref opt 3) (lambda args #f)))
 (define (opt-get-second-pass opt)
@@ -1021,7 +1203,7 @@ Define a preprocessor-style macro.
 ; OPTION-HANDLER is either (lambda () ...) or (lambda (arg) ...) and
 ; processes the option.
 
-(define -cgen
+(define /cgen
   (lambda args
     (let ((app-name "unknown")
 	  (opt-spec nil)
@@ -1065,12 +1247,14 @@ Define a preprocessor-style macro.
 	    (flags "")
 	    (moreopts? #t)
 	    (debugging #f)    ; default is off, for speed
+	    (trace-options "")
+	    (diagnostic-options "")
 	    (cep (current-error-port))
 	    (str=? string=?)
 	    )
 
 	(let loop ((argv (cdr argv)))
-	  (let* ((new-argv (-getopt argv opt-spec))
+	  (let* ((new-argv (/getopt argv opt-spec))
 		 (opt (caar new-argv))
 		 (arg (cdar new-argv)))
 	    (case opt
@@ -1080,7 +1264,6 @@ Define a preprocessor-style macro.
 	      (else
 	       (cond ((str=? "-a" (car opt))
 		      (set! arch-file arg)
-		      (set! arch-path (string-append (dirname arg) "/"))
 		      )
 		     ((str=? "-b" (car opt))
 		      (set! debugging #t)
@@ -1110,8 +1293,14 @@ Define a preprocessor-style macro.
 		     ((str=? "-s" (car opt))
 		      #f ; ignore, already processed by caller
 		      )
+		     ((str=? "-t" (car opt))
+		      (set! trace-options arg)
+		      )
 		     ((str=? "-v" (car opt))
 		      (verbose-inc!)
+		      )
+		     ((str=? "-w" (car opt))
+		      (set! diagnostic-options arg)
 		      )
 		     ((str=? "--version" (car opt))
 		      (begin
@@ -1121,6 +1310,11 @@ Define a preprocessor-style macro.
 			(display (cgen-minor))
 			(display ".")
 			(display (cgen-fixlevel))
+			(newline)
+			(display "RTL version ")
+			(display (cgen-rtl-major))
+			(display ".")
+			(display (cgen-rtl-minor))
 			(newline)
 			(quit 0)
 			))
@@ -1146,8 +1340,10 @@ Define a preprocessor-style macro.
 
 	   (if repl?
 	       (debug-repl nil))
+
 	   (cpu-load arch-file
 		     keep-mach keep-isa flags
+		     trace-options diagnostic-options
 		     app-init! app-finish! app-analyze!)
 
 	   ;; Start another repl loop if -d.
@@ -1181,7 +1377,8 @@ Define a preprocessor-style macro.
 )
 
 ; Main entry point called by application file generators.
+
 (define cgen
   (lambda args
-    (cgen-debugging-stack-start -cgen args))
+    (cgen-debugging-stack-start /cgen args))
 )

@@ -315,8 +315,8 @@ Relobj::is_section_name_included(const char* name)
           && strstr(name, "personality")) 
       || (is_prefix_of(".data", name) 
           &&  strstr(name, "personality")) 
-      || (is_prefix_of(".gnu.linkonce.d", name) && 
-            strstr(name, "personality")))
+      || (is_prefix_of(".gnu.linkonce.d", name)
+	  && strstr(name, "personality")))
     {
       return true; 
     }
@@ -1138,6 +1138,12 @@ Sized_relobj<size, big_endian>::do_layout(Symbol_table* symtab,
 		omit[i] = true;
 	    }
 
+	  // Skip attributes section.
+	  if (parameters->target().is_attributes_section(name))
+	    {
+	      omit[i] = true;
+	    }
+
           bool discard = omit[i];
           if (!discard)
             {
@@ -1521,6 +1527,7 @@ Sized_relobj<size, big_endian>::do_count_local_symbols(Stringpool* pool,
   unsigned int dyncount = 0;
   // Skip the first, dummy, symbol.
   psyms += sym_size;
+  bool discard_all = parameters->options().discard_all();
   bool discard_locals = parameters->options().discard_locals();
   for (unsigned int i = 1; i < loccount; ++i, psyms += sym_size)
     {
@@ -1544,7 +1551,7 @@ Sized_relobj<size, big_endian>::do_count_local_symbols(Stringpool* pool,
       // Decide whether this symbol should go into the output file.
 
       if ((shndx < shnum && out_sections[shndx] == NULL)
-	  || (shndx == this->discarded_eh_frame_shndx_))
+	  || shndx == this->discarded_eh_frame_shndx_)
         {
 	  lv.set_no_output_symtab_entry();
           gold_assert(!lv.needs_output_dynsym_entry());
@@ -1567,6 +1574,21 @@ Sized_relobj<size, big_endian>::do_count_local_symbols(Stringpool* pool,
 	  continue;
 	}
 
+      const char* name = pnames + sym.get_st_name();
+
+      // If needed, add the symbol to the dynamic symbol table string pool.
+      if (lv.needs_output_dynsym_entry())
+        {
+          dynpool->add(name, true, NULL);
+          ++dyncount;
+        }
+
+      if (discard_all)
+	{
+	  lv.set_no_output_symtab_entry();
+	  continue;
+	}
+
       // If --discard-locals option is used, discard all temporary local
       // symbols.  These symbols start with system-specific local label
       // prefixes, typically .L for ELF system.  We want to be compatible
@@ -1579,7 +1601,6 @@ Sized_relobj<size, big_endian>::do_count_local_symbols(Stringpool* pool,
       //   - the symbol has a name.
       //
       // We do not discard a symbol if it needs a dynamic symbol entry.
-      const char* name = pnames + sym.get_st_name();
       if (discard_locals
 	  && sym.get_st_type() != elfcpp::STT_FILE
 	  && !lv.needs_output_dynsym_entry()
@@ -1600,13 +1621,6 @@ Sized_relobj<size, big_endian>::do_count_local_symbols(Stringpool* pool,
       // Add the symbol to the symbol table string pool.
       pool->add(name, true, NULL);
       ++count;
-
-      // If needed, add the symbol to the dynamic symbol table string pool.
-      if (lv.needs_output_dynsym_entry())
-        {
-          dynpool->add(name, true, NULL);
-          ++dyncount;
-        }
     }
 
   this->output_local_symbol_count_ = count;
@@ -1677,7 +1691,15 @@ Sized_relobj<size, big_endian>::do_finalize_local_symbols(unsigned int index,
               os = folded_obj->output_section(folded.second);
               gold_assert(os != NULL);
               secoffset = folded_obj->get_output_section_offset(folded.second);
-              gold_assert(secoffset != invalid_address);
+
+	      // This could be a relaxed input section.
+              if (secoffset == invalid_address)
+		{
+		  const Output_relaxed_input_section* relaxed_section =
+		    os->find_relaxed_input_section(folded_obj, folded.second);
+		  gold_assert(relaxed_section != NULL);
+		  secoffset = relaxed_section->address() - os->address();
+		}
             }
 
 	  if (os == NULL)
@@ -2140,15 +2162,15 @@ Input_objects::add_object(Object* obj)
 void
 Input_objects::check_dynamic_dependencies() const
 {
+  bool issued_copy_dt_needed_error = false;
   for (Dynobj_list::const_iterator p = this->dynobj_list_.begin();
        p != this->dynobj_list_.end();
        ++p)
     {
       const Dynobj::Needed& needed((*p)->needed());
       bool found_all = true;
-      for (Dynobj::Needed::const_iterator pneeded = needed.begin();
-	   pneeded != needed.end();
-	   ++pneeded)
+      Dynobj::Needed::const_iterator pneeded;
+      for (pneeded = needed.begin(); pneeded != needed.end(); ++pneeded)
 	{
 	  if (this->sonames_.find(*pneeded) == this->sonames_.end())
 	    {
@@ -2157,6 +2179,25 @@ Input_objects::check_dynamic_dependencies() const
 	    }
 	}
       (*p)->set_has_unknown_needed_entries(!found_all);
+
+      // --copy-dt-needed-entries aka --add-needed is a GNU ld option
+      // --that gold does not support.  However, they cause no trouble
+      // --unless there is a DT_NEEDED entry that we don't know about;
+      // --warn only in that case.
+      if (!found_all
+	  && !issued_copy_dt_needed_error
+	  && (parameters->options().copy_dt_needed_entries()
+	      || parameters->options().add_needed()))
+	{
+	  const char* optname;
+	  if (parameters->options().copy_dt_needed_entries())
+	    optname = "--copy-dt-needed-entries";
+	  else
+	    optname = "--add-needed";
+	  gold_error(_("%s is not supported but is required for %s in %s"),
+		     optname, (*pneeded).c_str(), (*p)->name().c_str());
+	  issued_copy_dt_needed_error = true;
+	}
     }
 }
 
@@ -2310,8 +2351,8 @@ make_elf_object(const std::string& name, Input_file* input_file, off_t offset,
     *punconfigured = false;
 
   std::string error;
-  bool big_endian;
-  int size;
+  bool big_endian = false;
+  int size = 0;
   if (!elfcpp::Elf_recognizer::is_valid_header(p, bytes, &size,
                                                &big_endian, &error))
     {

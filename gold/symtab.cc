@@ -1010,6 +1010,7 @@ Symbol_table::add_from_object(Object* object,
   if ((ret->visibility() == elfcpp::STV_HIDDEN
        || ret->visibility() == elfcpp::STV_INTERNAL)
       && (ret->binding() == elfcpp::STB_GLOBAL
+	  || ret->binding() == elfcpp::STB_GNU_UNIQUE
 	  || ret->binding() == elfcpp::STB_WEAK)
       && !parameters->options().relocatable())
     this->force_local(ret);
@@ -1150,7 +1151,8 @@ Symbol_table::add_from_relobj(
 	}
 
       // Fix up visibility if object has no-export set.
-      if (relobj->no_export())
+      if (relobj->no_export()
+	  && (orig_st_shndx != elfcpp::SHN_UNDEF || !is_ordinary))
         {
 	  // We may have copied symbol already above.
 	  if (psym != &sym2)
@@ -1685,6 +1687,7 @@ Symbol_table::define_special_symbol(const char** pname, const char** pversion,
 Symbol*
 Symbol_table::define_in_output_data(const char* name,
 				    const char* version,
+				    Defined defined,
 				    Output_data* od,
 				    uint64_t value,
 				    uint64_t symsize,
@@ -1698,7 +1701,7 @@ Symbol_table::define_in_output_data(const char* name,
   if (parameters->target().get_size() == 32)
     {
 #if defined(HAVE_TARGET_32_LITTLE) || defined(HAVE_TARGET_32_BIG)
-      return this->do_define_in_output_data<32>(name, version, od,
+      return this->do_define_in_output_data<32>(name, version, defined, od,
                                                 value, symsize, type, binding,
                                                 visibility, nonvis,
                                                 offset_is_from_end,
@@ -1710,7 +1713,7 @@ Symbol_table::define_in_output_data(const char* name,
   else if (parameters->target().get_size() == 64)
     {
 #if defined(HAVE_TARGET_64_LITTLE) || defined(HAVE_TARGET_64_BIG)
-      return this->do_define_in_output_data<64>(name, version, od,
+      return this->do_define_in_output_data<64>(name, version, defined, od,
                                                 value, symsize, type, binding,
                                                 visibility, nonvis,
                                                 offset_is_from_end,
@@ -1730,6 +1733,7 @@ Sized_symbol<size>*
 Symbol_table::do_define_in_output_data(
     const char* name,
     const char* version,
+    Defined defined,
     Output_data* od,
     typename elfcpp::Elf_types<size>::Elf_Addr value,
     typename elfcpp::Elf_types<size>::Elf_WXword symsize,
@@ -1781,7 +1785,7 @@ Symbol_table::do_define_in_output_data(
       return sym;
     }
 
-  if (Symbol_table::should_override_with_special(oldsym))
+  if (Symbol_table::should_override_with_special(oldsym, defined))
     this->override_with_special(oldsym, sym);
 
   if (resolve_oldsym)
@@ -1797,7 +1801,9 @@ Symbol_table::do_define_in_output_data(
 
 Symbol*
 Symbol_table::define_in_output_segment(const char* name,
-				       const char* version, Output_segment* os,
+				       const char* version,
+				       Defined defined,
+				       Output_segment* os,
 				       uint64_t value,
 				       uint64_t symsize,
 				       elfcpp::STT type,
@@ -1810,7 +1816,7 @@ Symbol_table::define_in_output_segment(const char* name,
   if (parameters->target().get_size() == 32)
     {
 #if defined(HAVE_TARGET_32_LITTLE) || defined(HAVE_TARGET_32_BIG)
-      return this->do_define_in_output_segment<32>(name, version, os,
+      return this->do_define_in_output_segment<32>(name, version, defined, os,
                                                    value, symsize, type,
                                                    binding, visibility, nonvis,
                                                    offset_base, only_if_ref);
@@ -1821,7 +1827,7 @@ Symbol_table::define_in_output_segment(const char* name,
   else if (parameters->target().get_size() == 64)
     {
 #if defined(HAVE_TARGET_64_LITTLE) || defined(HAVE_TARGET_64_BIG)
-      return this->do_define_in_output_segment<64>(name, version, os,
+      return this->do_define_in_output_segment<64>(name, version, defined, os,
                                                    value, symsize, type,
                                                    binding, visibility, nonvis,
                                                    offset_base, only_if_ref);
@@ -1840,6 +1846,7 @@ Sized_symbol<size>*
 Symbol_table::do_define_in_output_segment(
     const char* name,
     const char* version,
+    Defined defined,
     Output_segment* os,
     typename elfcpp::Elf_types<size>::Elf_Addr value,
     typename elfcpp::Elf_types<size>::Elf_WXword symsize,
@@ -1891,7 +1898,7 @@ Symbol_table::do_define_in_output_segment(
       return sym;
     }
 
-  if (Symbol_table::should_override_with_special(oldsym))
+  if (Symbol_table::should_override_with_special(oldsym, defined))
     this->override_with_special(oldsym, sym);
 
   if (resolve_oldsym)
@@ -1909,6 +1916,7 @@ Symbol_table::do_define_in_output_segment(
 Symbol*
 Symbol_table::define_as_constant(const char* name,
 				 const char* version,
+				 Defined defined,
 				 uint64_t value,
 				 uint64_t symsize,
 				 elfcpp::STT type,
@@ -1921,7 +1929,7 @@ Symbol_table::define_as_constant(const char* name,
   if (parameters->target().get_size() == 32)
     {
 #if defined(HAVE_TARGET_32_LITTLE) || defined(HAVE_TARGET_32_BIG)
-      return this->do_define_as_constant<32>(name, version, value,
+      return this->do_define_as_constant<32>(name, version, defined, value,
                                              symsize, type, binding,
                                              visibility, nonvis, only_if_ref,
                                              force_override);
@@ -1932,7 +1940,7 @@ Symbol_table::define_as_constant(const char* name,
   else if (parameters->target().get_size() == 64)
     {
 #if defined(HAVE_TARGET_64_LITTLE) || defined(HAVE_TARGET_64_BIG)
-      return this->do_define_as_constant<64>(name, version, value,
+      return this->do_define_as_constant<64>(name, version, defined, value,
                                              symsize, type, binding,
                                              visibility, nonvis, only_if_ref,
                                              force_override);
@@ -1951,6 +1959,7 @@ Sized_symbol<size>*
 Symbol_table::do_define_as_constant(
     const char* name,
     const char* version,
+    Defined defined,
     typename elfcpp::Elf_types<size>::Elf_Addr value,
     typename elfcpp::Elf_types<size>::Elf_WXword symsize,
     elfcpp::STT type,
@@ -2007,7 +2016,8 @@ Symbol_table::do_define_as_constant(
       return sym;
     }
 
-  if (force_override || Symbol_table::should_override_with_special(oldsym))
+  if (force_override
+      || Symbol_table::should_override_with_special(oldsym, defined))
     this->override_with_special(oldsym, sym);
 
   if (resolve_oldsym)
@@ -2030,14 +2040,14 @@ Symbol_table::define_symbols(const Layout* layout, int count,
     {
       Output_section* os = layout->find_output_section(p->output_section);
       if (os != NULL)
-	this->define_in_output_data(p->name, NULL, os, p->value,
+	this->define_in_output_data(p->name, NULL, PREDEFINED, os, p->value,
 				    p->size, p->type, p->binding,
 				    p->visibility, p->nonvis,
 				    p->offset_is_from_end,
 				    only_if_ref || p->only_if_ref);
       else
-	this->define_as_constant(p->name, NULL, 0, p->size, p->type,
-				 p->binding, p->visibility, p->nonvis,
+	this->define_as_constant(p->name, NULL, PREDEFINED, 0, p->size,
+				 p->type, p->binding, p->visibility, p->nonvis,
 				 only_if_ref || p->only_if_ref,
                                  false);
     }
@@ -2056,14 +2066,14 @@ Symbol_table::define_symbols(const Layout* layout, int count,
 						       p->segment_flags_set,
 						       p->segment_flags_clear);
       if (os != NULL)
-	this->define_in_output_segment(p->name, NULL, os, p->value,
+	this->define_in_output_segment(p->name, NULL, PREDEFINED, os, p->value,
 				       p->size, p->type, p->binding,
 				       p->visibility, p->nonvis,
 				       p->offset_base,
 				       only_if_ref || p->only_if_ref);
       else
-	this->define_as_constant(p->name, NULL, 0, p->size, p->type,
-				 p->binding, p->visibility, p->nonvis,
+	this->define_as_constant(p->name, NULL, PREDEFINED, 0, p->size,
+				 p->type, p->binding, p->visibility, p->nonvis,
 				 only_if_ref || p->only_if_ref,
                                  false);
     }
@@ -2092,7 +2102,7 @@ Symbol_table::define_with_copy_reloc(
   if (binding == elfcpp::STB_WEAK)
     binding = elfcpp::STB_GLOBAL;
 
-  this->define_in_output_data(csym->name(), csym->version(),
+  this->define_in_output_data(csym->name(), csym->version(), COPY,
 			      posd, value, csym->symsize(),
 			      csym->type(), binding,
 			      csym->visibility(), csym->nonvis(),
@@ -2412,7 +2422,6 @@ Symbol_table::compute_final_value(
 	  {
 	    Relobj* relobj = static_cast<Relobj*>(symobj);
 	    Output_section* os = relobj->output_section(shndx);
-            uint64_t secoff64 = relobj->output_section_offset(shndx);
 
             if (this->is_section_folded(relobj, shndx))
               {
@@ -2422,11 +2431,17 @@ Symbol_table::compute_final_value(
                                                                    shndx);
                 gold_assert(folded.first != NULL);
                 Relobj* folded_obj = reinterpret_cast<Relobj*>(folded.first);
-                os = folded_obj->output_section(folded.second);  
+		unsigned folded_shndx = folded.second;
+
+                os = folded_obj->output_section(folded_shndx);  
                 gold_assert(os != NULL);
-                secoff64 = folded_obj->output_section_offset(folded.second);
+
+		// Replace (relobj, shndx) with canonical ICF input section.
+		shndx = folded_shndx;
+		relobj = folded_obj;
               }
 
+            uint64_t secoff64 = relobj->output_section_offset(shndx);
  	    if (os == NULL)
 	      {
                 bool static_or_reloc = (parameters->doing_static_link() ||
@@ -2809,11 +2824,16 @@ Symbol_table::sized_write_symbol(
     osym.put_st_size(0);
   else
     osym.put_st_size(sym->symsize());
+  elfcpp::STT type = sym->type();
+  // Turn IFUNC symbols from shared libraries into normal FUNC symbols.
+  if (type == elfcpp::STT_GNU_IFUNC
+      && sym->is_from_dynobj())
+    type = elfcpp::STT_FUNC;
   // A version script may have overridden the default binding.
   if (sym->is_forced_local())
-    osym.put_st_info(elfcpp::elf_st_info(elfcpp::STB_LOCAL, sym->type()));
+    osym.put_st_info(elfcpp::elf_st_info(elfcpp::STB_LOCAL, type));
   else
-    osym.put_st_info(elfcpp::elf_st_info(sym->binding(), sym->type()));
+    osym.put_st_info(elfcpp::elf_st_info(sym->binding(), type));
   osym.put_st_other(elfcpp::elf_st_other(sym->visibility(), sym->nonvis()));
   osym.put_st_shndx(shndx);
 }

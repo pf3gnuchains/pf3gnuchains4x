@@ -3,7 +3,7 @@
 
    Copyright (C) 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995,
    1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
-   2008, 2009 Free Software Foundation, Inc.
+   2008, 2009, 2010 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -2821,6 +2821,10 @@ handle_inferior_event (struct execution_control_state *ecs)
 	     dynamically loaded objects (among other things).  */
 	  if (stop_on_solib_events)
 	    {
+	      /* Make sure we print "Stopped due to solib-event" in
+		 normal_stop.  */
+	      stop_print_frame = 1;
+
 	      stop_stepping (ecs);
 	      return;
 	    }
@@ -2942,7 +2946,11 @@ handle_inferior_event (struct execution_control_state *ecs)
 	= bpstat_stop_status (get_regcache_aspace (get_current_regcache ()),
 			      stop_pc, ecs->ptid);
 
-      ecs->random_signal = !bpstat_explains_signal (ecs->event_thread->stop_bpstat);
+      /* Note that we're interested in knowing the bpstat actually
+	 causes a stop, not just if it may explain the signal.
+	 Software watchpoints, for example, always appear in the
+	 bpstat.  */
+      ecs->random_signal = !bpstat_causes_stop (ecs->event_thread->stop_bpstat);
 
       /* If no catchpoint triggered for this, then keep going.  */
       if (ecs->random_signal)
@@ -3000,6 +3008,7 @@ handle_inferior_event (struct execution_control_state *ecs)
 	context_switch (ecs->ptid);
 
       current_inferior ()->waiting_for_vfork_done = 0;
+      current_inferior ()->pspace->breakpoints_not_allowed = 0;
       /* This also takes care of reinserting breakpoints in the
 	 previously locked inferior.  */
       keep_going (ecs);
@@ -3126,6 +3135,9 @@ targets should add new threads to the thread list themselves in non-stop mode.")
     {
       struct regcache *regcache = get_thread_regcache (ecs->ptid);
       struct gdbarch *gdbarch = get_regcache_arch (regcache);
+      struct cleanup *old_chain = save_inferior_ptid ();
+
+      inferior_ptid = ecs->ptid;
 
       fprintf_unfiltered (gdb_stdlog, "infrun: stop_pc = %s\n",
                           paddress (gdbarch, stop_pc));
@@ -3142,6 +3154,8 @@ targets should add new threads to the thread list themselves in non-stop mode.")
             fprintf_unfiltered (gdb_stdlog,
                                 "infrun: (no data address available)\n");
 	}
+
+      do_cleanups (old_chain);
     }
 
   if (stepping_past_singlestep_breakpoint)
@@ -3579,6 +3593,21 @@ targets should add new threads to the thread list themselves in non-stop mode.")
 	 function.  */
       stop_print_frame = 1;
 
+      /* This is where we handle "moribund" watchpoints.  Unlike
+	 software breakpoints traps, hardware watchpoint traps are
+	 always distinguishable from random traps.  If no high-level
+	 watchpoint is associated with the reported stop data address
+	 anymore, then the bpstat does not explain the signal ---
+	 simply make sure to ignore it if `stopped_by_watchpoint' is
+	 set.  */
+
+      if (debug_infrun
+	  && ecs->event_thread->stop_signal == TARGET_SIGNAL_TRAP
+	  && !bpstat_explains_signal (ecs->event_thread->stop_bpstat)
+	  && stopped_by_watchpoint)
+	fprintf_unfiltered (gdb_stdlog, "\
+infrun: no user watchpoint explains watchpoint SIGTRAP, ignoring\n");
+
       /* NOTE: cagney/2003-03-29: These two checks for a random signal
          at one stage in the past included checks for an inferior
          function call's call dummy's return breakpoint.  The original
@@ -3602,6 +3631,7 @@ targets should add new threads to the thread list themselves in non-stop mode.")
       if (ecs->event_thread->stop_signal == TARGET_SIGNAL_TRAP)
 	ecs->random_signal
 	  = !(bpstat_explains_signal (ecs->event_thread->stop_bpstat)
+	      || stopped_by_watchpoint
 	      || ecs->event_thread->trap_expected
 	      || (ecs->event_thread->step_range_end
 		  && ecs->event_thread->step_resume_breakpoint == NULL));

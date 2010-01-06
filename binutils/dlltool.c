@@ -241,9 +241,6 @@
 
 #define show_allnames 0
 
-#define PAGE_SIZE ((bfd_vma) 4096)
-#define PAGE_MASK ((bfd_vma) (-4096))
-
 #include "sysdep.h"
 #include "bfd.h"
 #include "libiberty.h"
@@ -263,11 +260,22 @@
 #include "coff/arm.h"
 #include "coff/internal.h"
 #endif
-#ifdef DLLTOOL_MX86_64
+#ifdef DLLTOOL_DEFAULT_MX86_64
 #include "coff/x86_64.h"
 #endif
+#ifdef DLLTOOL_DEFAULT_I386
+#include "coff/i386.h"
+#endif
 
-/* get current BFD error message */
+#ifndef COFF_PAGE_SIZE
+#define COFF_PAGE_SIZE ((bfd_vma) 4096)
+#endif
+
+#ifndef PAGE_MASK
+#define PAGE_MASK ((bfd_vma) (- COFF_PAGE_SIZE))
+#endif
+
+/* Get current BFD error message.  */
 #define bfd_get_errmsg() (bfd_errmsg (bfd_get_error ()))
 
 /* Forward references.  */
@@ -871,9 +879,9 @@ inform VPARAMS ((const char * message, ...))
 }
 
 static const char *
-rvaafter (int machine)
+rvaafter (int mach)
 {
-  switch (machine)
+  switch (mach)
     {
     case MARM:
     case M386:
@@ -890,16 +898,16 @@ rvaafter (int machine)
       break;
     default:
       /* xgettext:c-format */
-      fatal (_("Internal error: Unknown machine type: %d"), machine);
+      fatal (_("Internal error: Unknown machine type: %d"), mach);
       break;
     }
   return "";
 }
 
 static const char *
-rvabefore (int machine)
+rvabefore (int mach)
 {
-  switch (machine)
+  switch (mach)
     {
     case MARM:
     case M386:
@@ -916,16 +924,16 @@ rvabefore (int machine)
       return ".rva\t";
     default:
       /* xgettext:c-format */
-      fatal (_("Internal error: Unknown machine type: %d"), machine);
+      fatal (_("Internal error: Unknown machine type: %d"), mach);
       break;
     }
   return "";
 }
 
 static const char *
-asm_prefix (int machine, const char *name)
+asm_prefix (int mach, const char *name)
 {
-  switch (machine)
+  switch (mach)
     {
     case MARM:
     case MPPC:
@@ -947,7 +955,7 @@ asm_prefix (int machine, const char *name)
         return "_";
     default:
       /* xgettext:c-format */
-      fatal (_("Internal error: Unknown machine type: %d"), machine);
+      fatal (_("Internal error: Unknown machine type: %d"), mach);
       break;
     }
   return "";
@@ -1147,7 +1155,7 @@ def_stacksize (int reserve, int commit)
    import_list.  It is used by def_import.  */
 
 static void
-append_import (const char *symbol_name, const char *dll_name, int func_ordinal,
+append_import (const char *symbol_name, const char *dllname, int func_ordinal,
 	       const char *its_name)
 {
   iheadtype **pq;
@@ -1155,7 +1163,7 @@ append_import (const char *symbol_name, const char *dll_name, int func_ordinal,
 
   for (pq = &import_list; *pq != NULL; pq = &(*pq)->next)
     {
-      if (strcmp ((*pq)->dllname, dll_name) == 0)
+      if (strcmp ((*pq)->dllname, dllname) == 0)
 	{
 	  q = *pq;
 	  q->functail->next = xmalloc (sizeof (ifunctype));
@@ -1170,7 +1178,7 @@ append_import (const char *symbol_name, const char *dll_name, int func_ordinal,
     }
 
   q = xmalloc (sizeof (iheadtype));
-  q->dllname = xstrdup (dll_name);
+  q->dllname = xstrdup (dllname);
   q->nfuncs = 1;
   q->funchead = xmalloc (sizeof (ifunctype));
   q->functail = q->funchead;
@@ -2119,7 +2127,7 @@ gen_exp_file (void)
   if (base_file)
     {
       bfd_vma addr;
-      bfd_vma need[PAGE_SIZE];
+      bfd_vma need[COFF_PAGE_SIZE];
       bfd_vma page_addr;
       bfd_size_type numbytes;
       int num_entries;

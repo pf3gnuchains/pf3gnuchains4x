@@ -1,7 +1,7 @@
 /* GDB routines for manipulating objfiles.
 
    Copyright (C) 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001,
-   2002, 2003, 2004, 2007, 2008, 2009 Free Software Foundation, Inc.
+   2002, 2003, 2004, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
 
    Contributed by Cygnus Support, using pieces from other GDB modules.
 
@@ -199,6 +199,7 @@ allocate_objfile (bfd *abfd, int flags)
   objfile = (struct objfile *) xzalloc (sizeof (struct objfile));
   objfile->psymbol_cache = bcache_xmalloc ();
   objfile->macro_cache = bcache_xmalloc ();
+  objfile->filename_cache = bcache_xmalloc ();
   /* We could use obstack_specify_allocation here instead, but
      gdb_obstack.h specifies the alloc/dealloc functions.  */
   obstack_init (&objfile->objfile_obstack);
@@ -561,6 +562,7 @@ free_objfile (struct objfile *objfile)
   /* Free the obstacks for non-reusable objfiles */
   bcache_xfree (objfile->psymbol_cache);
   bcache_xfree (objfile->macro_cache);
+  bcache_xfree (objfile->filename_cache);
   if (objfile->demangled_names_hash)
     htab_delete (objfile->demangled_names_hash);
   obstack_free (&objfile->objfile_obstack, 0);
@@ -677,6 +679,10 @@ objfile_relocate (struct objfile *objfile, struct section_offsets *new_offsets)
 	}
     }
   }
+
+  if (objfile->psymtabs_addrmap)
+    addrmap_relocate (objfile->psymtabs_addrmap,
+		      ANOFFSET (delta, SECT_OFF_TEXT (objfile)));
 
   {
     struct partial_symtab *p;

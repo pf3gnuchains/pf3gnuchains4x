@@ -1,7 +1,7 @@
 /* Interface between GDB and target environments, including files and processes
 
    Copyright (C) 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999,
-   2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
+   2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010
    Free Software Foundation, Inc.
 
    Contributed by Cygnus Support.  Written by John Gilmore.
@@ -459,13 +459,18 @@ struct target_ops
     void (*to_async) (void (*) (enum inferior_event_type, void *), void *);
     int (*to_async_mask) (int);
     int (*to_supports_non_stop) (void);
+    /* find_memory_regions support method for gcore */
     int (*to_find_memory_regions) (int (*) (CORE_ADDR,
 					    unsigned long,
 					    int, int, int,
 					    void *),
 				   void *);
+    /* make_corefile_notes support method for gcore */
     char * (*to_make_corefile_notes) (bfd *, int *);
-
+    /* get_bookmark support method for bookmarks */
+    gdb_byte * (*to_get_bookmark) (char *, int);
+    /* goto_bookmark support method for bookmarks */
+    void (*to_goto_bookmark) (gdb_byte *, int);
     /* Return the thread-local address at OFFSET in the
        thread-local storage for the thread PTID and the shared library
        or executable file given by OBJFILE.  If that block of
@@ -1141,10 +1146,17 @@ extern char *normal_pid_to_str (ptid_t ptid);
 #define target_make_corefile_notes(BFD, SIZE_P) \
      (current_target.to_make_corefile_notes) (BFD, SIZE_P)
 
+/* Bookmark interfaces.  */
+#define target_get_bookmark(ARGS, FROM_TTY) \
+     (current_target.to_get_bookmark) (ARGS, FROM_TTY)
+
+#define target_goto_bookmark(ARG, FROM_TTY) \
+     (current_target.to_goto_bookmark) (ARG, FROM_TTY)
+
 /* Hardware watchpoint interfaces.  */
 
 /* Returns non-zero if we were stopped by a hardware watchpoint (memory read or
-   write).  */
+   write).  Only the INFERIOR_PTID task is being queried.  */
 
 #define target_stopped_by_watchpoint \
    (*current_target.to_stopped_by_watchpoint)
@@ -1192,8 +1204,11 @@ extern char *normal_pid_to_str (ptid_t ptid);
 #define target_remove_hw_breakpoint(gdbarch, bp_tgt) \
      (*current_target.to_remove_hw_breakpoint) (gdbarch, bp_tgt)
 
-#define target_stopped_data_address(target, x) \
-    (*target.to_stopped_data_address) (target, x)
+/* Return non-zero if target knows the data address which triggered this
+   target_stopped_by_watchpoint, in such case place it to *ADDR_P.  Only the
+   INFERIOR_PTID task is being queried.  */
+#define target_stopped_data_address(target, addr_p) \
+    (*target.to_stopped_data_address) (target, addr_p)
 
 #define target_watchpoint_addr_within_range(target, addr, start, length) \
   (*target.to_watchpoint_addr_within_range) (target, addr, start, length)

@@ -94,7 +94,7 @@ class Target_sparc : public Sized_target<size, big_endian>
 	      const unsigned char* plocal_symbols);
   // Finalize the sections.
   void
-  do_finalize_sections(Layout*, const Input_objects*);
+  do_finalize_sections(Layout*, const Input_objects*, Symbol_table*);
 
   // Return the value to use for a dynamic which requires special
   // treatment.
@@ -361,7 +361,9 @@ Target::Target_info Target_sparc<32, true>::sparc_info =
   elfcpp::SHN_UNDEF,	// small_common_shndx
   elfcpp::SHN_UNDEF,	// large_common_shndx
   0,			// small_common_section_flags
-  0			// large_common_section_flags
+  0,			// large_common_section_flags
+  NULL,			// attributes_section
+  NULL			// attributes_vendor
 };
 
 template<>
@@ -382,7 +384,9 @@ Target::Target_info Target_sparc<64, true>::sparc_info =
   elfcpp::SHN_UNDEF,	// small_common_shndx
   elfcpp::SHN_UNDEF,	// large_common_shndx
   0,			// small_common_section_flags
-  0			// large_common_section_flags
+  0,			// large_common_section_flags
+  NULL,			// attributes_section
+  NULL			// attributes_vendor
 };
 
 // We have to take care here, even when operating in little-endian
@@ -1022,11 +1026,12 @@ Target_sparc<size, big_endian>::got_section(Symbol_table* symtab,
       os = layout->add_output_section_data(".got", elfcpp::SHT_PROGBITS,
 					   (elfcpp::SHF_ALLOC
 					    | elfcpp::SHF_WRITE),
-					   this->got_, false);
-      os->set_is_relro();
+					   this->got_, false, true, false,
+					   false);
 
       // Define _GLOBAL_OFFSET_TABLE_ at the start of the .got section.
       symtab->define_in_output_data("_GLOBAL_OFFSET_TABLE_", NULL,
+				    Symbol_table::PREDEFINED,
 				    this->got_,
 				    0, 0, elfcpp::STT_OBJECT,
 				    elfcpp::STB_LOCAL,
@@ -1048,7 +1053,8 @@ Target_sparc<size, big_endian>::rela_dyn_section(Layout* layout)
       gold_assert(layout != NULL);
       this->rela_dyn_ = new Reloc_section(parameters->options().combreloc());
       layout->add_output_section_data(".rela.dyn", elfcpp::SHT_RELA,
-				      elfcpp::SHF_ALLOC, this->rela_dyn_, true);
+				      elfcpp::SHF_ALLOC, this->rela_dyn_, true,
+				      false, false, false);
     }
   return this->rela_dyn_;
 }
@@ -1150,7 +1156,8 @@ Output_data_plt_sparc<size, big_endian>::Output_data_plt_sparc(Layout* layout)
 {
   this->rel_ = new Reloc_section(false);
   layout->add_output_section_data(".rela.plt", elfcpp::SHT_RELA,
-				  elfcpp::SHF_ALLOC, this->rel_, true);
+				  elfcpp::SHF_ALLOC, this->rel_, true,
+				  false, false, false);
 }
 
 template<int size, bool big_endian>
@@ -1367,10 +1374,11 @@ Target_sparc<size, big_endian>::make_plt_entry(Symbol_table* symtab,
 				      (elfcpp::SHF_ALLOC
 				       | elfcpp::SHF_EXECINSTR
 				       | elfcpp::SHF_WRITE),
-				      this->plt_, false);
+				      this->plt_, false, false, false, false);
 
       // Define _PROCEDURE_LINKAGE_TABLE_ at the start of the .plt section.
       symtab->define_in_output_data("_PROCEDURE_LINKAGE_TABLE_", NULL,
+				    Symbol_table::PREDEFINED,
 				    this->plt_,
 				    0, 0, elfcpp::STT_OBJECT,
 				    elfcpp::STB_LOCAL,
@@ -2319,7 +2327,8 @@ template<int size, bool big_endian>
 void
 Target_sparc<size, big_endian>::do_finalize_sections(
     Layout* layout,
-    const Input_objects*)
+    const Input_objects*,
+    Symbol_table*)
 {
   // Fill in some more dynamic tags.
   Output_data_dynamic* const odyn = layout->dynamic_data();

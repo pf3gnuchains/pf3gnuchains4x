@@ -1,3 +1,30 @@
+2009-12-29  Joel Brobecker  <brobecker@adacore.com>
+
+	* dwarf2.h (enum dwarf_attribute): Add DW_AT_GNAT_descriptive_type.
+
+2009-12-14  Doug Kwan  <dougkwan@google.com>
+
+	* bfdlink.h (struct bfd_link_callbacks): Rename function parameters
+	to avoid shadowed variable warnings.
+	* dis-asm.h (struct disassemble_info): Ditto.
+	(disassemble_init_for_target): Ditto.
+	(init_disassemble_info): Ditto.
+
+2009-12-03  David Daney  <ddaney@caviumnetworks.com>
+	    Adam Nemet  <adambnemet@gmail.com>
+
+	* elf/mips.h (E_MIPS_MACH_OCTEON2): New machine flag.
+
+2009-11-18  Alan Modra  <amodra@bigpond.net.au>
+
+	* alloca-conf.h: Clarify comment.
+
+2009-11-06  Jonas Maebe  <jonas.maebe@elis.ugent.be>
+
+	Add DWARF attribute value for the "Borland fastcall" calling
+	convention.
+	* elf/dwarf2.h: Add DW_CC_GNU_borland_fastcall_i386 constant.
+
 2009-10-23  Kai Tietz  <kai.tietz@onevision.com>
 
 	* splay-tree.h (libi_uhostptr_t): Add gcc specific

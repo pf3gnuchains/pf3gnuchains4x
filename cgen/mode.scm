@@ -1,5 +1,5 @@
 ; Mode objects.
-; Copyright (C) 2000 Red Hat, Inc.
+; Copyright (C) 2000, 2009 Red Hat, Inc.
 ; This file is part of CGEN.
 ; See file COPYING.CGEN for details.
 
@@ -33,7 +33,9 @@
 		;
 		; Possible values:
 		; %x - as always
-		; %D - DI mode
+		; %D - DI mode (8 bytes)
+		; %T - TI mode (16 bytes)
+		; %O - OI mode (32 bytes)
 		; %f - SF,DF modes
 		; %F - XF,TF modes
 		printf-type
@@ -76,6 +78,15 @@
 ; ptr-to is currently private so there is no accessor.
 (define mode:host? (elm-make-getter <mode> 'host?))
 
+;; Utility to set the parameters of WI/UWI/AI/IAI modes.
+
+(define (/mode-set-word-params! dst src)
+  (assert (mode? dst))
+  (assert (mode? src))
+  (object-assign! dst src)
+  *UNSPECIFIED*
+)
+
 ; Return string C type to use for values of mode M.
 
 (define (mode:c-type m)
@@ -102,21 +113,21 @@
 
 (define cmode-elm-modes (elm-make-getter <concat-mode> 'elm-modes))
 
-; List of all modes.
+;; Table of all modes.
+(define /mode-table nil)
 
-(define mode-list nil)
-
-; Return list of mode objects.
-; Hides the fact that its stored as an alist from caller.
-
-(define (mode-list-values) (map cdr mode-list))
+;; This exists to simplify mode-find.
+(define /mode-class-table nil)
 
 ; Return list of real mode objects (no aliases).
 
 (define (mode-list-non-alias-values)
-  (map cdr
-       (find (lambda (m) (eq? (car m) (obj:name (cdr m))))
-	     mode-list))
+  (hash-fold (lambda (key value prior)
+	       (if (eq? key (obj:name value))
+		   (append value prior)
+		   prior))
+	     '()
+	     /mode-table)
 )
 
 ; Return a boolean indicating if X is a <mode> object.
@@ -132,10 +143,11 @@
 ; Return a boolean indicating if MODE1 is equal to MODE2
 ; Either may be the name of a mode or a <mode> object.
 ; Aliases are handled by refering to their real name.
+; ??? Might be useful to restrict this to <mode> objects only.
 
 (define (mode:eq? mode1 mode2)
-  (let ((mode1-name (mode-real-name mode1))
-	(mode2-name (mode-real-name mode2)))
+  (let ((mode1-name (mode-real-name (mode-maybe-lookup mode1)))
+	(mode2-name (mode-real-name (mode-maybe-lookup mode2))))
     (eq? mode1-name mode2-name))
 )
 
@@ -153,33 +165,40 @@
 
 (define (mode-class-numeric? class) (memq class '(INT UINT FLOAT)))
 
-; Return a boolean indicating if MODE has an integral mode class.
+; Return a boolean indicating if <mode> MODE has an integral mode class.
 ; Similarily for signed/unsigned.
 
 (define (mode-integral? mode) (mode-class-integral? (mode:class mode)))
 (define (mode-signed? mode) (mode-class-signed? (mode:class mode)))
 (define (mode-unsigned? mode) (mode-class-unsigned? (mode:class mode)))
 
-; Return a boolean indicating if MODE has a floating point mode class.
+; Return a boolean indicating if <mode> MODE has a floating point mode class.
 
 (define (mode-float? mode) (mode-class-float? (mode:class mode)))
 
-; Return a boolean indicating if MODE has a numeric mode class.
+; Return a boolean indicating if <mode> MODE has a numeric mode class.
 
 (define (mode-numeric? mode) (mode-class-numeric? (mode:class mode))) 
+
+;; Return a boolean indicating if <mode> MODE is VOID.
+
+(define (mode-void? mode)
+  (eq? mode VOID)
+)
 
 ; Return a boolean indicating if MODE1 is compatible with MODE2.
 ; MODE[12] are either names or <mode> objects.
 ; HOW is a symbol indicating how the test is performed:
 ; strict: modes must have same name
-; samesize: modes must be both float or both integer (int or uint) and have
-;           same size
-; sameclass: modes must be both float or both integer (int or uint)
+; samesize: modes must be both float, or both integer (int or uint),
+;           or both VOID and have same size
+; sameclass: modes must be both float, or both integer (int or uint),
+;            or both VOID
 ; numeric: modes must be both numeric
 
 (define (mode-compatible? how mode1 mode2)
-  (let ((m1 (mode:lookup mode1))
-	(m2 (mode:lookup mode2)))
+  (let ((m1 (mode-maybe-lookup mode1))
+	(m2 (mode-maybe-lookup mode2)))
     (case how
       ((strict)
        (eq? (obj:name m1) (obj:name m2)))
@@ -190,17 +209,20 @@
 	     ((mode-float? m1)
 	      (and (mode-float? m2)
 		   (= (mode:bits m1) (mode:bits m2))))
+	     ((mode-void? m1)
+	      (mode-void? m2))
 	     (else #f)))
       ((sameclass)
        (cond ((mode-integral? m1) (mode-integral? m2))
 	     ((mode-float? m1) (mode-float? m2))
+	     ((mode-void? m1) (mode-void? m2))
 	     (else #f)))
       ((numeric)
        (and (mode-numeric? m1) (mode-numeric? m2)))
       (else (error "bad `how' arg to mode-compatible?" how))))
 )
 
-; Add MODE named NAME to the list of recognized modes.
+; Add MODE named NAME to the table of recognized modes.
 ; If NAME is already present, replace it with MODE.
 ; MODE is a mode object.
 ; NAME exists to allow aliases of modes [e.g. WI, UWI, AI, IAI].
@@ -209,29 +231,38 @@
 ; That is up to the caller.
 
 (define (mode:add! name mode)
-  (let ((entry (assq name mode-list)))
-    (if entry
-	(set-cdr! entry mode)
-	(set! mode-list (acons name mode mode-list)))
-    mode)
+  (hashq-set! /mode-table name mode)
+
+  ;; Add the mode to its mode class.
+  ;; There's no point in building this list in any particular order,
+  ;; if the user adds some they could be of any size.
+  ;; So build the list the simple way (in reverse).
+  ;; The list is sorted in mode-finish!.
+  (let ((class (mode:class mode)))
+    (hashq-set! /mode-class-table class
+		(cons mode (hashq-ref /mode-class-table class))))
+
+  *UNSPECIFIED*
 )
 
 ; Parse a mode.
 ; This is the main routine for building a mode object.
 ; All arguments are in raw (non-evaluated) form.
 
-(define (-mode-parse errtxt name comment attrs class bits bytes
-		    non-mode-c-type printf-type sem-mode ptr-to host?)
+(define (/mode-parse context name comment attrs class bits bytes
+		     non-mode-c-type printf-type sem-mode ptr-to host?)
   (logit 2 "Processing mode " name " ...\n")
-  (let* ((name (parse-name name errtxt))
-	 (errtxt (stringsym-append errtxt " " name))
-	 (result (make <mode>
-		       name
-		       (parse-comment comment errtxt)
-		       (atlist-parse attrs "mode" errtxt)
-		       class bits bytes non-mode-c-type printf-type
-		       sem-mode ptr-to host?)))
-    result)
+
+  ;; Pick out name first to augment the error context.
+  (let* ((name (parse-name context name))
+	 (context (context-append-name context name)))
+
+    (make <mode>
+      name
+      (parse-comment context comment)
+      (atlist-parse context attrs "mode")
+      class bits bytes non-mode-c-type printf-type
+      sem-mode ptr-to host?))
 )
 
 ; ??? At present there is no define-mode that takes an associative list
@@ -241,7 +272,8 @@
 
 (define (define-full-mode name comment attrs class bits bytes
 	  non-mode-c-type printf-type sem-mode ptr-to host?)
-  (let ((m (-mode-parse "define-full-mode" name comment attrs
+  (let ((m (/mode-parse (make-current-context "define-full-mode")
+			name comment attrs
 			class bits bytes
 			non-mode-c-type printf-type sem-mode ptr-to host?)))
     ; Add it to the list of insn modes.
@@ -253,40 +285,52 @@
 ; Return the found object or #f.
 ; If X is already a mode object, return that.
 
-(define (mode:lookup x)
-  (if (mode? x)
-      x
-      (let ((result (assq x mode-list)))
-	(if result
-	    (cdr result)
-	    #f)))
+(define (mode:lookup mode-name)
+;  (if (mode? x)
+;      x
+;      (let ((result (assq x mode-list)))
+;	(if result
+;	    (cdr result)
+;	    #f)))
+  (hashq-ref /mode-table mode-name)
+)
+
+;; Same as mode:lookup except MODE is either the mode name or a <mode> object.
+
+(define (mode-maybe-lookup mode)
+  (if (symbol? mode)
+      (hashq-ref /mode-table mode)
+      mode)
 )
 
 ; Return a boolean indicating if X is a valid mode name.
 
 (define (mode-name? x)
   (and (symbol? x)
-       ; FIXME: Time to make `mode-list' a hash table.
-       (->bool (assq x mode-list)))
+       (->bool (mode:lookup x)))
 )
 
-; Return the name of the real mode of M.
+; Return the name of the real mode of MODE, a <mode> object.
 ; This is a no-op unless M is an alias in which case we return the
 ; real mode of the alias.
 
-(define (mode-real-name m)
-  (obj:name (mode:lookup m))
+(define (mode-real-name mode)
+  (obj:name mode)
 )
 
-; Return the real mode of M.
+; Return the real mode of MODE, a <mode> object.
 ; This is a no-op unless M is an alias in which case we return the
 ; real mode of the alias.
 
-(define (mode-real-mode m)
-  (mode:lookup (mode-real-name m))
+(define (mode-real-mode mode)
+  ;; Lookups of aliases return its real mode, so this function is a no-op.
+  ;; But that's an implementation detail, so I'm not ready to delete this
+  ;; function.
+  mode
 )
 
 ; Return the version of MODE to use in semantic expressions.
+; MODE is a <mode> object.
 ; This (essentially) converts aliases to their real value and then uses
 ; mode:sem-mode.  The implementation is the opposite but the effect is the
 ; same.
@@ -294,43 +338,44 @@
 ; disallow unsigned modes from being aliased and set sem-mode for aliased
 ; modes.
 
-(define (mode-sem-mode m)
-  (let* ((m1 (mode:lookup m))
-	 (sm (mode:sem-mode m1)))
+(define (mode-sem-mode mode)
+  (let ((sm (mode:sem-mode mode)))
     (if sm
 	sm
-	(mode-real-mode m1)))
+	(mode-real-mode mode)))
 )
 
-; Return #t if mode M1-NAME is bigger than mode M2-NAME.
+; Return #t if mode M1 is bigger than mode M2.
+; Both are <mode> objects.
 
-(define (mode-bigger? m1-name m2-name)
-  (> (mode:bits (mode:lookup m1-name))
-     (mode:bits (mode:lookup m2-name)))
+(define (mode-bigger? m1 m2)
+  (> (mode:bits m1)
+     (mode:bits m2))
 )
 
 ; Return a mode in mode class CLASS wide enough to hold BITS.
 ; This ignores "host" modes (e.g. INT,UINT).
 
 (define (mode-find bits class)
-  (let ((modes (find (lambda (mode)
-		       (and (eq? (mode:class (cdr mode)) class)
-			    (not (mode:host? (cdr mode)))))
-		     mode-list)))
+  (let* ((class-modes (hashq-ref /mode-class-table class))
+	 (modes (find (lambda (mode) (not (mode:host? mode)))
+		      (or class-modes nil))))		     
     (if (null? modes)
 	(error "invalid mode class" class))
     (let loop ((modes modes))
       (cond ((null? modes) (error "no modes for bits" bits))
-	    ((<= bits (mode:bits (cdar modes))) (cdar modes))
+	    ((<= bits (mode:bits (car modes))) (car modes))
 	    (else (loop (cdr modes))))))
 )
 
 ; Parse MODE-NAME and return the mode object.
+; CONTEXT is a <context> object for error messages.
 ; An error is signalled if MODE isn't valid.
 
-(define (parse-mode-name mode-name errtxt)
+(define (parse-mode-name context mode-name)
   (let ((m (mode:lookup mode-name)))
-    (if (not m) (parse-error errtxt "not a valid mode" mode-name))
+    (if (not m)
+	(parse-error context "not a valid mode" mode-name))
     m)
 )
 
@@ -381,7 +426,10 @@
 ; Kind of word size handling wanted.
 ; BIGGEST: pick the largest word size
 ; IDENTICAL: all word sizes must be identical
-(define -mode-word-sizes-kind #f)
+(define /mode-word-sizes-kind #f)
+
+;; Set to true if mode-set-word-modes! has been called.
+(define /mode-word-sizes-defined? #f)
 
 ; Called when a cpu-family is read in to set the word sizes.
 
@@ -396,9 +444,8 @@
 	(error "unable to find precise mode to match cpu word-bitsize" bitsize))
 
     ; Enforce word size kind.
-    (if (!= current-word-bitsize 0)
-	; word size already set
-	(case -mode-word-sizes-kind
+    (if /mode-word-sizes-defined?
+	(case /mode-word-sizes-kind
 	  ((IDENTICAL)
 	   (if (!= current-word-bitsize (mode:bits word-mode))
 	       (error "app requires all selected cpu families to have same word size"))
@@ -410,16 +457,14 @@
 
     (if (not ignore?)
 	(begin
-	  (set! WI word-mode)
-	  (set! UWI uword-mode)
-	  (set! AI uword-mode)
-	  (set! IAI uword-mode)
-	  (assq-set! mode-list 'WI word-mode)
-	  (assq-set! mode-list 'UWI uword-mode)
-	  (assq-set! mode-list 'AI uword-mode)
-	  (assq-set! mode-list 'IAI uword-mode)
+	  (/mode-set-word-params! WI word-mode)
+	  (/mode-set-word-params! UWI uword-mode)
+	  (/mode-set-word-params! AI uword-mode)
+	  (/mode-set-word-params! IAI uword-mode)
 	  ))
     )
+
+  (set! /mode-word-sizes-defined? #t)
 )
 
 ; Called by apps to indicate cpu:word-bitsize always has one value.
@@ -428,7 +473,7 @@
 ; Must be called before loading .cpu files.
 
 (define (mode-set-identical-word-bitsizes!)
-  (set! -mode-word-sizes-kind 'IDENTICAL)
+  (set! /mode-word-sizes-kind 'IDENTICAL)
 )
 
 ; Called by apps to indicate using the biggest cpu:word-bitsize of all
@@ -436,15 +481,16 @@
 ; Must be called before loading .cpu files.
 
 (define (mode-set-biggest-word-bitsizes!)
-  (set! -mode-word-sizes-kind 'BIGGEST)
+  (set! /mode-word-sizes-kind 'BIGGEST)
 )
 
 ; Ensure word sizes have been defined.
 ; This must be called after all cpu families have been defined
 ; and before any ifields, hardware, operand or insns have been read.
+; FIXME: sparc.cpu breaks this
 
 (define (mode-ensure-word-sizes-defined)
-  (if (eq? (mode-real-name WI) 'VOID)
+  (if (not /mode-word-sizes-defined?)
       (error "word sizes must be defined"))
 )
 
@@ -462,8 +508,23 @@
 (define INT #f)
 (define UINT #f)
 
+;; Sort the modes for each class.
+
+(define (/sort-mode-classes!)
+  (for-each (lambda (class-name)
+	      (hashq-set! /mode-class-table class-name
+			  (sort (hashq-ref /mode-class-table class-name)
+				(lambda (a b)
+				  (< (mode:bits a)
+				     (mode:bits b))))))
+	    '(RANDOM INT UINT FLOAT))
+
+  *UNSPECIFIED*
+)
+
 (define (mode-init!)
-  (set! -mode-word-sizes-kind 'IDENTICAL)
+  (set! /mode-word-sizes-kind 'IDENTICAL)
+  (set! /mode-word-sizes-defined? #f)
 
   (reader-add-command! 'define-full-mode
 		       "\
@@ -483,16 +544,31 @@ Define a mode, all arguments specified.
   ;             Elsewhere, functions are defined to perform the operation.
   (define-attr '(for mode) '(type boolean) '(name FN-SUPPORT))
 
-  (set! mode-list nil)
+  (set! /mode-class-table (make-hash-table 7))
+  (hashq-set! /mode-class-table 'RANDOM '())
+  (hashq-set! /mode-class-table 'INT '())
+  (hashq-set! /mode-class-table 'UINT '())
+  (hashq-set! /mode-class-table 'FLOAT '())
+
+  (set! /mode-table (make-hash-table 41))
 
   (let ((dfm define-full-mode))
     ; This list must be defined in order of increasing size among each type.
+    ; FIXME: still true?
 
     (dfm 'VOID "void" '() 'RANDOM 0 0 "void" "" #f #f #f) ; VOIDmode
 
     ; Special marker to indicate "use the default mode".
-    ; ??? Not yet used everywhere it should be.
     (dfm 'DFLT "default mode" '() 'RANDOM 0 0 "" "" #f #f #f)
+
+    ; Mode used in `symbol' rtxs.
+    (dfm 'SYM "symbol" '() 'RANDOM 0 0 "" "" #f #f #f)
+
+    ; Mode used in `current-insn' rtxs.
+    (dfm 'INSN "insn" '() 'RANDOM 0 0 "" "" #f #f #f)
+
+    ; Mode used in `current-mach' rtxs.
+    (dfm 'MACH "mach" '() 'RANDOM 0 0 "" "" #f #f #f)
 
     ; Not UINT on purpose.
     (dfm 'BI "one bit (0,1 not 0,-1)" '() 'INT 1 1 "int" "'x'" #f #f #f)
@@ -501,6 +577,10 @@ Define a mode, all arguments specified.
     (dfm 'HI "16 bit int" '() 'INT 16 2 "int" "'x'" #f #f #f)
     (dfm 'SI "32 bit int" '() 'INT 32 4 "int" "'x'" #f #f #f)
     (dfm 'DI "64 bit int" '(FN-SUPPORT) 'INT 64 8 "" "'D'" #f #f #f)
+
+    ; No unsigned versions on purpose for now.
+    (dfm 'TI "128 bit int" '(FN-SUPPORT) 'INT 128 16 "" "'T'" #f #f #f)
+    (dfm 'OI "256 bit int" '(FN-SUPPORT) 'INT 256 32 "" "'O'" #f #f #f)
 
     (dfm 'UQI "8 bit unsigned byte" '() 'UINT
 	 8 1 "unsigned int" "'x'" (mode:lookup 'QI) #f #f)
@@ -543,19 +623,29 @@ Define a mode, all arguments specified.
   (set! INT (mode:lookup 'INT))
   (set! UINT (mode:lookup 'UINT))
 
-  ; While setting the real values of WI/UWI/AI/IAI is defered to
-  ; mode-set-word-modes!, create entries in the list.
-  (set! WI (mode:add! 'WI (mode:lookup 'VOID)))
-  (set! UWI (mode:add! 'UWI (mode:lookup 'VOID)))
-  (set! AI (mode:add! 'AI (mode:lookup 'VOID)))
-  (set! IAI (mode:add! 'IAI (mode:lookup 'VOID)))
+  ;; While setting the real values of WI/UWI/AI/IAI is defered to
+  ;; mode-set-word-modes!, create usable entries in the table.
+  ;; The entries must be usable as h/w elements may be defined that use them.
+  (set! WI (object-copy-top (mode:lookup 'SI)))
+  (set! UWI (object-copy-top (mode:lookup 'USI)))
+  (set! AI (object-copy-top (mode:lookup 'USI)))
+  (set! IAI (object-copy-top (mode:lookup 'USI)))
+  (mode:add! 'WI WI)
+  (mode:add! 'UWI UWI)
+  (mode:add! 'AI AI)
+  (mode:add! 'IAI IAI)
 
-  ; Keep the fields sorted for mode-find.
-  (set! mode-list (reverse mode-list))
+  ;; Need to have usable mode classes at this point as define-cpu
+  ;; calls mode-set-word-modes!.
+  (/sort-mode-classes!)
 
   *UNSPECIFIED*
 )
 
 (define (mode-finish!)
+  ;; FIXME: mode:add! should keep the class sorted.
+  ;; It's a cleaner way to handle modes from the .cpu file.
+  (/sort-mode-classes!)
+
   *UNSPECIFIED*
 )

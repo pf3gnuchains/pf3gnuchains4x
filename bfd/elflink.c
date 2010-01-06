@@ -185,7 +185,7 @@ bfd_boolean
 _bfd_elf_link_create_dynamic_sections (bfd *abfd, struct bfd_link_info *info)
 {
   flagword flags;
-  register asection *s;
+  asection *s;
   const struct elf_backend_data *bed;
 
   if (! is_elf_hash_table (info->hash))
@@ -570,8 +570,7 @@ bfd_elf_record_link_assignment (bfd *output_bfd,
 
   if (provide && hidden)
     {
-      const struct elf_backend_data *bed = get_elf_backend_data (output_bfd);
-
+      bed = get_elf_backend_data (output_bfd);
       h->other = (h->other & ~ELF_ST_VISIBILITY (-1)) | STV_HIDDEN;
       (*bed->elf_backend_hide_symbol) (info, h, TRUE);
     }
@@ -1184,9 +1183,8 @@ _bfd_elf_merge_symbol (bfd *abfd,
 	     was referenced before.  */
 	  if (h->ref_regular)
 	    {
-	      const struct elf_backend_data *bed
-		= get_elf_backend_data (abfd);
 	      struct elf_link_hash_entry *vh = *sym_hash;
+
 	      vh->root.type = h->root.type;
 	      h->root.type = bfd_link_hash_indirect;
 	      (*bed->elf_backend_copy_indirect_symbol) (info, vh, h);
@@ -1548,7 +1546,6 @@ _bfd_elf_merge_symbol (bfd *abfd,
       /* Handle the case where we had a versioned symbol in a dynamic
 	 library and now find a definition in a normal object.  In this
 	 case, we make the versioned symbol point to the normal one.  */
-      const struct elf_backend_data *bed = get_elf_backend_data (abfd);
       flip->root.type = h->root.type;
       flip->root.u.undef.abfd = h->root.u.undef.abfd;
       h->root.type = bfd_link_hash_indirect;
@@ -8639,9 +8636,11 @@ elf_link_output_extsym (struct elf_link_hash_entry *h, void *data)
     strip = FALSE;
 
   /* If we're stripping it, and it's not a dynamic symbol, there's
-     nothing else to do unless it is a forced local symbol.  */
+     nothing else to do unless it is a forced local symbol or a
+     STT_GNU_IFUNC symbol.  */
   if (strip
       && h->dynindx == -1
+      && h->type != STT_GNU_IFUNC
       && !h->forced_local)
     return TRUE;
 
@@ -10109,9 +10108,9 @@ bfd_elf_final_link (bfd *abfd, struct bfd_link_info *info)
   bfd_boolean emit_relocs;
   bfd *dynobj;
   struct elf_final_link_info finfo;
-  register asection *o;
-  register struct bfd_link_order *p;
-  register bfd *sub;
+  asection *o;
+  struct bfd_link_order *p;
+  bfd *sub;
   bfd_size_type max_contents_size;
   bfd_size_type max_external_reloc_size;
   bfd_size_type max_internal_reloc_count;
@@ -10560,9 +10559,10 @@ bfd_elf_final_link (bfd *abfd, struct bfd_link_info *info)
 	  if (size == 0
 	      && (sec->flags & SEC_HAS_CONTENTS) == 0)
 	    {
-	      struct bfd_link_order *o = sec->map_tail.link_order;
-	      if (o != NULL)
-		size = o->offset + o->size;
+	      struct bfd_link_order *ord = sec->map_tail.link_order;
+
+	      if (ord != NULL)
+		size = ord->offset + ord->size;
 	    }
 	  end = sec->vma + size;
 	}
@@ -12593,4 +12593,16 @@ _bfd_elf_make_dynamic_reloc_section (asection *         sec,
     }
 
   return reloc_sec;
+}
+
+/* Copy the ELF symbol type associated with a linker hash entry.  */
+void
+_bfd_elf_copy_link_hash_symbol_type (bfd *abfd ATTRIBUTE_UNUSED,
+    struct bfd_link_hash_entry * hdest,
+    struct bfd_link_hash_entry * hsrc)
+{
+  struct elf_link_hash_entry *ehdest = (struct elf_link_hash_entry *)hdest;
+  struct elf_link_hash_entry *ehsrc = (struct elf_link_hash_entry *)hsrc;
+
+  ehdest->type = ehsrc->type;
 }

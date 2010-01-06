@@ -48,7 +48,7 @@
 #include "gdbtk.h"
 
 #include <fcntl.h>
-#include <sys/stat.h>
+#include "gdb_stat.h"
 #ifdef HAVE_SYS_IOCTL_H
 #include <sys/ioctl.h>
 #endif
@@ -215,7 +215,7 @@ TclDebug (char level, const char *fmt,...)
   va_start (args, fmt);
 
 
-  xvasprintf (&buf, fmt, args);
+  buf = xstrvprintf (fmt, args);
   va_end (args);
 
   v[0] = "dbug";
@@ -385,7 +385,7 @@ gdbtk_init (void)
 
   /* Set up some globals used by gdb to pass info to gdbtk
      for start up options and the like */
-  xasprintf (&s, "%d", inhibit_gdbinit);
+  s = xstrprintf ("%d", inhibit_gdbinit);
   Tcl_SetVar2 (gdbtk_interp, "GDBStartup", "inhibit_prefs", s, TCL_GLOBAL_ONLY);
   free(s);
    
@@ -758,7 +758,7 @@ view_command (char *args, int from_tty)
 
   if (args != NULL)
     {
-      xasprintf (&script,
+      script = xstrprintf (
 		 "[lindex [ManagedWin::find SrcWin] 0] location BROWSE_TAG [gdb_loc %s]",
 		 args);
       old_chain = make_cleanup (xfree, script);

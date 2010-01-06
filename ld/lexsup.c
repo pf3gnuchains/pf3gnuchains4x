@@ -90,6 +90,7 @@ enum option_values
   OPTION_NO_WHOLE_ARCHIVE,
   OPTION_OFORMAT,
   OPTION_RELAX,
+  OPTION_NO_RELAX,
   OPTION_RETAIN_SYMBOLS_FILE,
   OPTION_RPATH,
   OPTION_RPATH_LINK,
@@ -479,7 +480,9 @@ static const struct ld_option ld_options[] =
     '\0', NULL, N_("Reduce memory overheads, possibly taking much longer"),
     TWO_DASHES },
   { {"relax", no_argument, NULL, OPTION_RELAX},
-    '\0', NULL, N_("Relax branches on certain targets"), TWO_DASHES },
+    '\0', NULL, N_("Reduce code size by using target specific optimizations"), TWO_DASHES },
+  { {"no-relax", no_argument, NULL, OPTION_NO_RELAX},
+    '\0', NULL, N_("Do not use relaxation techniques to reduce code size"), TWO_DASHES },
   { {"retain-symbols-file", required_argument, NULL,
      OPTION_RETAIN_SYMBOLS_FILE},
     '\0', N_("FILE"), N_("Keep only symbols listed in FILE"), TWO_DASHES },
@@ -1132,8 +1135,11 @@ parse_args (unsigned argc, char **argv)
 	      command_line.rpath_link = buf;
 	    }
 	  break;
+	case OPTION_NO_RELAX:
+	  DISABLE_RELAXATION;
+	  break;
 	case OPTION_RELAX:
-	  command_line.relax = TRUE;
+	  ENABLE_RELAXATION;
 	  break;
 	case OPTION_RETAIN_SYMBOLS_FILE:
 	  add_keepsyms_file (optarg);
@@ -1453,18 +1459,15 @@ parse_args (unsigned argc, char **argv)
 	  command_line.accept_unknown_input_arch = FALSE;
 	  break;
 	case '(':
-	  if (ingroup)
-	    einfo (_("%P%F: may not nest groups (--help for usage)\n"));
-
 	  lang_enter_group ();
-	  ingroup = 1;
+	  ingroup++;
 	  break;
 	case ')':
 	  if (! ingroup)
 	    einfo (_("%P%F: group ended before it began (--help for usage)\n"));
 
 	  lang_leave_group ();
-	  ingroup = 0;
+	  ingroup--;
 	  break;
 
 	case OPTION_INIT:
@@ -1495,8 +1498,11 @@ parse_args (unsigned argc, char **argv)
 	}
     }
 
-  if (ingroup)
-    lang_leave_group ();
+  while (ingroup)
+    {
+      lang_leave_group ();
+      ingroup--;
+    }
 
   if (default_dirlist != NULL)
     {

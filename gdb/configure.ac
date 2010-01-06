@@ -1,6 +1,6 @@
 dnl Autoconf configure script for GDB, the GNU debugger.
 dnl Copyright (C) 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-dnl 2005, 2006, 2007, 2008, 2009
+dnl 2005, 2006, 2007, 2008, 2009, 2010
 dnl Free Software Foundation, Inc.
 dnl
 dnl This file is part of GDB.
@@ -28,6 +28,7 @@ AM_MAINTAINER_MODE
 AC_PROG_CC
 AC_USE_SYSTEM_EXTENSIONS
 gl_EARLY
+ACX_LARGEFILE
 AM_PROG_CC_STDC
 
 AC_CONFIG_AUX_DIR(..)
@@ -422,7 +423,7 @@ AC_SEARCH_LIBS(gethostbyname, nsl)
 AC_SEARCH_LIBS(socketpair, socket)
 
 # Link in zlib if we can.  This allows us to read compressed debug sections.
-AC_SEARCH_LIBS(zlibVersion, z, [AC_CHECK_HEADERS(zlib.h)])
+AM_ZLIB
 
 # On HP/UX we may need libxpdl for dlgetmodinfo (used by solib-pa64.c).
 AC_SEARCH_LIBS(dlgetmodinfo, [dl xpdl])

@@ -1,5 +1,5 @@
 /* Internal interfaces for the GNU/Linux specific target code for gdbserver.
-   Copyright (C) 2002, 2004, 2005, 2007, 2008, 2009
+   Copyright (C) 2002, 2004, 2005, 2007, 2008, 2009, 2010
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -201,7 +201,7 @@ struct lwp_info *find_lwp_pid (ptid_t ptid);
 
 /* From thread-db.c  */
 int thread_db_init (int use_events);
-void thread_db_free (struct process_info *);
+void thread_db_free (struct process_info *, int detaching);
 int thread_db_handle_monitor_command (char *);
 int thread_db_get_tls_address (struct thread_info *thread, CORE_ADDR offset,
 			       CORE_ADDR load_module, CORE_ADDR *address);

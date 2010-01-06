@@ -1,7 +1,7 @@
 /* Select target systems and architectures at runtime for GDB.
 
    Copyright (C) 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999,
-   2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
+   2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010
    Free Software Foundation, Inc.
 
    Contributed by Cygnus Support.
@@ -481,8 +481,10 @@ void
 target_terminal_inferior (void)
 {
   /* A background resume (``run&'') should leave GDB in control of the
-     terminal.  */
-  if (target_is_async_p () && !sync_execution)
+     terminal. Use target_can_async_p, not target_is_async_p, since at
+     this point the target is not async yet.  However, if sync_execution
+     is not set, we know it will become async prior to resume.  */
+  if (target_can_async_p () && !sync_execution)
     return;
 
   /* If GDB is resuming the inferior in the foreground, install
@@ -674,6 +676,8 @@ update_current_target (void)
       INHERIT (to_async_mask, t);
       INHERIT (to_find_memory_regions, t);
       INHERIT (to_make_corefile_notes, t);
+      INHERIT (to_get_bookmark, t);
+      INHERIT (to_goto_bookmark, t);
       /* Do not inherit to_get_thread_local_address.  */
       INHERIT (to_can_execute_reverse, t);
       INHERIT (to_thread_architecture, t);
@@ -1181,8 +1185,8 @@ target_section_by_addr (struct target_ops *target, CORE_ADDR addr)
   return NULL;
 }
 
-/* Perform a partial memory transfer.  The arguments and return
-   value are just as for target_xfer_partial.  */
+/* Perform a partial memory transfer.
+   For docs see target.h, to_xfer_partial.  */
 
 static LONGEST
 memory_xfer_partial (struct target_ops *ops, enum target_object object,
@@ -1360,6 +1364,8 @@ make_show_memory_breakpoints_cleanup (int show)
 		       (void *) (uintptr_t) current);
 }
 
+/* For docs see target.h, to_xfer_partial.  */
+
 static LONGEST
 target_xfer_partial (struct target_ops *ops,
 		     enum target_object object, const char *annex,
@@ -1473,6 +1479,11 @@ target_read_stack (CORE_ADDR memaddr, gdb_byte *myaddr, int len)
   else
     return EIO;
 }
+
+/* Write LEN bytes from MYADDR to target memory at address MEMADDR.
+   Returns either 0 for success or an errno value if any error occurs.
+   If an error occurs, no guarantee is made about how much data got written.
+   Callers that can deal with partial writes should call target_write.  */
 
 int
 target_write_memory (CORE_ADDR memaddr, const gdb_byte *myaddr, int len)
@@ -1637,11 +1648,7 @@ current_xfer_partial (struct target_ops *ops, enum target_object object,
     return -1;
 }
 
-/* Target vector read/write partial wrapper functions.
-
-   NOTE: cagney/2003-10-21: I wonder if having "to_xfer_partial
-   (inbuf, outbuf)", instead of separate read/write methods, make life
-   easier.  */
+/* Target vector read/write partial wrapper functions.  */
 
 static LONGEST
 target_read_partial (struct target_ops *ops,
@@ -1662,6 +1669,9 @@ target_write_partial (struct target_ops *ops,
 }
 
 /* Wrappers to perform the full transfer.  */
+
+/* For docs on target_read see target.h.  */
+
 LONGEST
 target_read (struct target_ops *ops,
 	     enum target_object object,
@@ -1750,7 +1760,6 @@ target_read_until_error (struct target_ops *ops,
   return len;
 }
 
-
 /* An alternative to target_write with progress callbacks.  */
 
 LONGEST
@@ -1785,6 +1794,8 @@ target_write_with_progress (struct target_ops *ops,
     }
   return len;
 }
+
+/* For docs on target_write see target.h.  */
 
 LONGEST
 target_write (struct target_ops *ops,
@@ -2767,6 +2778,21 @@ dummy_make_corefile_notes (bfd *ignore1, int *ignore2)
   return NULL;
 }
 
+/* Error-catcher for target_get_bookmark.  */
+static gdb_byte *
+dummy_get_bookmark (char *ignore1, int ignore2)
+{
+  tcomplain ();
+  return NULL;
+}
+
+/* Error-catcher for target_goto_bookmark.  */
+static void
+dummy_goto_bookmark (gdb_byte *ignore, int from_tty)
+{
+  tcomplain ();
+}
+
 /* Set up the handful of non-empty slots needed by the dummy target
    vector.  */
 
@@ -2787,6 +2813,8 @@ init_dummy_target (void)
   dummy_target.to_stratum = dummy_stratum;
   dummy_target.to_find_memory_regions = dummy_find_memory_regions;
   dummy_target.to_make_corefile_notes = dummy_make_corefile_notes;
+  dummy_target.to_get_bookmark = dummy_get_bookmark;
+  dummy_target.to_goto_bookmark = dummy_goto_bookmark;
   dummy_target.to_xfer_partial = default_xfer_partial;
   dummy_target.to_has_all_memory = (int (*) (struct target_ops *)) return_zero;
   dummy_target.to_has_memory = (int (*) (struct target_ops *)) return_zero;

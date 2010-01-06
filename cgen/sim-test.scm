@@ -1,5 +1,5 @@
 ; CPU description file generator for the simulator testsuite.
-; Copyright (C) 2000 Red Hat, Inc.
+; Copyright (C) 2000, 2009 Red Hat, Inc.
 ; This file is part of CGEN.
 ; See file COPYING.CGEN for details.
 
@@ -20,7 +20,8 @@
 (define (sim-test-analyze!)
   (opcodes-analyze!)
   (map (lambda
-	   (insn) (elm-xset! insn 'tmp (syntax-break-out (insn-syntax insn))))
+	   (insn) (elm-xset! insn 'tmp (syntax-break-out (insn-syntax insn)
+							 (obj-isa-list insn))))
        (current-insn-list))
   *UNSPECIFIED*
 )
@@ -122,7 +123,7 @@
 			       (cond ((string? sl)
 				      sl)
 				     ((operand? sl)
-				      (obj:name sl))
+				      (obj:str-name sl))
 				     (else
 				      (with-output-to-string
 					(lambda () (display sl)))))))
@@ -139,7 +140,7 @@
 			  "\n"))
 	  ((string? (car sl))
 	   (loop (cons (car sl) result) (cdr sl) td))
-	  (else (loop (cons (car td) result) (cdr sl) (cdr td)))))
+	  (else (loop (cons (->string (car td)) result) (cdr sl) (cdr td)))))
 )
 
 ; Generate a set of testcases for INSN.
@@ -175,7 +176,9 @@
   (string-append
    "\
 #/bin/sh
-# Generate test result data for " (current-arch-name) " simulator testing.
+# Generate test result data for "
+(symbol->string (current-arch-name))
+" simulator testing.
 # This script is machine generated.
 # It is intended to be run in the testsuite source directory.
 #
@@ -191,14 +194,18 @@ cd tmpdir
 		  (string-append
 		   "cat <<EOF > " (gen-file-name (obj:name insn)) ".cgs\n"
 		   ; FIXME: Need to record assembler line comment char in .cpu.
-		   "# " (current-arch-name) " testcase for " (backslash "$" (insn-syntax insn)) " -*- Asm -*-\n"
+		   "# "
+		   (symbol->string (current-arch-name))
+		   " testcase for " (backslash "$" (insn-syntax insn))
+		   " -*- Asm -*-\n"
 		   "# mach: "
 		   (let ((machs (insn-machs insn)))
 		     (if (null? machs)
 			 "all"
-			 (string-drop1 (string-map (lambda (mach)
-						     (string-append "," mach))
-						   machs))))
+			 (string-drop1
+			  (string-map (lambda (mach)
+					(string-append "," (symbol->string mach)))
+				      machs))))
 		   "\n\n"
 		   "\t.include \"testutils.inc\"\n\n"
 		   "\tstart\n\n"
@@ -215,9 +222,9 @@ cd tmpdir
   (logit 1 "Generating sim-allinsn.exp ...\n")
   (string-append
    "\
-# " (string-upcase (current-arch-name)) " simulator testsuite.
+# " (string-upcase (symbol->string (current-arch-name))) " simulator testsuite.
 
-if [istarget " (current-arch-name) "*-*-*] {
+if [istarget " (symbol->string (current-arch-name)) "*-*-*] {
     # load support procs (none yet)
     # load_lib cgen.exp
 

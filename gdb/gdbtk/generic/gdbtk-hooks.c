@@ -83,7 +83,7 @@ static void gdbtk_detach (void);
 static void gdbtk_file_changed (char *);
 static void gdbtk_exec_file_display (char *);
 static void gdbtk_call_command (struct cmd_list_element *, char *, int);
-static ptid_t gdbtk_wait (ptid_t, struct target_waitstatus *);
+static ptid_t gdbtk_wait (ptid_t, struct target_waitstatus *, int);
 int x_event (int);
 static int gdbtk_query (const char *, va_list);
 static void gdbtk_warning (const char *, va_list);
@@ -94,7 +94,8 @@ static void gdbtk_pre_add_symbol (const char *);
 static void gdbtk_print_frame_info (struct symtab *, int, int, int);
 static void gdbtk_post_add_symbol (void);
 static void gdbtk_register_changed (int regno);
-static void gdbtk_memory_changed (CORE_ADDR addr, int len);
+static void gdbtk_memory_changed (CORE_ADDR addr, int len,
+				  const bfd_byte *data);
 static void gdbtk_selected_frame_changed (int);
 static void gdbtk_context_change (int);
 static void gdbtk_error_begin (void);
@@ -129,6 +130,7 @@ gdbtk_add_hooks (void)
   observer_attach_tracepoint_modified (gdbtk_modify_tracepoint);
   observer_attach_tracepoint_deleted (gdbtk_delete_tracepoint);
   observer_attach_architecture_changed (gdbtk_architecture_changed);
+  observer_attach_memory_changed (gdbtk_memory_changed);
 
   /* Hooks */
   deprecated_call_command_hook = gdbtk_call_command;
@@ -158,7 +160,6 @@ gdbtk_add_hooks (void)
   deprecated_detach_hook            = gdbtk_detach;
 
   deprecated_register_changed_hook = gdbtk_register_changed;
-  deprecated_memory_changed_hook = gdbtk_memory_changed;
   deprecated_selected_frame_level_changed_hook = gdbtk_selected_frame_changed;
   deprecated_context_hook = gdbtk_context_change;
 
@@ -348,7 +349,7 @@ static void
 gdbtk_warning (const char *warning, va_list args)
 {
   char *buf;
-  xvasprintf (&buf, warning, args);
+  buf = xstrvprintf (warning, args);
   gdbtk_two_elem_cmd ("gdbtk_tcl_warning", buf);
   free(buf);
 }
@@ -379,7 +380,7 @@ void
 gdbtk_ignorable_warning (const char *class, const char *warning)
 {
   char *buf;
-  xasprintf (&buf, "gdbtk_tcl_ignorable_warning {%s} {%s}", class, warning);
+  buf = xstrprintf ("gdbtk_tcl_ignorable_warning {%s} {%s}", class, warning);
   if (Tcl_Eval (gdbtk_interp, buf) != TCL_OK)
     report_error ();
   free(buf);
@@ -393,7 +394,7 @@ gdbtk_register_changed (int regno)
 }
 
 static void
-gdbtk_memory_changed (CORE_ADDR addr, int len)
+gdbtk_memory_changed (CORE_ADDR addr, int len, const bfd_byte *data)
 {
   if (Tcl_Eval (gdbtk_interp, "gdbtk_memory_changed") != TCL_OK)
     report_error ();
@@ -488,7 +489,7 @@ gdbtk_readline_begin (char *format,...)
   char *buf;
 
   va_start (args, format);
-  xvasprintf (&buf, format, args);
+  buf = xstrvprintf (format, args);
   gdbtk_two_elem_cmd ("gdbtk_tcl_readline_begin", buf);
   free(buf);
 }
@@ -599,12 +600,12 @@ gdbtk_set_hook (struct cmd_list_element *cmdblk)
 
     case var_uinteger:
     case var_zinteger:
-      xasprintf (&buffer, "%u", *(unsigned int *) cmdblk->var);
+      buffer = xstrprintf ("%u", *(unsigned int *) cmdblk->var);
       Tcl_DStringAppendElement (&cmd, buffer);
       break;
 
     case var_integer:
-      xasprintf (&buffer, "%d", *(int *) cmdblk->var);
+      buffer = xstrprintf ("%d", *(int *) cmdblk->var);
       Tcl_DStringAppendElement (&cmd, buffer);
       break;
 
@@ -629,7 +630,7 @@ int
 gdbtk_load_hash (const char *section, unsigned long num)
 {
   char *buf;
-  xasprintf (&buf, "Download::download_hash %s %ld", section, num);
+  buf = xstrprintf ("Download::download_hash %s %ld", section, num);
   if (Tcl_Eval (gdbtk_interp, buf) != TCL_OK)
     report_error ();
   free(buf);
@@ -658,11 +659,11 @@ gdbtk_post_add_symbol ()
    target.  */
 
 static ptid_t
-gdbtk_wait (ptid_t ptid, struct target_waitstatus *ourstatus)
+gdbtk_wait (ptid_t ptid, struct target_waitstatus *ourstatus, int options)
 {
   gdbtk_force_detach = 0;
   gdbtk_start_timer ();
-  ptid = target_wait (ptid, ourstatus);
+  ptid = target_wait (ptid, ourstatus, options);
   gdbtk_stop_timer ();
   gdbtk_ptid = ptid;
 
@@ -684,7 +685,7 @@ gdbtk_query (const char *query, va_list args)
   char *buf;
   long val;
 
-  xvasprintf (&buf, query, args);
+  buf = xstrvprintf (query, args);
   gdbtk_two_elem_cmd ("gdbtk_tcl_query", buf);
   free(buf);
 
@@ -753,7 +754,7 @@ gdbtk_selected_frame_changed (int level)
 {
 #if TCL_MAJOR_VERSION == 8 && TCL_MINOR_VERSION < 1
   char *a;
-  xasprintf (&a, "%d", level);
+  a = xstrprintf ("%d", level);
   Tcl_SetVar (gdbtk_interp, "gdb_selected_frame_level", a, TCL_GLOBAL_ONLY);
   xfree (a);
 #else
@@ -806,7 +807,7 @@ gdbtk_annotate_signal (void)
      timeout. */
   Tcl_Eval (gdbtk_interp, "gdbtk_stop_idle_callback");
 
-  xasprintf (&buf, "gdbtk_signal %s {%s}",
+  buf = xstrprintf ("gdbtk_signal %s {%s}",
 	     target_signal_to_name (tp->stop_signal),
 	     target_signal_to_string (tp->stop_signal));
   if (Tcl_Eval (gdbtk_interp, buf) != TCL_OK)

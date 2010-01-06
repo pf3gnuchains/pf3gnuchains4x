@@ -1,6 +1,6 @@
 /* Data structures associated with breakpoints in GDB.
    Copyright (C) 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001,
-   2002, 2003, 2004, 2007, 2008, 2009 Free Software Foundation, Inc.
+   2002, 2003, 2004, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -457,6 +457,11 @@ struct breakpoint
        should be evaluated on the outermost frame.  */
     struct frame_id watchpoint_frame;
 
+    /* Holds the thread which identifies the frame this watchpoint
+       should be considered in scope for, or `null_ptid' if the
+       watchpoint should be evaluated in all threads.  */
+    ptid_t watchpoint_thread;
+
     /* For hardware watchpoints, the triggered status according to the
        hardware.  */
     enum watchpoint_triggered watchpoint_triggered;
@@ -629,6 +634,9 @@ extern struct breakpoint *bpstat_find_step_resume_breakpoint (bpstat);
    a watchpoint enabled.  */
 #define bpstat_explains_signal(bs) ((bs) != NULL)
 
+/* Nonzero is this bpstat causes a stop.  */
+extern int bpstat_causes_stop (bpstat);
+
 /* Nonzero if we should step constantly (e.g. watchpoints on machines
    without hardware support).  This isn't related to a specific bpstat,
    just to things like whether watchpoints are set.  */
@@ -727,6 +735,12 @@ extern int breakpoint_inserted_here_p (struct address_space *, CORE_ADDR);
 extern int regular_breakpoint_inserted_here_p (struct address_space *, CORE_ADDR);
 
 extern int software_breakpoint_inserted_here_p (struct address_space *, CORE_ADDR);
+
+/* Returns true if there's a hardware watchpoint or access watchpoint
+   inserted in the range defined by ADDR and LEN.  */
+extern int hardware_watchpoint_inserted_in_range (struct address_space *,
+						  CORE_ADDR addr,
+						  ULONGEST len);
 
 extern int breakpoint_thread_match (struct address_space *, CORE_ADDR, ptid_t);
 

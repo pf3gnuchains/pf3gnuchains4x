@@ -1,5 +1,5 @@
 ; Instruction definitions.
-; Copyright (C) 2000 Red Hat, Inc.
+; Copyright (C) 2000, 2009 Red Hat, Inc.
 ; This file is part of CGEN.
 ; See file COPYING.CGEN for details.
 
@@ -7,7 +7,7 @@
 
 (define <insn>
   (class-make '<insn>
-	      '(<ident>)
+	      '(<source-ident>)
 	      '(
 		; Used to explicitly specify mnemonic, now it's computed from
 		; syntax string.  ??? Might be useful as an override someday.
@@ -19,7 +19,8 @@
 		; The insn fields as specified in the .cpu file.
 		; Also contains values for constant fields.
 		iflds
-		(iflds-values . #f) ; Lazily computed cache
+		(/insn-value . #f) ; Lazily computed cache
+		(/insn-base-value . #f) ; Lazily computed cache
 
 		; RTL source of assertions of ifield values or #f if none.
 		; This is used, for example, by the decoder to help
@@ -43,7 +44,8 @@
 		tmp
 
 		; Instruction semantics.
-		; This is the rtl in source form or #f if there is none.
+		; This is the rtl in source form, as provided in the
+		; description file, or #f if there is none.
 		;
 		; There are a few issues (ick, I hate that word) to consider
 		; here:
@@ -61,10 +63,14 @@
 		; separate class.
 		; ??? Contents of trap expressions is wip.  It will probably
 		; be a sequence with an #:errchk modifier or some such.
-		(semantics . #f)
+		semantics
 
-		; The processed form of the above.
-		; Each element of rtl is replaced with the associated object.
+		; The processed form of the semantics.
+		; This remains #f for virtual insns (FIXME: keep?).
+		(canonical-semantics . #f)
+
+		; The processed form of the semantics.
+		; This remains #f for virtual insns (FIXME: keep?).
 		(compiled-semantics . #f)
 
 		; The mapping of the semantics onto the host.
@@ -72,7 +78,7 @@
 		; Another thing that will be needed is [in some cases] a more
 		; simplified version of the RTL for use by apps like compilers.
 		; Perhaps that's what this will become.
-		host-semantics
+		;host-semantics
 
 		; The function unit usage of the instruction.
 		timing
@@ -81,19 +87,20 @@
 )
 
 (method-make-make! <insn>
-		   '(name comment attrs syntax iflds ifield-assertion
-			  semantics timing)
+		   '(location name comment attrs syntax iflds ifield-assertion
+		     semantics timing)
 )
 
 ; Accessor fns
 
 (define-getters <insn> insn
   (syntax iflds ifield-assertion fmt-desc ifmt sfmt tmp
-	  semantics compiled-semantics host-semantics timing)
+	  semantics canonical-semantics compiled-semantics timing)
 )
 
 (define-setters <insn> insn
-  (fmt-desc ifmt sfmt tmp ifield-assertion compiled-semantics)
+  (fmt-desc ifmt sfmt tmp ifield-assertion
+   canonical-semantics compiled-semantics)
 )
 
 ; Return a boolean indicating if X is an <insn>.
@@ -123,6 +130,7 @@
 ; The mnemonic, as we define it, is everything up to, but not including, the
 ; first space or '$'.
 ; FIXME: Rename to syntax-mnemonic, and take a syntax string argument.
+; FIXME: Doesn't handle \$ to indicate a $ is actually in the mnemonic.
 
 (define (insn-mnemonic insn)
   (letrec ((mnem-len (lambda (str len)
@@ -181,8 +189,8 @@
 )
 
 (method-make-make! <multi-insn>
-		   '(name comment attrs syntax iflds ifield-assertion
-			  semantics timing)
+		   '(location name comment attrs syntax iflds ifield-assertion
+		     semantics timing)
 )
 
 (define-getters <multi-insn> multi-insn (sub-insns))
@@ -191,12 +199,12 @@
 
 (define (multi-insn? x) (class-instance? <multi-insn> x))
 
-; Subroutine of -sub-insn-make! to create the ifield list.
+; Subroutine of /sub-insn-make! to create the ifield list.
 ; Return encoding of {insn} with each element of {anyof-operands} replaced
 ; with {new-values}.
 ; {value-names} is a list of names of {anyof-operands}.
 
-(define (-sub-insn-ifields insn anyof-operands value-names new-values)
+(define (/sub-insn-ifields insn anyof-operands value-names new-values)
   ; (debug-repl-env insn anyof-operands value-names new-values)
 
   ; Delete ifields of {anyof-operands} and add those for {new-values}.
@@ -262,7 +270,7 @@
 ; NEW-VALUES is a list of the value to use for each corresponding element in
 ; ANYOF-OPERANDS.  Each element is a <derived-operand>.
 
-(define (-sub-insn-make! insn anyof-operands new-values)
+(define (/sub-insn-make! insn anyof-operands new-values)
   ;(debug-repl-env insn anyof-operands new-values)
   (assert (= (length anyof-operands) (length new-values)))
   (assert (all-true? (map anyof-operand? anyof-operands)))
@@ -283,7 +291,7 @@
 ;      (debug-repl-env insn anyof-operands new-values))
 
   (let* ((value-names (map obj:name anyof-operands))
-	 (ifields (-sub-insn-ifields insn anyof-operands value-names new-values))
+	 (ifields (/sub-insn-ifields insn anyof-operands value-names new-values))
 	 (known-values (ifld-known-values ifields)))
 
     ; Don't create insn if ifield assertions fail.
@@ -293,6 +301,7 @@
 
 	(let ((sub-insn
 	       (make <insn>
+		     (obj-location insn)
 		     (apply symbol-append
 			    (cons (obj:name insn)
 				  (map (lambda (anyof)
@@ -300,8 +309,8 @@
 				       new-values)))
 		     (obj:comment insn)
 		     (obj-atlist insn)
-		     (-anyof-merge-syntax (insn-syntax insn)
-					  value-names new-values)
+		     (/anyof-merge-syntax (insn-syntax insn)
+					  value-names new-values insn)
 		     ifields
 		     (insn-ifield-assertion insn) ; FIXME
 		     (anyof-merge-semantics (insn-semantics insn)
@@ -309,7 +318,16 @@
 		     (insn-timing insn)
 		     )))
 	  (logit 3 "   instantiated.\n")
-	  (current-insn-add! sub-insn))
+	  (current-insn-add! sub-insn)
+
+	  ;; FIXME: Hack to remove differences in generated code when we
+	  ;; switched to recording insns in hash tables.
+	  ;; See similar comment in arch-analyze-insns!.
+	  ;; Make the ordinals count backwards.
+	  ;; Subtract 2 because mach.scm:-get-next-ordinal! adds 1.
+	  (arch-set-next-ordinal! CURRENT-ARCH
+				  (- (arch-next-ordinal CURRENT-ARCH) 2))
+	  )
 
 	(begin
 	  logit 3 "    failed ifield assertions.\n")))
@@ -322,10 +340,7 @@
 ; the global list, and leave it to the caller to add them.
 
 (define (multi-insn-instantiate! multi-insn)
-  (logit 2 "Instantiating " (obj:name multi-insn) " ...\n")
-
   ; We shouldn't get called more than once.
-  ; ??? Though we could ignore second and subsequent calls.
   (assert (not (multi-insn-sub-insns multi-insn)))
 
   (let ((iflds (insn-iflds multi-insn)))
@@ -333,37 +348,40 @@
     ; What we want to create here is the set of all "anyof" alternatives.
     ; From that we create one <insn> per alternative.
 
-    (let ((anyof-iflds (find ifld-anyof-operand? iflds)))
+    (let* ((anyof-iflds (find ifld-anyof-operand? iflds))
+	   (anyof-operands (map ifld-get-value anyof-iflds)))
 
-      (assert (all-true? (map anyof-operand? (map ifld-get-value anyof-iflds))))
-      ;(display (obj:name multi-insn) (current-error-port))
-      ;(display " anyof: " (current-error-port))
-      ;(display (map obj:name (map ifld-get-value anyof-iflds)) (current-error-port))
-      ;(newline (current-error-port))
+      (assert (all-true? (map anyof-operand? anyof-operands)))
+      (logit 4 "  anyof: " (map obj:name anyof-operands) "\n")
+      (logit 4 "    choices: "
+	     (map (lambda (l) (map obj:name l))
+		  (map anyof-choices anyof-operands))
+	     "\n")
 
       ; Iterate over all combinations.
       ; TODO is a list with one element for each <anyof-operand>.
       ; Each element is in turn a list of all choices (<derived-operands>'s)
       ; for the <anyof-operand>.  Note that some of these values may be
       ; derived from nested <anyof-operand>'s.
-      ; ??? anyof-all-choices should cache the results.
+      ; ??? anyof-all-choices should cache the results. [Still useful?]
       ; ??? Need to cache results of assertion processing in addition or
-      ; instead of anyof-all-choices.
+      ; instead of anyof-all-choices. [Still useful?]
 
-      (let* ((anyof-operands (map ifld-get-value anyof-iflds))
-	     (todo (map anyof-all-choices anyof-operands))
+      (let* ((todo (map anyof-all-choices anyof-operands))
 	     (lengths (map length todo))
 	     (total (apply * lengths)))
+
+	(logit 2 "Instantiating " total " multi-insns for "
+	       (obj:name multi-insn) " ...\n")
+
 	; ??? One might prefer a `do' loop here, but every time I see one I
 	; have to spend too long remembering its syntax.
 	(let loop ((i 0))
 	  (if (< i total)
 	      (let* ((indices (split-value lengths i))
 		     (anyof-instances (map list-ref todo indices)))
-		;(display "derived: " (current-error-port))
-		;(display (map obj:name anyof-instances) (current-error-port))
-		;(newline (current-error-port))
-		(-sub-insn-make! multi-insn anyof-operands anyof-instances)
+		(logit 4 "Derived: " (map obj:name anyof-instances) "\n")
+		(/sub-insn-make! multi-insn anyof-operands anyof-instances)
 		(loop (+ i 1))))))))
 
   *UNSPECIFIED*
@@ -375,37 +393,53 @@
 ; All arguments are in raw (non-evaluated) form.
 ; The result is the parsed object or #f if insn isn't for selected mach(s).
 
-(define (-insn-parse errtxt name comment attrs syntax fmt ifield-assertion
+(define (/insn-parse context name comment attrs syntax fmt ifield-assertion
 		     semantics timing)
   (logit 2 "Processing insn " name " ...\n")
 
-  (let ((name (parse-name name errtxt))
-	(atlist-obj (atlist-parse attrs "cgen_insn" errtxt)))
+  ;; Pick out name first to augment the error context.
+  (let* ((name (parse-name context name))
+	 (context (context-append-name context name))
+	 (atlist-obj (atlist-parse context attrs "cgen_insn"))
+	 (isa-name-list (atlist-attr-value atlist-obj 'ISA #f)))
+
+    ;; Verify all specified ISAs are valid.
+    (if (not (all-true? (map current-isa-lookup isa-name-list)))
+	(parse-error context "unknown isa in isa list" isa-name-list))
 
     (if (keep-atlist? atlist-obj #f)
 
-	(let ((ifield-assertion (if (not (null? ifield-assertion))
-				    ifield-assertion
+	(let ((ifield-assertion (if (and ifield-assertion
+					 (not (null? ifield-assertion)))
+				    (rtx-canonicalize context
+						      'DFLT ;; BI?
+						      isa-name-list nil
+						      ifield-assertion)
 				    #f))
 	      (semantics (if (not (null? semantics))
 			     semantics
 			     #f))
-	      (format (-parse-insn-format (string-append errtxt " format")
-					  fmt))
-	      (comment (parse-comment comment errtxt))
+	      (format (/parse-insn-format
+		       (context-append context " format")
+		       (and (not (atlist-has-attr? atlist-obj 'VIRTUAL))
+			    (reader-verify-iformat? CURRENT-READER))
+		       isa-name-list
+		       fmt))
+	      (comment (parse-comment context comment))
 	      ; If there are no semantics, mark this as an alias.
 	      ; ??? Not sure this makes sense for multi-insns.
 	      (atlist-obj (if semantics
 			      atlist-obj
 			      (atlist-cons (bool-attr-make 'ALIAS #t)
 					   atlist-obj)))
-	      (syntax (parse-syntax syntax errtxt))
-	      (timing (parse-insn-timing errtxt timing))
+	      (syntax (parse-syntax context syntax))
+	      (timing (parse-insn-timing context timing))
 	      )
 
 	  (if (anyof-operand-format? format)
 
 	      (make <multi-insn>
+		(context-location context)
 		name comment atlist-obj
 		syntax
 		format
@@ -414,6 +448,7 @@
 		timing)
 
 	      (make <insn>
+		(context-location context)
 		name comment atlist-obj
 		syntax
 		format
@@ -428,12 +463,14 @@
 
 ; Read an instruction description.
 ; This is the main routine for analyzing instructions in the .cpu file.
-; ERRTXT is prepended to error messages to provide context.
+; This is also used to create virtual insns by apps like simulators.
+; CONTEXT is a <context> object for error messages.
 ; ARG-LIST is an associative list of field name and field value.
-; -insn-parse is invoked to create the <insn> object.
+; /insn-parse is invoked to create the <insn> object.
 
-(define (insn-read errtxt . arg-list)
-  (let ((name nil)
+(define (insn-read context . arg-list)
+  (let (
+	(name nil)
 	(comment "")
 	(attrs nil)
 	(syntax nil)
@@ -442,6 +479,7 @@
 	(semantics nil)
 	(timing nil)
 	)
+
     ; Loop over each element in ARG-LIST, recording what's found.
     (let loop ((arg-list arg-list))
       (if (null? arg-list)
@@ -457,19 +495,20 @@
 	      ((ifield-assertion) (set! ifield-assertion (cadr arg)))
 	      ((semantics) (set! semantics (cadr arg)))
 	      ((timing) (set! timing (cdr arg)))
-	      (else (parse-error errtxt "invalid insn arg" arg)))
+	      (else (parse-error context "invalid insn arg" arg)))
 	    (loop (cdr arg-list)))))
+
     ; Now that we've identified the elements, build the object.
-    (-insn-parse errtxt name comment attrs syntax fmt ifield-assertion
-		 semantics timing)
-    )
+    (/insn-parse context name comment attrs syntax fmt ifield-assertion
+		 semantics timing))
 )
 
 ; Define an instruction object, name/value pair list version.
 
 (define define-insn
   (lambda arg-list
-    (let ((i (apply insn-read (cons "define-insn" arg-list))))
+    (let ((i (apply insn-read (cons (make-current-context "define-insn")
+				    arg-list))))
       (if i
 	  (current-insn-add! i))
       i))
@@ -479,7 +518,8 @@
 
 (define (define-full-insn name comment attrs syntax fmt ifield-assertion
 	  semantics timing)
-  (let ((i (-insn-parse "define-full-insn" name comment attrs
+  (let ((i (/insn-parse (make-current-context "define-full-insn")
+			name comment attrs
 			syntax fmt ifield-assertion
 			semantics timing)))
     (if i
@@ -494,19 +534,19 @@
 ; in turn be a list of strings.
 ; ??? Not sure this extra flexibility is worth it yet.
 
-(define (parse-syntax syntax errtxt)
+(define (parse-syntax context syntax)
   (cond ((list? syntax)
-	 (string-map (lambda (elm) (parse-syntax elm errtxt)) syntax))
+	 (string-map (lambda (elm) (parse-syntax context elm)) syntax))
 	((or (string? syntax) (symbol? syntax))
 	 syntax)
-	(else (parse-error errtxt "improper syntax" syntax)))
+	(else (parse-error context "improper syntax" syntax)))
 )
 
-; Subroutine of -parse-insn-format to parse a symbol ifield spec.
+; Subroutine of /parse-insn-format to parse a symbol ifield spec.
 
-(define (-parse-insn-format-symbol errtxt sym)
+(define (/parse-insn-format-symbol context isa-name-list sym)
   ;(debug-repl-env sym)
-  (let ((op (current-op-lookup sym)))
+  (let ((op (current-op-lookup sym isa-name-list)))
     (if op
 	(cond ((derived-operand? op)
 	       ; There is a one-to-one relationship b/w derived operands and
@@ -523,10 +563,10 @@
 	(let ((e (ienum-lookup-val sym)))
 	  (if e
 	      (ifld-new-value (ienum:fld (cdr e)) (car e))
-	      (parse-error errtxt "bad format element, expecting symbol to be operand or insn enum" sym)))))
+	      (parse-error context "bad format element, expecting symbol to be operand or insn enum" sym)))))
 )
 
-; Subroutine of -parse-insn-format to parse an (ifield-name value) ifield spec.
+; Subroutine of /parse-insn-format to parse an (ifield-name value) ifield spec.
 ;
 ; The last element is the ifield's value.  It must be an integer.
 ; ??? Whether it can be negative is still unspecified.
@@ -538,37 +578,85 @@
 ;
 ; ??? Error messages need improvement, but that's generally true of cgen.
 
-(define (-parse-insn-format-ifield-spec errtxt ifld ifld-spec)
+(define (/parse-insn-format-ifield-spec context ifld ifld-spec)
   (if (!= (length ifld-spec) 2)
-      (parse-error errtxt "bad ifield format, should be (ifield-name value)" ifld-spec))
+      (parse-error context "bad ifield format, should be (ifield-name value)" ifld-spec))
 
   (let ((value (cadr ifld-spec)))
     ; ??? This use to allow (ifield-name operand-name).  That's how
     ; `operand-name' elements are handled, but there's no current need
     ; to handle (ifield-name operand-name).
-    (if (not (integer? value))
-	(parse-error errtxt "ifield value not an integer" ifld-spec))
-    (ifld-new-value ifld value))
+    (cond ((integer? value)
+	   (ifld-new-value ifld value))
+	  ((symbol? value)
+	   (let ((e (enum-lookup-val value)))
+	     (if (not e)
+		 (parse-error context "symbolic ifield value not an enum" ifld-spec))
+	     (ifld-new-value ifld (car e))))
+	  (else
+	   (parse-error context "ifield value not an integer or enum" ifld-spec))))
 )
 
-; Subroutine of -parse-insn-format to parse an
+; Subroutine of /parse-insn-format to parse an
 ; (ifield-name value) ifield spec.
 ; ??? There is room for growth in the specification syntax here.
 ; Possibilities are (ifield-name|operand-name [options] [value]).
 
-(define (-parse-insn-format-list errtxt spec)
-  (let ((ifld (current-ifld-lookup (car spec))))
+(define (/parse-insn-format-list context isa-name-list spec)
+  (let ((ifld (current-ifld-lookup (car spec) isa-name-list)))
     (if ifld
-	(-parse-insn-format-ifield-spec errtxt ifld spec)
-	(parse-error errtxt "unknown ifield" spec)))
+	(/parse-insn-format-ifield-spec context ifld spec)
+	(parse-error context "unknown ifield" spec)))
+)
+
+; Subroutine of /parse-insn-format to simplify it.
+; Parse the provided iformat spec and return the list of ifields.
+; ISA-NAME-lIST is the ISA attribute of the containing insn.
+
+(define (/parse-insn-iformat-iflds context isa-name-list fld-list)
+  (if (null? fld-list)
+      nil ; field list unspecified
+      (case (car fld-list)
+	((+) (map (lambda (fld)
+		    (let ((f (if (string? fld)
+				 (string->symbol fld)
+				 fld)))
+		      (cond ((symbol? f)
+			     (/parse-insn-format-symbol context isa-name-list f))
+			    ((and (list? f)
+				  ; ??? This use to allow <ifield> objects
+				  ; in the `car' position.  Checked for below.
+				  (symbol? (car f)))
+			     (/parse-insn-format-list context isa-name-list f))
+			    (else
+			     (if (and (list? f)
+				      (ifield? (car f)))
+				 (parse-error context "FIXME: <ifield> object in format spec" f))
+			     (parse-error context "bad format element, neither symbol nor ifield spec" f)))))
+		  (cdr fld-list)))
+	((=) (begin
+	       (if (or (!= (length fld-list) 2)
+		       (not (symbol? (cadr fld-list))))
+		   (parse-error context
+				"bad `=' format spec, should be `(= insn-name)'"
+				fld-list))
+	       (let ((insn (current-insn-lookup (cadr fld-list) isa-name-list)))
+		 (if (not insn)
+		     (parse-error context "unknown insn" (cadr fld-list)))
+		 (insn-iflds insn))))
+	(else
+	 (parse-error context "format must begin with `+' or `='" fld-list))
+	))
 )
 
 ; Given an insn format field from a .cpu file, replace it with a list of
 ; ifield objects with the values assigned.
+; ISA-NAME-LIST is the ISA attribute of the containing insn.
+; If VERIFY? is non-#f, perform various checks on the format.
 ;
 ; An insn format field is a list of ifields that make up the instruction.
 ; All bits must be specified, including reserved bits
-; [at present no checking is made of this, but the rule still holds].
+; [at present little checking is made of this, but the rule still holds].
 ;
 ; A normal entry begins with `+' and then consist of the following:
 ; - operand name
@@ -593,40 +681,74 @@
 ; It's called for each instruction, and is one of the more expensive routines
 ; in insn parsing.
 
-(define (-parse-insn-format errtxt fld-list)
-  (if (null? fld-list)
-      nil ; field list unspecified
-      (case (car fld-list)
-	((+) (map (lambda (fld)
-		    (let ((f (if (string? fld)
-				 (string->symbol fld)
-				 fld)))
-		      (cond ((symbol? f)
-			     (-parse-insn-format-symbol errtxt f))
-			    ((and (list? f)
-				  ; ??? This use to allow <ifield> objects
-				  ; in the `car' position.  Checked for below.
-				  (symbol? (car f)))
-			     (-parse-insn-format-list errtxt f))
-			    (else
-			     (if (and (list? f)
-				      (ifield? (car f)))
-				 (parse-error errtxt "FIXME: <ifield> object in format spec"))
-			     (parse-error errtxt "bad format element, neither symbol nor ifield spec" f)))))
-		  (cdr fld-list)))
-	((=) (begin
-	       (if (or (!= (length fld-list) 2)
-		       (not (symbol? (cadr fld-list))))
-		   (parse-error errtxt
-				"bad `=' format spec, should be `(= insn-name)'"
-				fld-list))
-	       (let ((insn (current-insn-lookup (cadr fld-list))))
-		 (if (not insn)
-		     (parse-error errtxt "unknown insn" (cadr fld-list)))
-		 (insn-iflds insn))))
-	(else
-	 (parse-error errtxt "format must begin with `+' or `='" fld-list))
-	))
+(define (/parse-insn-format context verify? isa-name-list ifld-list)
+  (let* ((parsed-ifld-list
+	  (/parse-insn-iformat-iflds context isa-name-list ifld-list)))
+
+    ;; NOTE: We could sort the fields here, but it introduces differences
+    ;; in the generated opcodes files.  Later it might be a good thing to do
+    ;; but keeping the output consistent is important right now.
+    ;;   (sorted-ifld-list (sort-ifield-list parsed-ifld-list
+    ;;                                       (not (current-arch-insn-lsb0?))))
+    ;; The rest of the code assumes the list isn't sorted.
+    ;; Is there a benefit to removing this assumption?  Note that
+    ;; multi-ifields can be discontiguous, so the sorting isn't perfect.
+
+    (if verify?
+
+	;; Just pick the first ISA, the base len for each should be the same.
+	;; If not this is caught by compute-insn-base-mask-length.
+	(let* ((isa (current-isa-lookup (car isa-name-list)))
+	       (base-len (isa-base-insn-bitsize isa))
+	       (pretty-print-iflds (lambda (iflds)
+				     (if (null? iflds)
+					 " none provided"
+					 (string-map (lambda (f)
+						       (string-append " "
+								      (ifld-pretty-print f)))
+						     iflds)))))
+
+	  ;; Perform some error checking.
+	  ;; Look for overlapping ifields and missing bits.
+	  ;; With derived ifields this is really hard, so only do the base insn
+	  ;; for now.  Do the simple test for now, it doesn't catch everything,
+	  ;; but it should catch a lot.
+	  ;; ??? One thing we don't catch yet is overlapping bits.
+
+	  (let* ((base-iflds (find (lambda (f)
+				     (not (ifld-beyond-base? f)))
+				   (ifields-simple-ifields parsed-ifld-list)))
+		 (base-iflds-length (apply + (map ifld-length base-iflds))))
+
+	    ;; FIXME: We don't use parse-error here because some existing ports
+	    ;; have problems, and I don't have time to fix them right now.
+	    (cond ((< base-iflds-length base-len)
+		   (parse-warning context
+				  (string-append
+				   "insufficient number of bits specified in base insn\n"
+				   "ifields:"
+				   (pretty-print-iflds parsed-ifld-list)
+				   "\nprovided spec")
+				  ifld-list))
+		  ((> base-iflds-length base-len)
+		   (parse-warning context
+				  (string-append
+				   "too many or duplicated bits specified in base insn\n"
+				   "ifields:"
+				   (pretty-print-iflds parsed-ifld-list)
+				   "\nprovided spec")
+				  ifld-list)))
+
+	    ;; Detect duplicate ifields.
+	    (if (!= (length base-iflds)
+		    (length (obj-list-nub base-iflds)))
+		(parse-error-continuable context
+					 "duplicate ifields present"
+					 ifld-list))
+	    )
+	  ))
+
+    parsed-ifld-list)
 )
 
 ; Return a boolean indicating if IFLD-LIST contains anyof operands.
@@ -766,7 +888,7 @@
 ; eg> mask-superset? #b1100 #b1000 #b1010 #b1010 -> #f
 ; eg> mask-superset? #b1100 #b1000 #b1110 #b1100 -> #f
 ; eg> mask-superset? #b1100 #b1000 #b1100 #b1000 -> #f
-; 
+
 (define (mask-superset? m1 v1 m2 v2)
   (let ((result
 	 (and (= (cg-logand m1 m2) m1)
@@ -780,15 +902,27 @@
     result)
 )
 
+;; Return a boolean indicating if INSN is a cti [control transfer insn]
+;; according the its attributes.
+;;
+;; N.B. This only looks at the insn's atlist, which only contains what was
+;; specified in the .cpu file.  .cpu files are not required to manually mark
+;; CTI insns.  Basically this exists as an escape hatch in case semantic-attrs
+;; gets it wrong.
 
+(define (insn-cti-attr? insn)
+  (atlist-cti? (obj-atlist insn))
+)
 
-
-; Return a boolean indicating if INSN is a cti [control transfer insn].
-; This includes SKIP-CTI insns even though they don't terminate a basic block.
-; ??? SKIP-CTI insns are wip, waiting for more examples of how they're used.
+;; Return a boolean indicating if INSN is a cti [control transfer insn].
+;; This includes SKIP-CTI insns even though they don't terminate a basic block.
+;; ??? SKIP-CTI insns are wip, waiting for more examples of how they're used.
+;;
+;; N.B. This requires the <sformat> of INSN.
 
 (define (insn-cti? insn)
-  (atlist-cti? (obj-atlist insn))
+  (or (insn-cti-attr? insn)
+      (sfmt-cti? (insn-sfmt insn)))
 )
 
 ; Return a boolean indicating if INSN can be executed in parallel.
@@ -836,19 +970,39 @@
 ;
 ; See also (compute-insn-base-mask).
 ;
+; FIXME: For non-fixed-length ISAs, using this doesn't feel right.
+
 (define (insn-value insn)
-  (if (elm-get insn 'iflds-values)
-      (elm-get insn 'iflds-values)
+  (if (elm-get insn '/insn-value)
+      (elm-get insn '/insn-value)
       (let* ((base-len (insn-base-mask-length insn))
 	     (value (apply +
 			   (map (lambda (fld) (ifld-value fld base-len (ifld-get-value fld)))
 				(find ifld-constant?
-				      (collect ifld-base-ifields (insn-iflds insn))))
+				      (ifields-base-ifields (insn-iflds insn))))
 			   )))
-	(elm-set! insn 'iflds-values value)
-	value)
-      )
-  )
+	(elm-set! insn '/insn-value value)
+	value))
+)
+
+;; Return the base value of INSN.
+
+(define (insn-base-value insn)
+  (if (elm-get insn '/insn-base-value)
+      (elm-get insn '/insn-base-value)
+      (let* ((base-len (insn-base-mask-length insn))
+	     (constant-base-iflds
+	      (find (lambda (f)
+		      (and (ifld-constant? f)
+			   (not (ifld-beyond-base? f))))
+		    (ifields-base-ifields (insn-iflds insn))))
+	     (base-value (apply +
+				(map (lambda (f)
+				       (ifld-value f base-len (ifld-get-value f)))
+				     constant-base-iflds))))
+	(elm-set! insn '/insn-base-value base-value)
+	base-value))
+)
 
 ; Insn operand utilities.
 
@@ -864,37 +1018,40 @@
 ; Create a list of syntax strings broken up into a list of characters and
 ; operand objects.
 
-(define (syntax-break-out syntax)
+(define (syntax-break-out syntax isa-name-list)
   (let ((result nil))
     ; ??? The style of the following could be more Scheme-like.  Later.
     (let loop ()
       (if (> (string-length syntax) 0)
 	  (begin
 	    (cond 
-	     ; Handle escaped syntax metacharacters 
+	     ; Handle escaped syntax metacharacters.
 	     ((char=? #\\ (string-ref syntax 0))
 	      (begin
 		(if (= (string-length syntax) 1)
 		    (parse-error context "syntax-break-out: missing char after '\\' in " syntax))
 		(set! result (cons (substring syntax 1 2) result))
 		(set! syntax (string-drop 2 syntax))))
-		; Handle operand reference
+		; Handle operand reference.
 	     ((char=? #\$ (string-ref syntax 0))
 	      ; Extract the symbol from the string, get the operand.
+	      ; FIXME: Will crash if $ is last char in string.
 	      (if (char=? #\{ (string-ref syntax 1))
 		  (let ((n (string-index syntax #\})))
 		    (set! result (cons (current-op-lookup
 					(string->symbol
-					 (substring syntax 2 n)))
+					 (substring syntax 2 n))
+					isa-name-list)
 				       result))
 		    (set! syntax (string-drop (+ 1 n) syntax)))
 		  (let ((n (id-len (string-drop1 syntax))))
 		    (set! result (cons (current-op-lookup
 					(string->symbol
-					 (substring syntax 1 (+ 1 n))))
+					 (substring syntax 1 (+ 1 n)))
+					isa-name-list)
 				       result))
 		    (set! syntax (string-drop (+ 1 n) syntax)))))
-	     ; Handle everything else
+	     ; Handle everything else.
 	     (else (set! result (cons (substring syntax 0 1) result))
 		   (set! syntax (string-drop1 syntax))))
 	    (loop))))
@@ -935,7 +1092,7 @@ Define an instruction, all arguments specified.
   *UNSPECIFIED*
 )
 
-; Called before a . cpu file is read in to install any builtins.
+; Called before a .cpu file is read in to install any builtins.
 
 (define (insn-builtin!)
   ; Standard insn attributes.

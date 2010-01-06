@@ -3816,6 +3816,21 @@ done
 
 
 
+old_LIBS="$LIBS"
+LIBS="$LIBS -ldl"
+for ac_func in dladdr
+do :
+  ac_fn_c_check_func "$LINENO" "dladdr" "ac_cv_func_dladdr"
+if test "x$ac_cv_func_dladdr" = x""yes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_DLADDR 1
+_ACEOF
+
+fi
+done
+
+LIBS="$old_LIBS"
+
 have_errno=no
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for errno" >&5
 $as_echo_n "checking for errno... " >&6; }
@@ -4004,6 +4019,35 @@ rm -f conftest*
 fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $gdb_cv_i386_is_x86_64" >&5
 $as_echo "$gdb_cv_i386_is_x86_64" >&6; }
+    ;;
+  m68k-*-*)
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking if building for Coldfire" >&5
+$as_echo_n "checking if building for Coldfire... " >&6; }
+if test "${gdb_cv_m68k_is_coldfire+set}" = set; then :
+  $as_echo_n "(cached) " >&6
+else
+  save_CPPFLAGS="$CPPFLAGS"
+                    CPPFLAGS="$CPPFLAGS $CFLAGS"
+                    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+#ifdef __mcoldfire__
+got it
+#endif
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "got it" >/dev/null 2>&1; then :
+  gdb_cv_m68k_is_coldfire=yes
+else
+  gdb_cv_m68k_is_coldfire=no
+fi
+rm -f conftest*
+
+                    CPPFLAGS="$save_CPPFLAGS"
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $gdb_cv_m68k_is_coldfire" >&5
+$as_echo "$gdb_cv_m68k_is_coldfire" >&6; }
     ;;
 esac
 

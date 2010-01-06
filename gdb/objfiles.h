@@ -1,7 +1,7 @@
 /* Definitions for symbol file management in GDB.
 
    Copyright (C) 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001,
-   2002, 2003, 2004, 2007, 2008, 2009 Free Software Foundation, Inc.
+   2002, 2003, 2004, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -251,6 +251,7 @@ struct objfile
 
     struct bcache *psymbol_cache;	/* Byte cache for partial syms */
     struct bcache *macro_cache;          /* Byte cache for macros */
+    struct bcache *filename_cache;	 /* Byte cache for file names.  */
 
     /* Hash table for mapping symbol names to demangled names.  Each
        entry in the hash table is actually two consecutive strings,

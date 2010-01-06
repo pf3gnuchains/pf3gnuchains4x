@@ -1,5 +1,5 @@
 /* Tcl/Tk command definitions for Insight.
-   Copyright (C) 1994, 1995, 1996, 1997, 1998, 1999, 2001, 2002, 2003, 2004, 2007, 2008
+   Copyright (C) 1994, 1995, 1996, 1997, 1998, 1999, 2001, 2002, 2003, 2004, 2007, 2008, 2010
    Free Software Foundation, Inc.
 
    Written by Stu Grossman <grossman@cygnus.com> of Cygnus Support.
@@ -44,6 +44,8 @@
 #include "language.h"
 #include "target.h"
 #include "valprint.h"
+#include "regcache.h"
+#include "arch-utils.h"
 
 /* tcl header files includes varargs.h unless HAS_STDARG is defined,
    but gdb uses stdarg.h, so make sure HAS_STDARG is defined.  */
@@ -63,7 +65,7 @@
 #include <sys/ioctl.h>
 #endif
 #include <sys/time.h>
-#include <sys/stat.h>
+#include "gdb_stat.h"
 
 #include "gdb_string.h"
 #include "dis-asm.h"
@@ -636,7 +638,7 @@ gdb_eval (ClientData clientData, Tcl_Interp *interp,
   stb = mem_fileopen ();
   make_cleanup_ui_file_delete (stb);
   val_print (value_type (val), value_contents (val),
-	     value_embedded_offset (val), VALUE_ADDRESS (val),
+	     value_embedded_offset (val), value_address (val),
 	     stb, 0, &opts, current_language);
   result = ui_file_xstrdup (stb, &dummy);
   Tcl_SetObjResult (interp, Tcl_NewStringObj (result, -1));
@@ -1811,7 +1813,7 @@ gdbtk_load_source (ClientData clientData, struct symtab *symtab,
 	      /* FIXME: Convert to Tcl_SetVar2Ex when we move to 8.2.  This
 		 will allow us avoid converting widget_line_no into a string. */
 	      
-	      xasprintf (&buffer, "%d", client_data->widget_line_no);
+	      buffer = xstrprintf ("%d", client_data->widget_line_no);
 	      
 	      Tcl_SetVar2 (client_data->interp, client_data->map_arr,
 			   Tcl_DStringValue (&client_data->src_to_line_prefix),
@@ -1894,16 +1896,16 @@ gdbtk_load_asm (ClientData clientData, CORE_ADDR pc,
   for (i = 0; i < 3; i++)
     Tcl_SetObjLength (client_data->result_obj[i], 0);
 
-  fputs_filtered (paddress (pc), gdb_stdout);
+  fputs_filtered (paddress (get_current_arch (), pc), gdb_stdout);
   gdb_flush (gdb_stdout);
 
   result_ptr->obj_ptr = client_data->result_obj[1];
-  print_address_symbolic (pc, gdb_stdout, 1, "\t");
+  print_address_symbolic (get_current_arch (), pc, gdb_stdout, 1, "\t");
   gdb_flush (gdb_stdout);
 
   result_ptr->obj_ptr = client_data->result_obj[2];
   /* FIXME: cagney/2003-09-08: This should use gdb_disassembly.  */
-  insn = gdb_print_insn (pc, gdb_stdout, NULL);
+  insn = gdb_print_insn (get_current_arch (), pc, gdb_stdout, NULL);
   gdb_flush (gdb_stdout);
 
   client_data->widget_line_no++;
@@ -1927,7 +1929,7 @@ gdbtk_load_asm (ClientData clientData, CORE_ADDR pc,
       /* FIXME: Convert to Tcl_SetVar2Ex when we move to 8.2.  This
 	 will allow us avoid converting widget_line_no into a string. */
       
-      xasprintf (&buffer, "%d", client_data->widget_line_no);
+      buffer = xstrprintf ("%d", client_data->widget_line_no);
       
       Tcl_SetVar2 (client_data->interp, client_data->map_arr,
 		   Tcl_DStringValue (&client_data->pc_to_line_prefix),
@@ -2141,10 +2143,13 @@ gdb_loc (ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *CONST obj
       else
 	{
 	  struct frame_info *frame;
+	  CORE_ADDR frame_pc, current_pc;
 
 	  frame = get_selected_frame (NULL);
-
-	  if (get_frame_pc (frame) != read_pc ())
+	  current_pc = regcache_read_pc (get_current_regcache ());
+	  frame_pc = get_frame_pc (frame);
+ 
+	  if (frame_pc != current_pc)
 	    {
 	      /* Note - this next line is not correct on all architectures.
 		 For a graphical debugger we really want to highlight the 
@@ -2152,12 +2157,12 @@ gdb_loc (ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *CONST obj
 		 Many architectures have the next instruction saved as the
 		 pc on the stack, so what happens is the next instruction 
 		 is highlighted. FIXME */
-	      pc = get_frame_pc (frame);
+	      pc = frame_pc;
 	      find_frame_sal (frame, &sal);
 	    }
 	  else
 	    {
-	      pc = read_pc ();
+	      pc = current_pc;
 	      sal = find_pc_line (pc, 0);
 	    }
 	}
@@ -2267,7 +2272,7 @@ hex2bin (const char *hex, char *bin, int count)
   int incr = 2;
 
 
-  if (gdbarch_byte_order (current_gdbarch) == BFD_ENDIAN_LITTLE)
+  if (gdbarch_byte_order (get_current_arch ()) == BFD_ENDIAN_LITTLE)
     {
       /* need to read string in reverse */
       hex += count - 2;
@@ -2444,7 +2449,9 @@ gdb_update_mem (ClientData clientData, Tcl_Interp *interp,
   memset (mbuf, 0, nbytes + 32);
   mptr = cptr = mbuf;
 
-  rnum = target_read (&current_target, TARGET_OBJECT_MEMORY, NULL,
+  /* Dispatch memory reads to the topmost target, not the flattened
+     current_target.  */
+  rnum = target_read (current_target.beneath, TARGET_OBJECT_MEMORY, NULL,
 		      mbuf, addr, nbytes);
   if (rnum <= 0)
     {
@@ -2460,23 +2467,23 @@ gdb_update_mem (ClientData clientData, Tcl_Interp *interp,
   switch (size)
     {
     case 1:
-      val_type = builtin_type_int8;
+      val_type = builtin_type (get_current_arch ())->builtin_int8;
       asize = 'b';
       break;
     case 2:
-      val_type = builtin_type_int16;
+      val_type = builtin_type (get_current_arch ())->builtin_int16;
       asize = 'h';
       break;
     case 4:
-      val_type = builtin_type_int32;
+      val_type = builtin_type (get_current_arch ())->builtin_int32;
       asize = 'w';
       break;
     case 8:
-      val_type = builtin_type_int64;
+      val_type = builtin_type (get_current_arch ())->builtin_int64;
       asize = 'g';
       break;
     default:
-      val_type = builtin_type_int8;
+      val_type = builtin_type (get_current_arch ())->builtin_int8;
       asize = 'b';
     }
 
@@ -2911,7 +2918,7 @@ gdbtk_set_result (Tcl_Interp *interp, const char *fmt,...)
   char *buf;
 
   va_start (args, fmt);
-  xvasprintf (&buf, fmt, args);
+  buf = xstrvprintf (fmt, args);
   va_end (args);
   Tcl_SetObjResult (interp, Tcl_NewStringObj (buf, -1));
   xfree(buf);
@@ -3005,7 +3012,10 @@ gdb_CA_to_TAS (ClientData clientData, Tcl_Interp *interp,
 
   /* This is not really correct.  Using paddr_nz() will convert to hex and truncate 
      to 32-bits when required but will otherwise not do what we really want. */
-  Tcl_SetStringObj (result_ptr->obj_ptr, paddr_nz (address), -1);
+  
+  Tcl_SetStringObj (result_ptr->obj_ptr,
+		    paddress (get_current_arch (), address),
+		    -1);
 
   return TCL_OK;
 }

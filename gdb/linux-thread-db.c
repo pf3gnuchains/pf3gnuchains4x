@@ -1,7 +1,7 @@
 /* libthread_db assisted debugging support, generic parts.
 
-   Copyright (C) 1999, 2000, 2001, 2003, 2004, 2005, 2006, 2007, 2008, 2009
-   Free Software Foundation, Inc.
+   Copyright (C) 1999, 2000, 2001, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
+   2010 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -141,6 +141,8 @@ struct thread_db_info
 				  td_event_e event, td_notify_t *ptr);
   td_err_e (*td_ta_set_event_p) (const td_thragent_t *ta,
 				 td_thr_events_t *event);
+  td_err_e (*td_ta_clear_event_p) (const td_thragent_t *ta,
+				   td_thr_events_t *event);
   td_err_e (*td_ta_event_getmsg_p) (const td_thragent_t *ta,
 				    td_event_msg_t *msg);
 
@@ -151,8 +153,8 @@ struct thread_db_info
 				     int event);
 
   td_err_e (*td_thr_tls_get_addr_p) (const td_thrhandle_t *th,
-				     void *map_address,
-				     size_t offset, void **address);
+				     psaddr_t map_address,
+				     size_t offset, psaddr_t *address);
 };
 
 /* List of known processes using thread_db, and the required
@@ -701,6 +703,7 @@ try_thread_db_load_1 (struct thread_db_info *info)
   /* These are not essential.  */
   info->td_ta_event_addr_p = dlsym (info->handle, "td_ta_event_addr");
   info->td_ta_set_event_p = dlsym (info->handle, "td_ta_set_event");
+  info->td_ta_clear_event_p = dlsym (info->handle, "td_ta_clear_event");
   info->td_ta_event_getmsg_p = dlsym (info->handle, "td_ta_event_getmsg");
   info->td_thr_event_enable_p = dlsym (info->handle, "td_thr_event_enable");
   info->td_thr_tls_get_addr_p = dlsym (info->handle, "td_thr_tls_get_addr");
@@ -907,14 +910,14 @@ thread_db_load (void)
 static void
 disable_thread_event_reporting (struct thread_db_info *info)
 {
-  if (info->td_ta_set_event_p != NULL)
+  if (info->td_ta_clear_event_p != NULL)
     {
       td_thr_events_t events;
 
       /* Set the process wide mask saying we aren't interested in any
 	 events anymore.  */
-      td_event_emptyset (&events);
-      info->td_ta_set_event_p (info->thread_agent, &events);
+      td_event_fillset (&events);
+      info->td_ta_clear_event_p (info->thread_agent, &events);
     }
 
   info->td_create_bp_addr = 0;
@@ -1360,11 +1363,11 @@ find_new_threads_callback (const td_thrhandle_t *th_p, void *data)
 
 static int
 find_new_threads_once (struct thread_db_info *info, int iteration,
-		       int *errp)
+		       td_err_e *errp)
 {
   volatile struct gdb_exception except;
   struct callback_data data;
-  int err = TD_ERR;
+  td_err_e err = TD_ERR;
 
   data.info = info;
   data.new_threads = 0;
@@ -1437,7 +1440,7 @@ thread_db_find_new_threads_2 (ptid_t ptid, int until_no_new)
     }
   else
     {
-      int err;
+      td_err_e err;
 
       find_new_threads_once (info, 0, &err);
       if (err != TD_OK)
@@ -1527,7 +1530,7 @@ thread_db_get_thread_local_address (struct target_ops *ops,
   if (thread_info != NULL && thread_info->private != NULL)
     {
       td_err_e err;
-      void *address;
+      psaddr_t address;
       struct thread_db_info *info;
 
       info = get_thread_db_info (GET_PID (ptid));
@@ -1541,8 +1544,11 @@ thread_db_get_thread_local_address (struct target_ops *ops,
       gdb_assert (lm != 0);
 
       /* Finally, get the address of the variable.  */
+      /* Note the cast through uintptr_t: this interface only works if
+	 a target address fits in a psaddr_t, which is a host pointer.
+	 So a 32-bit debugger can not access 64-bit TLS through this.  */
       err = info->td_thr_tls_get_addr_p (&thread_info->private->th,
-					 (void *)(size_t) lm,
+					 (psaddr_t)(uintptr_t) lm,
 					 offset, &address);
 
 #ifdef THREAD_DB_HAS_TD_NOTALLOC

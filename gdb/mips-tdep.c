@@ -1,8 +1,8 @@
 /* Target-dependent code for the MIPS architecture, for GDB, the GNU Debugger.
 
    Copyright (C) 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997,
-   1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
-   Free Software Foundation, Inc.
+   1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
+   2010 Free Software Foundation, Inc.
 
    Contributed by Alessandro Forin(af@cs.cmu.edu) at CMU
    and by Per Bothner(bothner@cs.wisc.edu) at U.Wisconsin.
@@ -1814,6 +1814,9 @@ mips_insn16_frame_this_id (struct frame_info *this_frame, void **this_cache,
 {
   struct mips_frame_cache *info = mips_insn16_frame_cache (this_frame,
 							   this_cache);
+  /* This marks the outermost frame.  */
+  if (info->base == 0)
+    return;
   (*this_id) = frame_id_build (info->base, get_frame_func (this_frame));
 }
 
@@ -2163,6 +2166,9 @@ mips_insn32_frame_this_id (struct frame_info *this_frame, void **this_cache,
 {
   struct mips_frame_cache *info = mips_insn32_frame_cache (this_frame,
 							   this_cache);
+  /* This marks the outermost frame.  */
+  if (info->base == 0)
+    return;
   (*this_id) = frame_id_build (info->base, get_frame_func (this_frame));
 }
 

@@ -1,6 +1,6 @@
 /* MI Interpreter Definitions and Commands for GDB, the GNU debugger.
 
-   Copyright (C) 2002, 2003, 2004, 2005, 2007, 2008, 2009
+   Copyright (C) 2002, 2003, 2004, 2005, 2007, 2008, 2009, 2010
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -438,9 +438,8 @@ mi_on_resume (ptid_t ptid)
      In future (MI3), we'll be outputting "^done" here.  */
   if (!running_result_record_printed && mi_proceeded)
     {
-      if (current_token)
-	fputs_unfiltered (current_token, raw_stdout);
-      fputs_unfiltered ("^running\n", raw_stdout);
+      fprintf_unfiltered (raw_stdout, "%s^running\n",
+			  current_token ? current_token : "");
     }
 
   if (PIDGET (ptid) == -1)

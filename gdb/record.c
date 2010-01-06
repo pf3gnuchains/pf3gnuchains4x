@@ -1,6 +1,6 @@
 /* Process record and replay target for GDB, the GNU debugger.
 
-   Copyright (C) 2008, 2009 Free Software Foundation, Inc.
+   Copyright (C) 2008, 2009, 2010 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -224,6 +224,9 @@ static int (*record_beneath_to_insert_breakpoint) (struct gdbarch *,
 						   struct bp_target_info *);
 static int (*record_beneath_to_remove_breakpoint) (struct gdbarch *,
 						   struct bp_target_info *);
+static int (*record_beneath_to_stopped_by_watchpoint) (void);
+static int (*record_beneath_to_stopped_data_address) (struct target_ops *,
+						      CORE_ADDR *);
 
 /* Alloc and free functions for record_reg, record_mem, and record_end 
    entries.  */
@@ -569,17 +572,11 @@ record_arch_list_cleanups (void *ignore)
    record the running message of inferior and set them to
    record_arch_list, and add it to record_list.  */
 
-struct record_message_args {
-  struct regcache *regcache;
-  enum target_signal signal;
-};
-
 static int
-record_message (void *args)
+record_message (struct regcache *regcache, enum target_signal signal)
 {
   int ret;
-  struct record_message_args *myargs = args;
-  struct gdbarch *gdbarch = get_regcache_arch (myargs->regcache);
+  struct gdbarch *gdbarch = get_regcache_arch (regcache);
   struct cleanup *old_cleanups = make_cleanup (record_arch_list_cleanups, 0);
 
   record_arch_list_head = NULL;
@@ -613,18 +610,18 @@ record_message (void *args)
   if (record_list != &record_first)    /* FIXME better way to check */
     {
       gdb_assert (record_list->type == record_end);
-      record_list->u.end.sigval = myargs->signal;
+      record_list->u.end.sigval = signal;
     }
 
-  if (myargs->signal == TARGET_SIGNAL_0
+  if (signal == TARGET_SIGNAL_0
       || !gdbarch_process_record_signal_p (gdbarch))
     ret = gdbarch_process_record (gdbarch,
-				  myargs->regcache,
-				  regcache_read_pc (myargs->regcache));
+				  regcache,
+				  regcache_read_pc (regcache));
   else
     ret = gdbarch_process_record_signal (gdbarch,
-					 myargs->regcache,
-					 myargs->signal);
+					 regcache,
+					 signal);
 
   if (ret > 0)
     error (_("Process record: inferior program stopped."));
@@ -645,15 +642,29 @@ record_message (void *args)
   return 1;
 }
 
+struct record_message_args {
+  struct regcache *regcache;
+  enum target_signal signal;
+};
+
 static int
-do_record_message (struct regcache *regcache,
-		   enum target_signal signal)
+record_message_wrapper (void *args)
+{
+  struct record_message_args *record_args = args;
+
+  return record_message (record_args->regcache, record_args->signal);
+}
+
+static int
+record_message_wrapper_safe (struct regcache *regcache,
+                             enum target_signal signal)
 {
   struct record_message_args args;
 
   args.regcache = regcache;
   args.signal = signal;
-  return catch_errors (record_message, &args, NULL, RETURN_MASK_ALL);
+
+  return catch_errors (record_message_wrapper, &args, NULL, RETURN_MASK_ALL);
 }
 
 /* Set to 1 if record_store_registers and record_xfer_partial
@@ -672,6 +683,9 @@ record_gdb_operation_disable_set (void)
 
   return old_cleanups;
 }
+
+/* Flag set to TRUE for target_stopped_by_watchpoint.  */
+static int record_hw_watchpoint = 0;
 
 /* Execute one instruction from the record log.  Each instruction in
    the log will be represented by an arbitrary sequence of register
@@ -739,7 +753,22 @@ record_exec_insn (struct regcache *regcache, struct gdbarch *gdbarch,
                                entry->u.mem.len);
                   }
                 else
-                  memcpy (record_get_loc (entry), mem, entry->u.mem.len);
+		  {
+		    memcpy (record_get_loc (entry), mem, entry->u.mem.len);
+
+		    /* We've changed memory --- check if a hardware
+		       watchpoint should trap.  Note that this
+		       presently assumes the target beneath supports
+		       continuable watchpoints.  On non-continuable
+		       watchpoints target, we'll want to check this
+		       _before_ actually doing the memory change, and
+		       not doing the change at all if the watchpoint
+		       traps.  */
+		    if (hardware_watchpoint_inserted_in_range
+			(get_regcache_aspace (regcache),
+			 entry->u.mem.addr, entry->u.mem.len))
+		      record_hw_watchpoint = 1;
+		  }
               }
           }
       }
@@ -770,6 +799,8 @@ static int (*tmp_to_insert_breakpoint) (struct gdbarch *,
 					struct bp_target_info *);
 static int (*tmp_to_remove_breakpoint) (struct gdbarch *,
 					struct bp_target_info *);
+static int (*tmp_to_stopped_by_watchpoint) (void);
+static int (*tmp_to_stopped_data_address) (struct target_ops *, CORE_ADDR *);
 
 static void record_restore (void);
 
@@ -894,6 +925,10 @@ record_open (char *name, int from_tty)
 	tmp_to_insert_breakpoint = t->to_insert_breakpoint;
       if (!tmp_to_remove_breakpoint)
 	tmp_to_remove_breakpoint = t->to_remove_breakpoint;
+      if (!tmp_to_stopped_by_watchpoint)
+	tmp_to_stopped_by_watchpoint = t->to_stopped_by_watchpoint;
+      if (!tmp_to_stopped_data_address)
+	tmp_to_stopped_data_address = t->to_stopped_data_address;
     }
   if (!tmp_to_xfer_partial)
     error (_("Could not find 'to_xfer_partial' method on the target stack."));
@@ -915,6 +950,8 @@ record_open (char *name, int from_tty)
   record_beneath_to_xfer_partial = tmp_to_xfer_partial;
   record_beneath_to_insert_breakpoint = tmp_to_insert_breakpoint;
   record_beneath_to_remove_breakpoint = tmp_to_remove_breakpoint;
+  record_beneath_to_stopped_by_watchpoint = tmp_to_stopped_by_watchpoint;
+  record_beneath_to_stopped_data_address = tmp_to_stopped_data_address;
 
   if (current_target.to_stratum == core_stratum)
     record_core_open_1 (name, from_tty);
@@ -954,7 +991,6 @@ record_close (int quitting)
 }
 
 static int record_resume_step = 0;
-static int record_resume_error;
 
 /* "to_resume" target method.  Resume the process record target.  */
 
@@ -966,15 +1002,7 @@ record_resume (struct target_ops *ops, ptid_t ptid, int step,
 
   if (!RECORD_IS_REPLAY)
     {
-      if (do_record_message (get_current_regcache (), signal))
-        {
-          record_resume_error = 0;
-        }
-      else
-        {
-          record_resume_error = 1;
-          return;
-        }
+      record_message (get_current_regcache (), signal);
       record_beneath_to_resume (record_beneath_to_resume_ops, ptid, 1,
                                 signal);
     }
@@ -1038,14 +1066,6 @@ record_wait (struct target_ops *ops,
 
   if (!RECORD_IS_REPLAY && ops != &record_core_ops)
     {
-      if (record_resume_error)
-	{
-	  /* If record_resume get error, return directly.  */
-	  status->kind = TARGET_WAITKIND_STOPPED;
-	  status->value.sig = TARGET_SIGNAL_ABRT;
-	  return inferior_ptid;
-	}
-
       if (record_resume_step)
 	{
 	  /* This is a single step.  */
@@ -1068,30 +1088,46 @@ record_wait (struct target_ops *ops,
 		  && status->value.sig == TARGET_SIGNAL_TRAP)
 		{
 		  struct regcache *regcache;
+		  struct address_space *aspace;
 
-		  /* Yes -- check if there is a breakpoint.  */
+		  /* Yes -- this is likely our single-step finishing,
+		     but check if there's any reason the core would be
+		     interested in the event.  */
+
 		  registers_changed ();
 		  regcache = get_current_regcache ();
 		  tmp_pc = regcache_read_pc (regcache);
-		  if (breakpoint_inserted_here_p (get_regcache_aspace (regcache),
-						  tmp_pc))
+		  aspace = get_regcache_aspace (regcache);
+
+		  if (target_stopped_by_watchpoint ())
 		    {
-		      /* There is a breakpoint.  GDB will want to stop.  */
-		      struct gdbarch *gdbarch = get_regcache_arch (regcache);
-		      CORE_ADDR decr_pc_after_break
-			= gdbarch_decr_pc_after_break (gdbarch);
-		      if (decr_pc_after_break)
-			regcache_write_pc (regcache,
-					   tmp_pc + decr_pc_after_break);
+		      /* Always interested in watchpoints.  */
+		    }
+		  else if (breakpoint_inserted_here_p (aspace, tmp_pc))
+		    {
+		      /* There is a breakpoint here.  Let the core
+			 handle it.  */
+		      if (software_breakpoint_inserted_here_p (aspace, tmp_pc))
+			{
+			  struct gdbarch *gdbarch = get_regcache_arch (regcache);
+			  CORE_ADDR decr_pc_after_break
+			    = gdbarch_decr_pc_after_break (gdbarch);
+			  if (decr_pc_after_break)
+			    regcache_write_pc (regcache,
+					       tmp_pc + decr_pc_after_break);
+			}
 		    }
 		  else
 		    {
-		      /* There is not a breakpoint, and gdb is not
-		         stepping, therefore gdb will not stop.
-			 Therefore we will not return to gdb.
-		         Record the insn and resume.  */
-		      if (!do_record_message (regcache, TARGET_SIGNAL_0))
-			break;
+		      /* This must be a single-step trap.  Record the
+		         insn and issue another step.  */
+		      if (!record_message_wrapper_safe (regcache,
+                                                        TARGET_SIGNAL_0))
+  			{
+                           status->kind = TARGET_WAITKIND_STOPPED;
+                           status->value.sig = TARGET_SIGNAL_0;
+                           break;
+  			}
 
 		      record_beneath_to_resume (record_beneath_to_resume_ops,
 						ptid, 1,
@@ -1111,29 +1147,33 @@ record_wait (struct target_ops *ops,
     {
       struct regcache *regcache = get_current_regcache ();
       struct gdbarch *gdbarch = get_regcache_arch (regcache);
+      struct address_space *aspace = get_regcache_aspace (regcache);
       int continue_flag = 1;
       int first_record_end = 1;
       struct cleanup *old_cleanups = make_cleanup (record_wait_cleanups, 0);
       CORE_ADDR tmp_pc;
 
+      record_hw_watchpoint = 0;
       status->kind = TARGET_WAITKIND_STOPPED;
 
       /* Check breakpoint when forward execute.  */
       if (execution_direction == EXEC_FORWARD)
 	{
 	  tmp_pc = regcache_read_pc (regcache);
-	  if (breakpoint_inserted_here_p (get_regcache_aspace (regcache),
-					  tmp_pc))
+	  if (breakpoint_inserted_here_p (aspace, tmp_pc))
 	    {
+	      int decr_pc_after_break = gdbarch_decr_pc_after_break (gdbarch);
+
 	      if (record_debug)
 		fprintf_unfiltered (gdb_stdlog,
 				    "Process record: break at %s.\n",
 				    paddress (gdbarch, tmp_pc));
-	      if (gdbarch_decr_pc_after_break (gdbarch)
-		  && !record_resume_step)
+
+	      if (decr_pc_after_break
+		  && !record_resume_step
+		  && software_breakpoint_inserted_here_p (aspace, tmp_pc))
 		regcache_write_pc (regcache,
-				   tmp_pc +
-				   gdbarch_decr_pc_after_break (gdbarch));
+				   tmp_pc + decr_pc_after_break);
 	      goto replay_out;
 	    }
 	}
@@ -1203,20 +1243,31 @@ record_wait (struct target_ops *ops,
 
 		  /* check breakpoint */
 		  tmp_pc = regcache_read_pc (regcache);
-		  if (breakpoint_inserted_here_p (get_regcache_aspace (regcache),
-						  tmp_pc))
+		  if (breakpoint_inserted_here_p (aspace, tmp_pc))
 		    {
+		      int decr_pc_after_break
+			= gdbarch_decr_pc_after_break (gdbarch);
+
 		      if (record_debug)
 			fprintf_unfiltered (gdb_stdlog,
 					    "Process record: break "
 					    "at %s.\n",
 					    paddress (gdbarch, tmp_pc));
-		      if (gdbarch_decr_pc_after_break (gdbarch)
+		      if (decr_pc_after_break
 			  && execution_direction == EXEC_FORWARD
-			  && !record_resume_step)
+			  && !record_resume_step
+			  && software_breakpoint_inserted_here_p (aspace,
+								  tmp_pc))
 			regcache_write_pc (regcache,
-					   tmp_pc +
-					   gdbarch_decr_pc_after_break (gdbarch));
+					   tmp_pc + decr_pc_after_break);
+		      continue_flag = 0;
+		    }
+
+		  if (record_hw_watchpoint)
+		    {
+		      if (record_debug)
+			fprintf_unfiltered (gdb_stdlog, "\
+Process record: hit hw watchpoint.\n");
 		      continue_flag = 0;
 		    }
 		  /* Check target signal */
@@ -1258,6 +1309,24 @@ replay_out:
 
   do_cleanups (set_cleanups);
   return inferior_ptid;
+}
+
+static int
+record_stopped_by_watchpoint (void)
+{
+  if (RECORD_IS_REPLAY)
+    return record_hw_watchpoint;
+  else
+    return record_beneath_to_stopped_by_watchpoint ();
+}
+
+static int
+record_stopped_data_address (struct target_ops *ops, CORE_ADDR *addr_p)
+{
+  if (RECORD_IS_REPLAY)
+    return 0;
+  else
+    return record_beneath_to_stopped_data_address (ops, addr_p);
 }
 
 /* "to_disconnect" method for process record target.  */
@@ -1523,6 +1592,57 @@ record_can_execute_reverse (void)
   return 1;
 }
 
+/* "to_get_bookmark" method for process record and prec over core.  */
+
+static gdb_byte *
+record_get_bookmark (char *args, int from_tty)
+{
+  gdb_byte *ret = NULL;
+
+  /* Return stringified form of instruction count.  */
+  if (record_list && record_list->type == record_end)
+    ret = xstrdup (pulongest (record_list->u.end.insn_num));
+
+  if (record_debug)
+    {
+      if (ret)
+	fprintf_unfiltered (gdb_stdlog,
+			    "record_get_bookmark returns %s\n", ret);
+      else
+	fprintf_unfiltered (gdb_stdlog,
+			    "record_get_bookmark returns NULL\n");
+    }
+  return ret;
+}
+
+/* The implementation of the command "record goto".  */
+static void cmd_record_goto (char *, int);
+
+/* "to_goto_bookmark" method for process record and prec over core.  */
+
+static void
+record_goto_bookmark (gdb_byte *bookmark, int from_tty)
+{
+  if (record_debug)
+    fprintf_unfiltered (gdb_stdlog,
+			"record_goto_bookmark receives %s\n", bookmark);
+
+  if (bookmark[0] == '\'' || bookmark[0] == '\"')
+    {
+      if (bookmark[strlen (bookmark) - 1] != bookmark[0])
+	error (_("Unbalanced quotes: %s"), bookmark);
+
+      /* Strip trailing quote.  */
+      bookmark[strlen (bookmark) - 1] = '\0';
+      /* Strip leading quote.  */
+      bookmark++;
+      /* Pass along to cmd_record_goto.  */
+    }
+
+  cmd_record_goto ((char *) bookmark, from_tty);
+  return;
+}
+
 static void
 init_record_ops (void)
 {
@@ -1543,8 +1663,13 @@ init_record_ops (void)
   record_ops.to_xfer_partial = record_xfer_partial;
   record_ops.to_insert_breakpoint = record_insert_breakpoint;
   record_ops.to_remove_breakpoint = record_remove_breakpoint;
+  record_ops.to_stopped_by_watchpoint = record_stopped_by_watchpoint;
+  record_ops.to_stopped_data_address = record_stopped_data_address;
   record_ops.to_can_execute_reverse = record_can_execute_reverse;
   record_ops.to_stratum = record_stratum;
+  /* Add bookmark target methods.  */
+  record_ops.to_get_bookmark = record_get_bookmark;
+  record_ops.to_goto_bookmark = record_goto_bookmark;
   record_ops.to_magic = OPS_MAGIC;
 }
 
@@ -1747,9 +1872,14 @@ init_record_core_ops (void)
   record_core_ops.to_xfer_partial = record_core_xfer_partial;
   record_core_ops.to_insert_breakpoint = record_core_insert_breakpoint;
   record_core_ops.to_remove_breakpoint = record_core_remove_breakpoint;
+  record_core_ops.to_stopped_by_watchpoint = record_stopped_by_watchpoint;
+  record_core_ops.to_stopped_data_address = record_stopped_data_address;
   record_core_ops.to_can_execute_reverse = record_can_execute_reverse;
   record_core_ops.to_has_execution = record_core_has_execution;
   record_core_ops.to_stratum = record_stratum;
+  /* Add bookmark target methods.  */
+  record_core_ops.to_get_bookmark = record_get_bookmark;
+  record_core_ops.to_goto_bookmark = record_goto_bookmark;
   record_core_ops.to_magic = OPS_MAGIC;
 }
 
@@ -2406,6 +2536,101 @@ cmd_record_save (char *args, int from_tty)
 		   recfilename);
 }
 
+/* record_goto_insn -- rewind the record log (forward or backward,
+   depending on DIR) to the given entry, changing the program state
+   correspondingly.  */
+
+static void
+record_goto_insn (struct record_entry *entry,
+		  enum exec_direction_kind dir)
+{
+  struct cleanup *set_cleanups = record_gdb_operation_disable_set ();
+  struct regcache *regcache = get_current_regcache ();
+  struct gdbarch *gdbarch = get_regcache_arch (regcache);
+
+  /* Assume everything is valid: we will hit the entry,
+     and we will not hit the end of the recording.  */
+
+  if (dir == EXEC_FORWARD)
+    record_list = record_list->next;
+
+  do
+    {
+      record_exec_insn (regcache, gdbarch, record_list);
+      if (dir == EXEC_REVERSE)
+	record_list = record_list->prev;
+      else
+	record_list = record_list->next;
+    } while (record_list != entry);
+  do_cleanups (set_cleanups);
+}
+
+/* "record goto" command.  Argument is an instruction number,
+   as given by "info record".
+
+   Rewinds the recording (forward or backward) to the given instruction.  */
+
+static void
+cmd_record_goto (char *arg, int from_tty)
+{
+  struct record_entry *p = NULL;
+  ULONGEST target_insn = 0;
+
+  if (arg == NULL || *arg == '\0')
+    error (_("Command requires an argument (insn number to go to)."));
+
+  if (strncmp (arg, "start", strlen ("start")) == 0
+      || strncmp (arg, "begin", strlen ("begin")) == 0)
+    {
+      /* Special case.  Find first insn.  */
+      for (p = &record_first; p != NULL; p = p->next)
+	if (p->type == record_end)
+	  break;
+      if (p)
+	target_insn = p->u.end.insn_num;
+    }
+  else if (strncmp (arg, "end", strlen ("end")) == 0)
+    {
+      /* Special case.  Find last insn.  */
+      for (p = record_list; p->next != NULL; p = p->next)
+	;
+      for (; p!= NULL; p = p->prev)
+	if (p->type == record_end)
+	  break;
+      if (p)
+	target_insn = p->u.end.insn_num;
+    }
+  else
+    {
+      /* General case.  Find designated insn.  */
+      target_insn = parse_and_eval_long (arg);
+
+      for (p = &record_first; p != NULL; p = p->next)
+	if (p->type == record_end && p->u.end.insn_num == target_insn)
+	  break;
+    }
+
+  if (p == NULL)
+    error (_("Target insn '%s' not found."), arg);
+  else if (p == record_list)
+    error (_("Already at insn '%s'."), arg);
+  else if (p->u.end.insn_num > record_list->u.end.insn_num)
+    {
+      printf_filtered (_("Go forward to insn number %s\n"),
+		       pulongest (target_insn));
+      record_goto_insn (p, EXEC_FORWARD);
+    }
+  else
+    {
+      printf_filtered (_("Go backward to insn number %s\n"),
+		       pulongest (target_insn));
+      record_goto_insn (p, EXEC_REVERSE);
+    }
+  registers_changed ();
+  reinit_frame_cache ();
+  print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC);
+}
+
 void
 _initialize_record (void)
 {
@@ -2491,4 +2716,9 @@ Set the maximum number of instructions to be stored in the\n\
 record/replay buffer.  Zero means unlimited.  Default is 200000."),
 			    set_record_insn_max_num,
 			    NULL, &set_record_cmdlist, &show_record_cmdlist);
+
+  add_cmd ("goto", class_obscure, cmd_record_goto, _("\
+Restore the program to its state at instruction number N.\n\
+Argument is instruction number, as shown by 'info record'."),
+	   &record_cmdlist);
 }

@@ -1,6 +1,6 @@
 /* Program and address space management, for GDB, the GNU debugger.
 
-   Copyright (C) 2009 Free Software Foundation, Inc.
+   Copyright (C) 2009, 2010 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -164,6 +164,10 @@ struct program_space
        target for the final relocation offsets, the symbols we've used
        to set breakpoints point at the wrong addresses.  */
     int executing_startup;
+
+    /* True if no breakpoints should be inserted in this program
+       space.  */
+    int breakpoints_not_allowed;
 
     /* The object file that the main symbol table was loaded from
        (e.g. the argument to the "symbol-file" or "file" command).  */

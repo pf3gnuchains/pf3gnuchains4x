@@ -102,6 +102,8 @@ enum
   CpuFMA,
   /* FMA4 support required */
   CpuFMA4,
+  /* XOP support required */
+  CpuXOP,
   /* LWP support required */
   CpuLWP,
   /* MOVBE Instuction support required */
@@ -170,6 +172,7 @@ typedef union i386_cpu_flags
       unsigned int cpupclmul:1;
       unsigned int cpufma:1;
       unsigned int cpufma4:1;
+      unsigned int cpuxop:1;
       unsigned int cpulwp:1;
       unsigned int cpumovbe:1;
       unsigned int cpuept:1;
@@ -240,6 +243,8 @@ enum
   FWait,
   /* quick test for string instructions */
   IsString,
+  /* quick test for lockable instructions */
+  IsLockable,
   /* fake an extra reg operand for clr, imul and special register
      processing for some instructions.  */
   RegKludge,
@@ -247,8 +252,6 @@ enum
   FirstXmm0,
   /* An implicit xmm0 as the first operand */
   Implicit1stXmm0,
-  /* BYTE is OK in Intel syntax. */
-  ByteOkIntel,
   /* Convert to DWORD */
   ToDword,
   /* Convert to QWORD */
@@ -269,32 +272,57 @@ enum
 	1: 128bit VEX prefix.
 	2: 256bit VEX prefix.
    */
+#define VEX128	1
+#define VEX256	2
   Vex,
-  /* insn has VEX NDS. Register-only source is encoded in Vex prefix.
-     We use VexNDS on insns with VEX DDS since the register-only source
-     is the second source register.  */
-  VexNDS,
-  /* insn has VEX NDD. Register destination is encoded in Vex prefix. */
-  VexNDD,
-  /* insn has VEX NDD. Register destination is encoded in Vex prefix
-     and one of the operands can access a memory location.  */
-  VexLWP,
-  /* insn has VEX W0. */
-  VexW0,
-  /* insn has VEX W1. */
-  VexW1,
-  /* insn has VEX 0x0F opcode prefix. */
-  Vex0F,
-  /* insn has VEX 0x0F38 opcode prefix. */
-  Vex0F38,
-  /* insn has VEX 0x0F3A opcode prefix. */
-  Vex0F3A,
-  /* insn has XOP 0x09 opcode prefix. */
-  XOP09,
-  /* insn has XOP 0x0A opcode prefix. */
-  XOP0A,
-  /* insn has VEX prefix with 3 soures. */
-  Vex3Sources,
+  /* How to encode VEX.vvvv:
+     0: VEX.vvvv must be 1111b.
+     1: VEX.DNS.  Register-only source is encoded in VEX.vvvv where
+	the content of source registers will be preserved.
+	VEX.DDS.  The second register operand is encoded in VEX.vvvv 
+	where the content of first source register will be overwritten
+	by the result.
+	For assembler, there are no difference between VEX.DNS and
+	VEX.DDS.
+     2. VEX.NDD.  Register destination is encoded in VEX.vvvv.
+     3. VEX.LWP.  Register destination is encoded in VEX.vvvv and one
+	of the operands can access a memory location.
+   */
+#define VEXXDS	1
+#define VEXNDD	2
+#define VEXLWP	3
+  VexVVVV,
+  /* How the VEX.W bit is used:
+     0: Set by the REX.W bit.
+     1: VEX.W0.  Should always be 0.
+     2: VEX.W1.  Should always be 1.
+   */
+#define VEXW0	1
+#define VEXW1	2
+  VexW,
+  /* VEX opcode prefix:
+     0: VEX 0x0F opcode prefix.
+     1: VEX 0x0F38 opcode prefix.
+     2: VEX 0x0F3A opcode prefix
+     3: XOP 0x08 opcode prefix.
+     4: XOP 0x09 opcode prefix
+     5: XOP 0x0A opcode prefix.
+   */
+#define VEX0F		0
+#define VEX0F38		1
+#define VEX0F3A		2
+#define XOP08		3
+#define XOP09		4
+#define XOP0A		5
+  VexOpcode,
+  /* number of VEX source operands:
+     0: <= 2 source operands.
+     1: 2 XOP source operands.
+     2: 3 source operands.
+   */
+#define XOP2SOURCES	1
+#define VEX3SOURCES	2
+  VexSources,
   /* instruction has VEX 8 bit imm */
   VexImmExt,
   /* SSE to AVX support required */
@@ -340,10 +368,10 @@ typedef struct i386_opcode_modifier
   unsigned int no_ldsuf:1;
   unsigned int fwait:1;
   unsigned int isstring:1;
+  unsigned int islockable:1;
   unsigned int regkludge:1;
   unsigned int firstxmm0:1;
   unsigned int implicit1stxmm0:1;
-  unsigned int byteokintel:1;
   unsigned int todword:1;
   unsigned int toqword:1;
   unsigned int addrprefixop0:1;
@@ -353,17 +381,10 @@ typedef struct i386_opcode_modifier
   unsigned int rex64:1;
   unsigned int ugh:1;
   unsigned int vex:2;
-  unsigned int vexnds:1;
-  unsigned int vexndd:1;
-  unsigned int vexlwp:1;
-  unsigned int vexw0:1;
-  unsigned int vexw1:1;
-  unsigned int vex0f:1;
-  unsigned int vex0f38:1;
-  unsigned int vex0f3a:1;
-  unsigned int xop09:1;
-  unsigned int xop0a:1;
-  unsigned int vex3sources:1;
+  unsigned int vexvvvv:2;
+  unsigned int vexw:2;
+  unsigned int vexopcode:3;
+  unsigned int vexsources:2;
   unsigned int veximmext:1;
   unsigned int sse2avx:1;
   unsigned int noavx:1;

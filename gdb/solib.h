@@ -1,7 +1,7 @@
 /* Shared library declarations for GDB, the GNU Debugger.
    
    Copyright (C) 1992, 1993, 1995, 1998, 1999, 2000, 2001, 2003, 2005, 2007,
-   2008, 2009 Free Software Foundation, Inc.
+   2008, 2009, 2010 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -51,6 +51,14 @@ extern char *solib_name_from_address (struct program_space *, CORE_ADDR);
 /* Return 1 if ADDR lies within SOLIB.  */
 
 extern int solib_contains_address_p (const struct so_list *, CORE_ADDR);
+
+/* Return whether the data starting at VADDR, size SIZE, must be kept
+   in a core file for shared libraries loaded before "gcore" is used
+   to be handled correctly when the core file is loaded.  This only
+   applies when the section would otherwise not be kept in the core
+   file (in particular, for readonly sections).  */
+
+extern int solib_keep_data_in_core (CORE_ADDR vaddr, unsigned long size);
 
 /* Return 1 if PC lies in the dynamic symbol resolution code of the
    run time loader.  */

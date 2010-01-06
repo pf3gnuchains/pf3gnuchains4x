@@ -1,7 +1,7 @@
 /* Definitions for expressions stored in reversed prefix form, for GDB.
 
-   Copyright (C) 1986, 1989, 1992, 1994, 2000, 2003, 2005, 2007, 2008, 2009
-   Free Software Foundation, Inc.
+   Copyright (C) 1986, 1989, 1992, 1994, 2000, 2003, 2005, 2007, 2008, 2009,
+   2010 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -87,6 +87,13 @@ enum exp_opcode
     /* STRUCTOP_MPTR is used for pointer-to-member constructs
        when X is a pointer instead of an aggregate.  */
     STRUCTOP_MPTR,
+
+    /* TYPE_INSTANCE is used when the user specifies a specific
+       type instantiation for overloaded methods/functions.
+
+       The format is:
+       TYPE_INSTANCE num_types type0 ... typeN num_types TYPE_INSTANCE  */
+    TYPE_INSTANCE,
 
     /* end of C++.  */
 

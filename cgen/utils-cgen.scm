@@ -1,5 +1,5 @@
 ; CGEN Utilities.
-; Copyright (C) 2000, 2002, 2003 Red Hat, Inc.
+; Copyright (C) 2000, 2002, 2003, 2009 Red Hat, Inc.
 ; This file is part of CGEN.
 ; See file COPYING.CGEN for details.
 ;
@@ -67,6 +67,147 @@
 	  (error "vmake: unknown options:" unrecognized))))
 )
 
+;;; Source locations are recorded as a stack, with (ideally) one extra level
+;;; for each macro invocation.
+
+(define <location> (class-make '<location>
+			       nil
+			       '(
+				 ;; A list of "single-location" objects,
+				 ;; sorted by most recent location first.
+				 list
+				 )
+			       nil))
+
+(define-getters <location> location (list))
+(define-setters <location> location (list))
+
+;;; A single source location.
+;;; This is recorded as a vector for simplicity.
+;;; END? is true if the location marks the end of the expression.
+;;; NOTE: LINE and COLUMN are origin-0 (the first line is line 0).
+
+(define (make-single-location file line column end?)
+  (vector file line column end?)
+)
+
+(define (single-location-file sloc) (vector-ref sloc 0))
+(define (single-location-line sloc) (vector-ref sloc 1))
+(define (single-location-column sloc) (vector-ref sloc 2))
+(define (single-location-end? sloc) (vector-ref sloc 3))
+
+;;; Return a single-location in a readable form.
+
+(define (single-location->string sloc)
+  ;; +1: numbers are recorded origin-0
+  (string-append (single-location-file sloc)
+		 ":"
+		 (number->string (+ (single-location-line sloc) 1))
+		 ":"
+		 (number->string (+ (single-location-column sloc) 1))
+		 (if (single-location-end? sloc) "(end)" ""))
+)
+
+;;; Same as single-location->string, except omit any directory info in
+;;; the file name.
+
+(define (single-location->simple-string sloc)
+  ;; +1: numbers are recorded origin-0
+  (string-append (basename (single-location-file sloc))
+		 ":"
+		 (number->string (+ (single-location-line sloc) 1))
+		 ":"
+		 (number->string (+ (single-location-column sloc) 1))
+		 (if (single-location-end? sloc) "(end)" ""))
+)
+
+;;; Return a location in a readable form.
+
+(define (location->string loc)
+  (let ((ref-from " referenced from:"))
+    (string-drop
+     (- 0 (string-length ref-from) 1)
+     (string-drop1
+      (apply string-append
+	     (map (lambda (sloc)
+		    (string-append "\n"
+				   (single-location->string sloc)
+				   ":"
+				   ref-from))
+		  (location-list loc))))))
+)
+
+;;; Return the location information in Guile's source-properties
+;;; in a readable form.
+
+(define (source-properties-location->string src-props)
+  (let ((file (assq-ref src-props 'filename))
+	(line (assq-ref src-props 'line))
+	(column (assq-ref src-props 'column)))
+    (string-append file
+		   ":"
+		   (number->string (+ line 1))
+		   ":"
+		   (number->string (+ column 1))))
+)
+
+;;; Return the top location on LOC's stack.
+
+(define (location-top loc)
+  (car (location-list loc))
+)
+
+;;; Return a new <location> with FILE, LINE pushed onto the stack.
+
+(define (location-push-single loc file line column end?)
+  (make <location> (cons (make-single-location file line column end?)
+			 (location-list loc)))
+)
+
+;;; Return a new <location> with NEW-LOC preappended to LOC.
+
+(define (location-push loc new-loc)
+  (make <location> (append (location-list new-loc)
+			   (location-list loc)))
+)
+
+;;; Return an unspecified <location>.
+;;; This is mainly for use in debugging utilities.
+;;; Ideally for .cpu-file related stuff we always have a location,
+;;; but that's not always true.
+
+(define (unspecified-location)
+  (make <location> (list (make-single-location "unspecified" 0 0 #f)))
+)
+
+;;; Return a location denoting a builtin object.
+
+(define (builtin-location)
+  (make <location> (list (make-single-location "builtin" 0 0 #f)))
+)
+
+;;; Return a <location> object for the current input port.
+;;; END? is true if the location marks the end of the expression.
+
+(define (current-input-location end?)
+  (let ((cip (current-input-port)))
+    (make <location> (list (make-single-location (port-filename cip)
+						 (port-line cip)
+						 (port-column cip)
+						 end?))))
+)
+
+;;; An object property for tracking source locations during macro expansion.
+
+(define location-property (make-object-property))
+
+;;; Set FORM's location to LOC.
+
+(define (location-property-set! form loc)
+  (set! (location-property form) loc)
+  *UNSPECIFIED*
+)
+
 ; Each named entry in the description file typically has these three members:
 ; name, comment attrs.
 
@@ -95,76 +236,172 @@
 
 (define (obj:str-name obj) (symbol->string (obj:name obj)))
 
-; Utility to add standard access methods for name, comment, attrs.
-; ??? Old.  Using <ident> baseclass now.
+;; Given a list of named objects, return a string of comma-separated names.
 
-(define (add-ident-methods! class)
-  (method-make! class 'get-name (lambda (self) (elm-get self 'name)))
-  (method-make! class 'set-name! (lambda (self name) (elm-set! self 'name name)))
-
-  (method-make! class 'get-comment (lambda (self) (elm-get self 'comment)))
-  (method-make! class 'set-comment! (lambda (self comment) (elm-set! self 'comment comment)))
-
-  (method-make! class 'get-atlist (lambda (self) (elm-get self 'attrs)))
-  (method-make! class 'set-atlist! (lambda (self attrs) (elm-set! self 'attrs attrs)))
-
-  *UNSPECIFIED*
+(define (obj-csv-names obj-list)
+  (string-drop1
+   (string-map (lambda (o)
+		 (string-append ","
+				(obj:str-name o)))
+	       obj-list))
 )
+
+; Subclass of <ident> for use by description file objects.
+;
+; Records the source location of the object.
+;
+; We also record an internally generated entry, ordinal, to record the
+; relative position within the description file.  It's generally more efficient
+; to record some kinds of objects (e.g. insns) in a hash table.  But we also
+; want to emit these objects in file order.  Recording the object's relative
+; position lets us generate an ordered list when we need to.
+; We can't just use the line number because we want an ordering over multiple
+; input files.
+
+(define <source-ident>
+  (class-make '<source-ident> '(<ident>)
+	      '(
+		;; A <location> object.
+		(location . #f)
+		;; #f for ordinal means "unassigned"
+		(ordinal . #f)
+		)
+	      '()))
+
+(method-make! <source-ident> 'get-location
+	      (lambda (self) (elm-get self 'location)))
+(method-make! <source-ident> 'set-location!
+	      (lambda (self newval) (elm-set! self 'location newval)))
+(define (obj-location obj) (send obj 'get-location))
+(define (obj-set-location! obj location) (send obj 'set-location! location))
+
+(method-make! <source-ident> 'get-ordinal
+	      (lambda (self) (elm-get self 'ordinal)))
+(method-make! <source-ident> 'set-ordinal!
+	      (lambda (self newval) (elm-set! self 'ordinal newval)))
+(define (obj-ordinal obj) (send obj 'get-ordinal))
+(define (obj-set-ordinal! obj ordinal) (send obj 'set-ordinal! ordinal))
+
+; Return a boolean indicating if X is a <source-ident>.
+
+(define (source-ident? x) (class-instance? <source-ident> x))
 
 ; Parsing utilities
 
-; Parsing context, used to give better error messages.
+;;; A parsing/processing context, used to give better error messages.
+;;; LOCATION must be an object created with make-location.
 
 (define <context>
   (class-make '<context> nil
 	      '(
-		; Name of file containing object being processed.
-		(file . #f)
-		; Line number in the file.
-		(lineno . #f)
-		; Error message prefix
-		(prefix . "")
+		;; Location of the object being processed,
+		;; or #f if unknown (or there is none).
+		(location . #f)
+		;; Error message prefix or #f if there is none.
+		(prefix . #f)
 		)
 	      nil)
 )
 
 ; Accessors.
 
-(define-getters <context> context (file lineno prefix))
+(define-getters <context> context (location prefix))
 
 ; Create a <context> object that is just a prefix.
 
-(define (context-make-prefix prefix)
-  (make <context> #f #f prefix)
+(define (make-prefix-context prefix)
+  (make <context> #f prefix)
 )
 
-; Create a <context> object for the reader.
-; This sets file,lineno from (current-input-port).
+; Create a <context> object that (current-reader-location) with PREFIX.
 
-(define (context-make-reader prefix)
-  (make <context>
-    (or (port-filename (current-input-port))
-	"<input>")
-    (port-line (current-input-port))
-    prefix)
+(define (make-current-context prefix)
+  (make <context> (current-reader-location) prefix)
 )
 
-; Call this to issue an error message.
+; Create a <context> object from <source-ident> object OBJ.
+
+(define (make-obj-context obj prefix)
+  (make <context> (obj-location obj) prefix)
+)
+
+; Create a new context from CONTEXT with TEXT appended to the prefix.
+
+(define (context-append context text)
+  (make <context> (context-location context)
+	(string-append (context-prefix context) text))
+)
+
+; Create a new context from CONTEXT with NAME appended to the prefix.
+
+(define (context-append-name context name)
+  (context-append context (stringsym-append ":" name))
+)
+
+; Call this to issue an error message when all you have is a context.
 ; CONTEXT is a <context> object or #f if there is none.
-; ARG is the value that had the error if there is one.
+; INTRO is a general introduction to what cgen was doing.
+; ERRMSG is, yes, you guessed it, the error message.
+; EXPR is the value that had the error if there is one.
 
-(define (context-error context errmsg . arg)
-  (cond ((and context (context-file context))
-	 (let ((msg (string-append
-		     (context-file context) ":"
-		     (number->string (context-lineno context)) ": "
-		     (context-prefix context) ": "
-		     errmsg ": ")))
-	   (apply error (cons msg arg))))
-	(context (let ((msg (string-append (context-prefix context) ": "
-					   errmsg ": ")))
-		   (apply error (cons msg arg))))
-	(else (apply error (cons (string-append errmsg ": ") arg))))
+(define (context-error context intro errmsg . expr)
+  (apply context-owner-error
+	 (cons context
+	       (cons #f
+		     (cons intro
+			   (cons errmsg expr)))))
+)
+
+; Call this to issue an error message when you have a context and an
+; <ident> or <source-ident> object (we call the "owner").
+; CONTEXT is a <context> object or #f if there is none.
+; OWNER is an <ident> or <source-ident> object or #f if there is none.
+; INTRO is a general introduction to what cgen was doing.
+;   If OWNER is non-#f, the text " of <object-name>" is appended.
+; ERRMSG is, yes, you guessed it, the error message.
+; EXPR is the value that had the error if there is one.
+
+(define (context-owner-error context owner intro errmsg . expr)
+  ;; If we don't have a context, look at the owner to try to find one.
+  ;; We want to include the source location in the error if we can.
+  (if (and (not context)
+	   owner
+	   (source-ident? owner))
+      (set! context (make-obj-context owner #f)))
+  (if (not context)
+      (set! context (make-prefix-context #f)))
+
+  (let* ((loc (context-location context))
+	 (top-sloc (and loc (location-top loc)))
+	 (intro (string-append intro
+			       (if owner
+				   (string-append " of "
+						  (obj:str-name owner))
+				   "")))
+	 (prefix (or (context-prefix context) "Error"))
+	 (text (string-append prefix ": " errmsg)))
+
+    (if loc
+
+	(apply error
+	       (cons
+		(simple-format
+		 #f
+		 "\n~A:\n@ ~A:\n\n~A: ~A:"
+		 intro
+		 (location->string loc)
+		 (single-location->simple-string top-sloc)
+		 text)
+		expr))
+
+	(apply error
+	       (cons
+		(simple-format
+		 #f
+		 "\n~A:\n~A:"
+		 intro
+		 text)
+		expr))))
 )
 
 ; Parse an object name.
@@ -172,29 +409,29 @@
 ; together.  Each element can in turn be a list of symbols, and so on.
 ; This supports symbol concatenation in the description file without having
 ; to using string-append or some such.
-; FIXME: Isn't the plan to move ERRTXT to the 1st arg?
 
-(define (parse-name name errtxt)
+(define (parse-name context name)
   (string->symbol
    (let parse ((name name))
      (cond
-      ((list? name) (string-map parse name))
       ((symbol? name) (symbol->string name))
       ((string? name) name)
-      (else (parse-error errtxt "improper name" name)))))
+      ((number? name) (number->string name))
+      ((list? name) (string-map parse name))
+      (else (parse-error context "improper name" name)))))
 )
 
 ; Parse an object comment.
 ; COMMENT is either a string or a list of strings, each element of which may
 ; in turn be a list of strings.
-; FIXME: Isn't the plan to move ERRTXT to the 1st arg?
 
-(define (parse-comment comment errtxt)
-  (cond ((list? comment)
-	 (string-map (lambda (elm) (parse-comment elm errtxt)) comment))
-	((or (string? comment) (symbol? comment))
-	 (->string comment))
-	(else (parse-error errtxt "improper comment" comment)))
+(define (parse-comment context comment)
+  (cond ((string? comment) comment)
+	((symbol? comment) (symbol->string comment))
+	((number? comment) (number->string comment))
+	((list? comment)
+	 (string-map (lambda (elm) (parse-comment context elm)) comment))
+	(else (parse-error context "improper comment" comment)))
 )
 
 ; Parse a symbol.
@@ -216,9 +453,9 @@
 ; Parse a number.
 ; VALID-VALUES is a list of numbers and (min . max) pairs.
 
-(define (parse-number errtxt value . valid-values)
+(define (parse-number context value . valid-values)
   (if (not (number? value))
-      (parse-error errtxt "not a number" value))
+      (parse-error context "not a number" value))
   (if (any-true? (map (lambda (test)
 			(if (pair? test)
 			    (and (>= value (car test))
@@ -226,7 +463,7 @@
 			    (= value test)))
 		      valid-values))
       value
-      (parse-error errtxt "invalid number" value valid-values))
+      (parse-error context "invalid number" value valid-values))
 )
 
 ; Parse a boolean value
@@ -303,34 +540,34 @@
 ; This is done by each of the argument validation routines so the caller
 ; doesn't need to make two calls.
 
-(define (arg-list-validate-name errtxt arg-spec)
+(define (arg-list-validate-name context arg-spec)
   (if (null? arg-spec)
-      (parse-error errtxt "empty argument spec"))
+      (parse-error context "empty argument spec" arg-spec))
   (if (not (symbol? (car arg-spec)))
-      (parse-error errtxt "argument name not a symbol" arg-spec))
+      (parse-error context "argument name not a symbol" arg-spec))
   *UNSPECIFIED*
 )
 
 ; Signal a parse error if an argument was specified with a value.
 ; ARG-SPEC is (name value).
 
-(define (arg-list-check-no-args errtxt arg-spec)
-  (arg-list-validate-name errtxt arg-spec)
+(define (arg-list-check-no-args context arg-spec)
+  (arg-list-validate-name context arg-spec)
   (if (not (null? (cdr arg-spec)))
-      (parse-error errtxt (string-append (car arg-spec)
-					 " takes zero arguments")))
+      (parse-error context (string-append (car arg-spec)
+					  " takes zero arguments")))
   *UNSPECIFIED*
 )
 
 ; Validate and return a symbol argument.
 ; ARG-SPEC is (name value).
 
-(define (arg-list-symbol-arg errtxt arg-spec)
-  (arg-list-validate-name errtxt arg-spec)
+(define (arg-list-symbol-arg context arg-spec)
+  (arg-list-validate-name context arg-spec)
   (if (or (!= (length (cdr arg-spec)) 1)
 	  (not (symbol? (cadr arg-spec))))
-      (parse-error errtxt (string-append (car arg-spec)
-					 ": argument not a symbol")))
+      (parse-error context (string-append (car arg-spec)
+					  ": argument not a symbol")))
   (cadr arg-spec)
 )
 
@@ -341,11 +578,10 @@
 ; Ideally most, if not all, of the guts of the generated sanitization is here.
 
 ; Utility to simplify expression in .cpu file.
-; Usage: (sanitize keyword entry-type entry-name1 [entry-name2 ...])
+; Usage: (sanitize isa-name-list keyword entry-type entry-name1 [entry-name2 ...])
 ; Enum attribute `(sanitize keyword)' is added to the entry.
-; It's written this way so Hobbit can handle it.
 
-(define (sanitize keyword entry-type . entry-names)
+(define (sanitize isa-name-list keyword entry-type . entry-names)
   (for-each (lambda (entry-name)
 	      (let ((entry #f))
 		(case entry-type
@@ -355,12 +591,13 @@
 		  ((cpu) (set! entry (current-cpu-lookup entry-name)))
 		  ((mach) (set! entry (current-mach-lookup entry-name)))
 		  ((model) (set! entry (current-model-lookup entry-name)))
-		  ((ifield) (set! entry (current-ifld-lookup entry-name)))
+		  ((ifield) (set! entry (current-ifld-lookup entry-name isa-name-list)))
 		  ((hardware) (set! entry (current-hw-lookup entry-name)))
-		  ((operand) (set! entry (current-op-lookup entry-name)))
-		  ((insn) (set! entry (current-insn-lookup entry-name)))
-		  ((macro-insn) (set! entry (current-minsn-lookup entry-name)))
-		  (else (parse-error "sanitize" "unknown entry type" entry-type)))
+		  ((operand) (set! entry (current-op-lookup entry-name isa-name-list)))
+		  ((insn) (set! entry (current-insn-lookup entry-name isa-name-list)))
+		  ((macro-insn) (set! entry (current-minsn-lookup entry-name isa-name-list)))
+		  (else (parse-error (make-prefix-context "sanitize")
+				     "unknown entry type" entry-type)))
 
 		; ENTRY is #f in the case where the element was discarded
 		; because its mach wasn't selected.  But in the case where
@@ -386,7 +623,7 @@
 			))
 
 		    (if (and (eq? APPLICATION 'OPCODES) (keep-all?))
-			(parse-error "sanitize"
+			(parse-error (make-prefix-context "sanitize")
 				     (string-append "unknown " entry-type)
 				     entry-name)))))
 	    entry-names)
@@ -489,7 +726,7 @@
 ; combined into one int to save space.
 ; ??? We assume there is at least one bool.
 
-(define (-gen-attr-accessors prefix attrs)
+(define (gen-attr-accessors prefix attrs)
   (string-append
    "/* " prefix " attribute accessor macros.  */\n"
    (string-map (lambda (attr)
@@ -644,6 +881,7 @@
      " } }"
      ))
 )
+
 ; Return a boolean indicating if ATLIST indicates a CTI insn.
 
 (define (atlist-cti? atlist)
@@ -678,14 +916,28 @@
   (string-append "bfd_mach_" (gen-c-symbol (mach-bfd-name mach)))
 )
 
-; Return definition of C macro to get the value of SYM.
+;; Return definition of C macro to get the value of SYM.
+;; INDEX-ARGS, EXPR must not have any newlines.
 
 (define (gen-get-macro sym index-args expr)
   (string-append
    "#define GET_" (string-upcase sym) "(" index-args ") " expr "\n")
 )
 
-; Return definition of C macro to set the value of SYM.
+;; Return definition of C macro to get the value of SYM, version 2.
+;; EXPR is a C expression *without* proper \newline handling,
+;; we prepend \ to each line.
+;; INDEX-ARGS, EXPR must not have any newlines.
+
+(define (gen-get-macro2 sym index-args expr)
+  (string-append
+   "#define GET_" (string-upcase sym) "(" index-args ") "
+   (backslash "\n" expr)
+   "\n")
+)
+
+;; Return definition of C macro to set the value of SYM.
+;; INDEX-ARGS, EXPR, LVALUE must not have any newlines.
 
 (define (gen-set-macro sym index-args lvalue)
   (string-append
@@ -695,9 +947,10 @@
    "x) (" lvalue " = (x))\n")
 )
 
-; Return definition of C macro to set the value of SYM, version 2.
-; EXPR is one or more C statements *without* proper \newline handling,
-; we prepend \ to each line.
+;; Return definition of C macro to set the value of SYM, version 2.
+;; EXPR is one or more C statements *without* proper \newline handling,
+;; we prepend \ to each line.
+;; INDEX-ARGS, NEWVAL-ARG must not have any newlines.
 
 (define (gen-set-macro2 sym index-args newval-arg expr)
   (string-append
@@ -710,9 +963,15 @@
    ";} while (0)\n")
 )
 
-; Misc. object utilities.
+;; Misc. object utilities.
 
-; Sort a list of <ident> objects alphabetically.
+;; Return the nub of a list of objects.
+
+(define (obj-list-nub obj-list)
+  (nub obj-list obj:name)
+)
+
+;; Sort a list of objects with get-name methods alphabetically.
 
 (define (alpha-sort-obj-list l)
   (sort l

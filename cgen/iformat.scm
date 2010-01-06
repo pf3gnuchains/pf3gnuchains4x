@@ -1,5 +1,5 @@
 ; Instruction formats.
-; Copyright (C) 2000 Red Hat, Inc.
+; Copyright (C) 2000, 2009 Red Hat, Inc.
 ; This file is part of CGEN.
 ; See file COPYING.CGEN for details.
 
@@ -67,13 +67,6 @@
   (number key ifields mask-length length mask eg-insn)
 )
 
-; Traverse the ifield list to collect all base (non-derived) ifields used in it.
-(define (ifields-base-ifields ifld-list)
-  (collect (lambda (ifld)
-	     (ifld-base-ifields ifld))
-	   ifld-list)
-)
-
 ; Return enum cgen_fmt_type value for FMT.
 ; ??? Not currently used.
 
@@ -86,7 +79,7 @@
 ; All bits must be represent exactly once.
 
 (define (compute-insn-length fld-list)
-  (apply + (map ifld-length (collect ifld-base-ifields fld-list)))
+  (apply + (map ifld-length (ifields-base-ifields fld-list)))
 )
 
 ; Given FLD-LIST, compute the base length in bits.
@@ -95,6 +88,9 @@
 ; instruction sets, compute the base appropriate for this set of
 ; ifields.  Check that ifields are not shared among isas with
 ; inconsistent base insn lengths.
+;
+; ??? The algorithm here is a bit odd.  [Though there is value in verifying
+; ifields are from consistent ISAs.]
 
 (define (compute-insn-base-mask-length fld-list)
   (let* ((isa-base-bitsizes
@@ -102,7 +98,7 @@
 	   (map isa-base-insn-bitsize
 		(map current-isa-lookup
 		     (collect (lambda (ifld) 
-				(bitset-attr->list (atlist-attr-value (obj-atlist ifld) 'ISA #f)))
+				(atlist-attr-value (obj-atlist ifld) 'ISA #f))
 			      fld-list))))))
     (if (= 1 (length isa-base-bitsizes))
 	(min (car isa-base-bitsizes) (compute-insn-length fld-list))
@@ -131,9 +127,7 @@
     (apply +
 	   (map (lambda (fld) (ifld-mask fld mask-len mask-bitrange))
 		; Find the fields that have constant values.
-		(find ifld-constant? (collect ifld-base-ifields fld-list)))
-	   )
-    )
+		(find ifld-constant? (ifields-base-ifields fld-list)))))
 )
 
 ; Return the <iformat> search key for a sorted field list.
@@ -143,7 +137,7 @@
 ; INSN is passed so that we can include its sanytize attribute, if present,
 ; so sanytized sources work (needed formats don't disappear).
 
-(define (-ifmt-search-key insn sorted-ifld-list)
+(define (/ifmt-search-key insn sorted-ifld-list)
   (string-map (lambda (ifld)
 		(string-append " ("
 			       (or (->string (obj-attr-value insn 'sanitize))
@@ -264,7 +258,7 @@
 ; the generated code smaller (and sometimes faster - more usable common
 ; fragments in pbb simulators).  Don't cause spurious differences.
 
-(define (-sfmt-search-key insn cti? sorted-used-iflds sem-in-ops sem-out-ops)
+(define (/sfmt-search-key insn cti? sorted-used-iflds sem-in-ops sem-out-ops)
   (let ((op-key (lambda (op)
 		  (string-append " ("
 				 (or (->string (obj-attr-value insn 'sanitize))
@@ -326,7 +320,7 @@
 
 ; Sort IFLDS by dependencies and then by starting bit number.
 
-(define (-sfmt-order-iflds iflds)
+(define (/sfmt-order-iflds iflds)
   (let ((up? 
 	 ; ??? Something like this is preferable.
 	 ;(not (ifld-lsb0? (car ifld-list)))
@@ -347,13 +341,13 @@
 ; The important points are to help distinguish sformat's by the ifields used
 ; and to put ifields that others depend on first.
 
-(define (-sfmt-used-iflds in-ops out-ops)
+(define (/sfmt-used-iflds in-ops out-ops)
   (let ((in-iflds (map op-iflds-used in-ops))
 	(out-iflds (map op-iflds-used out-ops)))
     (let ((all-iflds (nub (append (apply append in-iflds)
 				  (apply append out-iflds))
 			  obj:name)))
-      (-sfmt-order-iflds all-iflds)))
+      (/sfmt-order-iflds all-iflds)))
 )
 
 ; The format descriptor is used to sort formats.
@@ -390,17 +384,18 @@
 
 ; Compute an iformat descriptor used to build an <iformat> object for INSN.
 ;
-; If COMPUTE-SFORMAT? is #t compile the semantics and compute the semantic
-; format (same as instruction format except that operands are used to
+; If COMPUTE-SFORMAT? is #t compute the semantic format
+; (same as instruction format except that operands are used to
 ; distinguish insns).
 ; Attributes derivable from the semantics are also computed.
 ; This is all done at the same time to minimize the number of times the
 ; semantic code is traversed.
+; The semantics of INSN must already be canonicalized and stored in
+; canonical-semantics.
 ;
 ; The result is (descriptor compiled-semantics attrs).
-; `descriptor' is #f for insns with an empty field list
-; (this happens for virtual insns).
-; `compiled-semantics' is #f if COMPUTE-SFORMAT? is #f.
+; `descriptor' and `compiled-semantics' are #f for insns with an empty
+; field list.  This happens for virtual insns.
 ; `attrs' is an <attr-list> object of attributes derived from the semantics.
 ;
 ; ??? We never traverse the semantics of virtual insns.
@@ -421,32 +416,31 @@
 	; Field list is unspecified.
 	(list #f #f atlist-empty)
 
-	; FIXME: error checking (e.g. missing or overlapping bits)
-	(let* (; A list of the various bits of semantic code.
-	       (sems (list (insn-semantics insn)))
+	(let* ((sem (insn-canonical-semantics insn))
 	       ; Compute list of input and output operands if asked for.
 	       (sem-ops (if compute-sformat?
 			    (semantic-compile #f ; FIXME: context
-					      insn sems)
+					      insn sem)
 			    (csem-make #f #f #f
-				       (if (insn-semantics insn)
+				       (if sem
 					   (semantic-attrs #f ; FIXME: context
-							   insn sems)
-					   atlist-empty))))
-	       )
-	  (let ((compiled-sems (csem-code sem-ops))
+							   insn sem)
+					   atlist-empty)))))
+
+	  (let ((compiled-sem (csem-code sem-ops))
 		(in-ops (csem-inputs sem-ops))
 		(out-ops (csem-outputs sem-ops))
 		(attrs (csem-attrs sem-ops))
 		(cti? (or (atlist-cti? (csem-attrs sem-ops))
-			  (insn-cti? insn))))
+			  (insn-cti-attr? insn))))
+
 	    (list (make <fmt-desc>
 		    cti? sorted-ifields in-ops out-ops
 		    (if (and in-ops out-ops)
-			(-sfmt-used-iflds in-ops out-ops)
+			(/sfmt-used-iflds in-ops out-ops)
 			#f)
 		    attrs)
-		  compiled-sems
+		  compiled-sem
 		  attrs)))))
 )
 
@@ -455,8 +449,8 @@
 ; FMT-DESC is INSN's <fmt-desc> object.
 ; IFMT-LIST is append!'d to and the found iformat is stored in INSN.
 
-(define (-ifmt-lookup-ifmt! insn fmt-desc ifmt-list)
-  (let* ((search-key (-ifmt-search-key insn (-fmt-desc-iflds fmt-desc)))
+(define (/ifmt-lookup-ifmt! insn fmt-desc ifmt-list)
+  (let* ((search-key (/ifmt-search-key insn (-fmt-desc-iflds fmt-desc)))
 	 (ifmt (find-first (lambda (elm)
 			     (equal? (ifmt-key elm) search-key))
 			   ifmt-list)))
@@ -489,8 +483,8 @@
 ;
 ; We assume INSN's <iformat> has already been recorded.
 
-(define (-ifmt-lookup-sfmt! insn fmt-desc sfmt-list)
-  (let* ((search-key (-sfmt-search-key insn (-fmt-desc-cti? fmt-desc)
+(define (/ifmt-lookup-sfmt! insn fmt-desc sfmt-list)
+  (let* ((search-key (/sfmt-search-key insn (-fmt-desc-cti? fmt-desc)
 				       (-fmt-desc-used-iflds fmt-desc)
 				       (-fmt-desc-in-ops fmt-desc)
 				       (-fmt-desc-out-ops fmt-desc)))
@@ -554,13 +548,13 @@
   ; intelligent processing of it later.
 
   (for-each (lambda (insn)
-	      (logit 3 "Scanning operands of " (obj:name insn) ": "
+	      (logit 2 "Scanning operands of " (obj:name insn) ": "
 		     (insn-syntax insn) " ...\n")
 	      (let ((sem-ops (ifmt-analyze insn compute-sformat?)))
 		(insn-set-fmt-desc! insn (car sem-ops))
 		(if (and compute-sformat? (cadr sem-ops))
-		    (let ((compiled-sems (cadr sem-ops)))
-		      (insn-set-compiled-semantics! insn (car compiled-sems))))
+		    (let ((compiled-sem (cadr sem-ops)))
+		      (insn-set-compiled-semantics! insn compiled-sem)))
 		(obj-set-atlist! insn
 				 (atlist-append (obj-atlist insn)
 						(caddr sem-ops)))
@@ -598,7 +592,7 @@
 	 )
 
     (for-each (lambda (insn)
-		(logit 3 "Processing format for " (obj:name insn) ": "
+		(logit 2 "Processing format for " (obj:name insn) ": "
 		       (insn-syntax insn) " ...\n")
 
 		(let ((fmt-desc (insn-fmt-desc insn)))
@@ -608,9 +602,9 @@
 		      (begin
 			; Must compute <iformat> before <sformat>, the latter
 			; needs the former.
-			(-ifmt-lookup-ifmt! insn fmt-desc ifmt-list)
+			(/ifmt-lookup-ifmt! insn fmt-desc ifmt-list)
 			(if compute-sformat?
-			    (-ifmt-lookup-sfmt! insn fmt-desc sfmt-list)))
+			    (/ifmt-lookup-sfmt! insn fmt-desc sfmt-list)))
 
 		      ; No field list present, use empty format.
 		      (begin

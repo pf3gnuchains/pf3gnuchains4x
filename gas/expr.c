@@ -1587,13 +1587,13 @@ operatorf (int *num_chars)
   if (is_name_beginner (c))
     {
       char *name = input_line_pointer;
-      char c = get_symbol_end ();
+      char ec = get_symbol_end ();
 
-      ret = md_operator (name, 2, &c);
+      ret = md_operator (name, 2, &ec);
       switch (ret)
 	{
 	case O_absent:
-	  *input_line_pointer = c;
+	  *input_line_pointer = ec;
 	  input_line_pointer = name;
 	  break;
 	case O_uminus:
@@ -1603,7 +1603,7 @@ operatorf (int *num_chars)
 	  ret = O_illegal;
 	  /* FALLTHROUGH */
 	default:
-	  *input_line_pointer = c;
+	  *input_line_pointer = ec;
 	  *num_chars = input_line_pointer - name;
 	  input_line_pointer = name;
 	  return ret;
@@ -2237,8 +2237,7 @@ resolve_expression (expressionS *expressionP)
 	op = O_constant;
       else if (seg_left == reg_section && final_val == 0)
 	op = O_register;
-      else if (seg_left == undefined_section
-	       && add_symbol != orig_add_symbol)
+      else if (!symbol_same_p (add_symbol, orig_add_symbol))
 	final_val += left;
       expressionP->X_add_symbol = add_symbol;
     }
