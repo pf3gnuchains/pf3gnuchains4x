@@ -1,7 +1,7 @@
 /* path.h: path data structures
 
    Copyright 1996, 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008 Red Hat, Inc.
+   2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -111,6 +111,7 @@ class path_conv
   int has_symlinks () const {return path_flags & PATH_HAS_SYMLINKS;}
   int has_buggy_open () const {return fs.has_buggy_open ();}
   int has_buggy_fileid_dirinfo () const {return fs.has_buggy_fileid_dirinfo ();}
+  int has_buggy_basic_info () const {return fs.has_buggy_basic_info ();}
   int binmode () const
   {
     if (path_flags & PATH_BINARY)
@@ -242,7 +243,6 @@ class path_conv
     strcpy (new_path, p);
     return path = new_path;
   }
-  void fillin (HANDLE h);
   bool is_binary ();
 
   unsigned __stdcall ndisk_links (DWORD);

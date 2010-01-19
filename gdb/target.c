@@ -685,6 +685,20 @@ update_current_target (void)
       INHERIT (to_get_ada_task_ptid, t);
       /* Do not inherit to_search_memory.  */
       INHERIT (to_supports_multi_process, t);
+      INHERIT (to_trace_init, t);
+      INHERIT (to_download_tracepoint, t);
+      INHERIT (to_download_trace_state_variable, t);
+      INHERIT (to_trace_set_readonly_regions, t);
+      INHERIT (to_trace_start, t);
+      INHERIT (to_get_trace_status, t);
+      INHERIT (to_trace_stop, t);
+      INHERIT (to_trace_find, t);
+      INHERIT (to_get_trace_state_variable_value, t);
+      INHERIT (to_save_trace_data, t);
+      INHERIT (to_upload_tracepoints, t);
+      INHERIT (to_upload_trace_state_variables, t);
+      INHERIT (to_get_raw_trace_data, t);
+      INHERIT (to_set_disconnected_tracing, t);
       INHERIT (to_magic, t);
       /* Do not inherit to_memory_map.  */
       /* Do not inherit to_flash_erase.  */
@@ -833,6 +847,48 @@ update_current_target (void)
   de_fault (to_supports_multi_process,
 	    (int (*) (void))
 	    return_zero);
+  de_fault (to_trace_init,
+	    (void (*) (void))
+	    tcomplain);
+  de_fault (to_download_tracepoint,
+	    (void (*) (struct breakpoint *))
+	    tcomplain);
+  de_fault (to_download_trace_state_variable,
+	    (void (*) (struct trace_state_variable *))
+	    tcomplain);
+  de_fault (to_trace_set_readonly_regions,
+	    (void (*) (void))
+	    tcomplain);
+  de_fault (to_trace_start,
+	    (void (*) (void))
+	    tcomplain);
+  de_fault (to_get_trace_status,
+	    (int (*) (struct trace_status *))
+	    return_minus_one);
+  de_fault (to_trace_stop,
+	    (void (*) (void))
+	    tcomplain);
+  de_fault (to_trace_find,
+	    (int (*) (enum trace_find_type, int, ULONGEST, ULONGEST, int *))
+	    return_zero);
+  de_fault (to_get_trace_state_variable_value,
+	    (int (*) (int, LONGEST *))
+	    return_zero);
+  de_fault (to_save_trace_data,
+	    (int (*) (char *))
+	    tcomplain);
+  de_fault (to_upload_tracepoints,
+	    (int (*) (struct uploaded_tp **))
+	    return_zero);
+  de_fault (to_upload_trace_state_variables,
+	    (int (*) (struct uploaded_tsv **))
+	    return_zero);
+  de_fault (to_get_raw_trace_data,
+	    (LONGEST (*) (gdb_byte *, ULONGEST, LONGEST))
+	    tcomplain);
+  de_fault (to_set_disconnected_tracing,
+	    (void (*) (int))
+	    tcomplain);
 #undef de_fault
 
   /* Finally, position the target-stack beneath the squashed
@@ -3022,6 +3078,26 @@ target_store_registers (struct regcache *regcache, int regno)
     }
 
   noprocess ();
+}
+
+int
+target_core_of_thread (ptid_t ptid)
+{
+  struct target_ops *t;
+
+  for (t = current_target.beneath; t != NULL; t = t->beneath)
+    {
+      if (t->to_core_of_thread != NULL)
+	{
+	  int retval = t->to_core_of_thread (t, ptid);
+	  if (targetdebug)
+	    fprintf_unfiltered (gdb_stdlog, "target_core_of_thread (%d) = %d\n",
+				PIDGET (ptid), retval);
+	  return retval;
+	}
+    }
+
+  return -1;
 }
 
 static void

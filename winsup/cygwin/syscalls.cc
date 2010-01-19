@@ -1,7 +1,7 @@
 /* syscalls.cc: syscalls
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -116,13 +116,13 @@ close_all_files (bool norelease)
   cygheap->fdtab.unlock ();
 }
 
-int
+extern "C" int
 dup (int fd)
 {
-  return cygheap->fdtab.dup2 (fd, cygheap_fdnew ());
+  return cygheap->fdtab.dup3 (fd, cygheap_fdnew (), 0);
 }
 
-int
+extern "C" int
 dup2 (int oldfd, int newfd)
 {
   if (newfd >= OPEN_MAX_MAX)
@@ -131,7 +131,39 @@ dup2 (int oldfd, int newfd)
       set_errno (EBADF);
       return -1;
     }
-  return cygheap->fdtab.dup2 (oldfd, newfd);
+  if (newfd == oldfd)
+    {
+      cygheap_fdget cfd (oldfd);
+      if (cfd < 0)
+	{
+	  syscall_printf ("-1 = dup2 (%d, %d) (oldfd not open)", oldfd, newfd);
+	  return -1;
+	}
+      syscall_printf ("%d = dup2 (%d, %d) (newfd==oldfd)", oldfd, oldfd, newfd);
+      return oldfd;
+    }
+  return cygheap->fdtab.dup3 (oldfd, newfd, 0);
+}
+
+extern "C" int
+dup3 (int oldfd, int newfd, int flags)
+{
+  if (newfd >= OPEN_MAX_MAX)
+    {
+      syscall_printf ("-1 = dup3 (%d, %d, %p) (%d too large)",
+		      oldfd, newfd, flags, newfd);
+      set_errno (EBADF);
+      return -1;
+    }
+  if (newfd == oldfd)
+    {
+      cygheap_fdget cfd (oldfd, false, false);
+      set_errno (cfd < 0 ? EBADF : EINVAL);
+      syscall_printf ("-1 = dup3 (%d, %d, %p) (newfd==oldfd)",
+		      oldfd, newfd, flags);
+      return -1;
+    }
+  return cygheap->fdtab.dup3 (oldfd, newfd, flags);
 }
 
 static char desktop_ini[] =
@@ -1009,7 +1041,7 @@ open (const char *unix_path, int flags, ...)
 
       if (fd >= 0)
 	{
-	  if (!(fh = build_fh_name (unix_path, NULL,
+	  if (!(fh = build_fh_name (unix_path,
 				    (flags & (O_NOFOLLOW | O_EXCL))
 				    ?  PC_SYM_NOFOLLOW : PC_SYM_FOLLOW,
 				    stat_suffixes)))
@@ -1037,16 +1069,20 @@ open (const char *unix_path, int flags, ...)
 	      delete fh;
 	      res = -1;
 	    }
-	  else if (!fh->open (flags, (mode & 07777) & ~cygheap->umask))
-	    {
-	      delete fh;
-	      res = -1;
-	    }
 	  else
 	    {
-	      cygheap->fdtab[fd] = fh;
-	      if ((res = fd) <= 2)
-		set_std_handle (res);
+	      fh->close_on_exec (flags & O_CLOEXEC);
+	      if (!fh->open (flags, (mode & 07777) & ~cygheap->umask))
+		{
+		  delete fh;
+		  res = -1;
+		}
+	      else
+		{
+		  cygheap->fdtab[fd] = fh;
+		  if ((res = fd) <= 2)
+		    set_std_handle (res);
+		}
 	    }
 	}
     }
@@ -1136,7 +1172,7 @@ link (const char *oldpath, const char *newpath)
   int res = -1;
   fhandler_base *fh;
 
-  if (!(fh = build_fh_name (oldpath, NULL, PC_SYM_NOFOLLOW, stat_suffixes)))
+  if (!(fh = build_fh_name (oldpath, PC_SYM_NOFOLLOW, stat_suffixes)))
     goto error;
 
   if (fh->error ())
@@ -1168,7 +1204,7 @@ chown_worker (const char *name, unsigned fmode, __uid32_t uid, __gid32_t gid)
   int res = -1;
   fhandler_base *fh;
 
-  if (!(fh = build_fh_name (name, NULL, fmode, stat_suffixes)))
+  if (!(fh = build_fh_name (name, fmode, stat_suffixes)))
     goto error;
 
   if (fh->error ())
@@ -1260,7 +1296,7 @@ chmod (const char *path, mode_t mode)
 {
   int res = -1;
   fhandler_base *fh;
-  if (!(fh = build_fh_name (path, NULL, PC_SYM_FOLLOW, stat_suffixes)))
+  if (!(fh = build_fh_name (path, PC_SYM_FOLLOW, stat_suffixes)))
     goto error;
 
   if (fh->error ())
@@ -1471,7 +1507,7 @@ stat_worker (path_conv &pc, struct __stat64 *buf)
 
   if (pc.error)
     {
-      debug_printf ("got %d error from build_fh_name", pc.error);
+      debug_printf ("got %d error from path_conv", pc.error);
       set_errno (pc.error);
     }
   else if (pc.exists ())
@@ -1572,7 +1608,7 @@ access (const char *fn, int flags)
     set_errno (EINVAL);
   else
     {
-      fhandler_base *fh = build_fh_name (fn, NULL, PC_SYM_FOLLOW, stat_suffixes);
+      fhandler_base *fh = build_fh_name (fn, PC_SYM_FOLLOW, stat_suffixes);
       if (fh)
 	{
 	  res =  fh->fhaccess (flags, false);
@@ -1595,7 +1631,7 @@ euidaccess (const char *fn, int flags)
     set_errno (EINVAL);
   else
     {
-      fhandler_base *fh = build_fh_name (fn, NULL, PC_SYM_FOLLOW, stat_suffixes);
+      fhandler_base *fh = build_fh_name (fn, PC_SYM_FOLLOW, stat_suffixes);
       if (fh)
 	{
 	  res =  fh->fhaccess (flags, true);
@@ -1765,7 +1801,7 @@ rename (const char *oldpath, const char *newpath)
       set_errno (ENOENT);
       goto out;
     }
-  if (oldpc.isspecial ()) /* No renames from virtual FS */
+  if (oldpc.isspecial () && !oldpc.issocket ()) /* No renames from virtual FS */
     {
       set_errno (EROFS);
       goto out;
@@ -1814,7 +1850,7 @@ rename (const char *oldpath, const char *newpath)
       set_errno (newpc.error);
       goto out;
     }
-  if (newpc.isspecial ()) /* No renames to virtual FSes */
+  if (newpc.isspecial () && !newpc.issocket ()) /* No renames to virtual FSes */
     {
       set_errno (EROFS);
       goto out;
@@ -2207,7 +2243,7 @@ pathconf (const char *file, int v)
       set_errno (ENOENT);
       return -1;
     }
-  if (!(fh = build_fh_name (file, NULL, PC_SYM_FOLLOW, stat_suffixes)))
+  if (!(fh = build_fh_name (file, PC_SYM_FOLLOW, stat_suffixes)))
     return -1;
   if (!fh->exists ())
     set_errno (ENOENT);
@@ -2502,7 +2538,7 @@ statvfs (const char *name, struct statvfs *sfs)
   if (efault.faulted (EFAULT))
     goto error;
 
-  if (!(fh = build_fh_name (name, NULL, PC_SYM_FOLLOW, stat_suffixes)))
+  if (!(fh = build_fh_name (name, PC_SYM_FOLLOW, stat_suffixes)))
     goto error;
 
   if (fh->error ())
@@ -4013,7 +4049,7 @@ faccessat (int dirfd, const char *pathname, int mode, int flags)
 	set_errno (EINVAL);
       else
 	{
-	  fhandler_base *fh = build_fh_name (path, NULL,
+	  fhandler_base *fh = build_fh_name (path,
 					     (flags & AT_SYMLINK_NOFOLLOW)
 					     ? PC_SYM_NOFOLLOW : PC_SYM_FOLLOW,
 					     stat_suffixes);
@@ -4312,8 +4348,16 @@ internal_setlocale ()
   cwdstuff::cwd_lock.acquire ();
   sys_mbstowcs (w_cwd, 32768, cygheap->cwd.get_posix ());
   /* Set charset for internal conversion functions. */
-  cygheap->locale.mbtowc = __mbtowc;
-  cygheap->locale.wctomb = __wctomb;
+  if (*__locale_charset () == 'A'/*SCII*/)
+    {
+      cygheap->locale.mbtowc = __utf8_mbtowc;
+      cygheap->locale.wctomb = __utf8_wctomb;
+    }
+  else
+    {
+      cygheap->locale.mbtowc = __mbtowc;
+      cygheap->locale.wctomb = __wctomb;
+    }
   strcpy (cygheap->locale.charset, __locale_charset ());
   /* Restore CWD and PATH in new charset. */
   cygheap->cwd.reset_posix (w_cwd);
@@ -4326,10 +4370,11 @@ internal_setlocale ()
     }
 }
 
-/* Called from dll_crt0_1, before calling the application's main().
+/* Called from dll_crt0_1, before fetching the command line from Windows.
    Set the internal charset according to the environment locale settings.
    Check if a required codepage is available, and only switch internal
-   charset if so.  Afterwards, reset application locale to "C" per POSIX. */
+   charset if so.
+   Make sure to reset the application locale to "C" per POSIX. */
 void
 initial_setlocale ()
 {
@@ -4337,7 +4382,6 @@ initial_setlocale ()
   if (ret && check_codepage (ret)
       && strcmp (cygheap->locale.charset, __locale_charset ()) != 0)
     internal_setlocale ();
-  _setlocale_r (_REENT, LC_CTYPE, "C");
 }
 
 /* Like newlib's setlocale, but additionally check if the charset needs

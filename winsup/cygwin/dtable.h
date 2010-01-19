@@ -1,7 +1,7 @@
 /* dtable.h: fd table definition.
 
-   Copyright 2000, 2001, 2003, 2004, 2005, 2006, 2007, 2008, 2009 Red
-   Hat, Inc.
+   Copyright 2000, 2001, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
+   2010 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -51,7 +51,7 @@ public:
   int vfork_child_dup ();
   void vfork_parent_restore ();
   void vfork_child_fixup ();
-  fhandler_base *dup_worker (fhandler_base *oldfh);
+  fhandler_base *dup_worker (fhandler_base *oldfh, int flags);
   int extend (int howmuch);
   void fixup_after_fork (HANDLE);
   inline int not_open (int fd)
@@ -65,7 +65,7 @@ public:
   int find_unused_handle () { return find_unused_handle (first_fd_for_open);}
   void release (int fd);
   void init_std_file_from_handle (int fd, HANDLE handle);
-  int dup2 (int oldfd, int newfd);
+  int dup3 (int oldfd, int newfd, int flags);
   void fixup_after_exec ();
   inline fhandler_base *&operator [](int fd) const { return fds[fd]; }
   bool select_read (int fd, select_stuff *);
@@ -94,8 +94,7 @@ public:
 };
 
 fhandler_base *build_fh_dev (const device&, const char * = NULL);
-fhandler_base *build_fh_name (const char *, HANDLE = NULL, unsigned = 0, suffix_info * = NULL);
-fhandler_base *build_fh_name (const UNICODE_STRING *, HANDLE = NULL, unsigned = 0, suffix_info * = NULL);
+fhandler_base *build_fh_name (const char *, unsigned = 0, suffix_info * = NULL);
 fhandler_base *build_fh_pc (path_conv& pc, bool set_name = true);
 
 void dtable_init ();

@@ -1,3 +1,26 @@
+2010-01-16  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygpath.cc (get_mixed_name): Drop function.  Replace with call to
+	convert_slashes throughout.
+	(do_sysfolders): Free allocated buffer.
+	(do_pathconv): Fix freeing last buffer.
+
+2010-01-11  Corinna Vinschen  <corinna@vinschen.de>
+
+	* mount.cc (do_mount_from_fstab): Allow to change cygdrive prefix, too.
+
+2010-01-07  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygpath.cc: Throughout, free obsolete path buffers.
+
+2010-01-07  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygpath.cc (main): Remove enforcing "en_US.UTF-8" locale.
+	Revert usage of argz functions when reading input from file and
+	simplify option usage.  Allow only one option argument and use
+	the rest as filename argument to allow spaces in filenames.  Restrict
+	processing special folder type options to one line.
+
 2009-12-17  Christopher Faylor  <me+cygwin@cgf.cx>
 
 	* ps.cc (main): Return 0 if pid found.

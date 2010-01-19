@@ -1,3 +1,24 @@
+2010-01-13  DJ Delorie  <dj@redhat.com>
+
+	* emultempl/elf32.em (_place_orphan): If an input section doesn't
+	match an existing output section, but an unused output section
+	statement does match, use it.
+	* emultempl/pe.em (_place_orphan): Likewise.
+	* emultempl/pep.em (_place_orphan): Likewise.
+
+2010-01-09  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+
+	* configure: Regenerate.
+	* Makefile.in: Regenerate.
+
+2010-01-08  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* ldver.c (ldversion): Change to "Copyright 2010".
+
+2010-01-08  Alan Modra  <amodra@gmail.com>
+
+	PR 11107
+	* emultempl/vxworks.em: Expand tr arguments to suit non-GNU tr.
 
 For older changes see ChangeLog-2009
 

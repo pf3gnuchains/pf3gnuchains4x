@@ -1,3 +1,62 @@
+2010-01-15  Sebastian Pop  <sebastian.pop@amd.com>
+
+	* i386-opc.tbl: Support all the possible aliases for VPCOM* insns.
+	* i386-tbl.h: Regenerated.
+
+2010-01-14  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* i386-opc.h (VexVVVV): Replace VEX.DNS with VEX.NDS in
+	comments.
+
+2010-01-14  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* i386-dis.c (names_mm): New.
+	(intel_names_mm): Likewise.
+	(att_names_mm): Likewise.
+	(names_xmm): Likewise.
+	(intel_names_xmm): Likewise.
+	(att_names_xmm): Likewise.
+	(names_ymm): Likewise.
+	(intel_names_ymm): Likewise.
+	(att_names_ymm): Likewise.
+	(print_insn): Set names_mm, names_xmm and names_ymm.
+	(OP_MMX): Use names_mm, names_xmm and names_ymm.
+	(OP_XMM): Likewise.
+	(OP_EM): Likewise.
+	(OP_EMC): Likewise.
+	(OP_MXC): Likewise.
+	(OP_EX): Likewise.
+	(XMM_Fixup): Likewise.
+	(OP_VEX): Likewise.
+	(OP_EX_VexReg): Likewise.
+	(OP_Vex_2src): Likewise.
+	(OP_Vex_2src_1): Likewise.
+	(OP_Vex_2src_2): Likewise.
+	(OP_REG_VexI4): Likewise.
+
+2010-01-13  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* i386-dis.c (print_insn): Update comments.
+
+2010-01-12  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* i386-dis.c (rex_original): Removed.
+	(ckprefix): Remove rex_original.
+	(print_insn): Update comments.
+
+2010-01-09  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+
+	* Makefile.in: Regenerate.
+	* configure: Regenerate.
+
+2010-01-07  Doug Evans  <dje@sebabeach.org>
+
+	* cgen-ibld.in (insert_normal, extract_normal): Minor cleanup.
+	* fr30-ibld.c, * frv-ibld.c, * ip2k-ibld.c, * iq2000-ibld.c,
+	* lm32-ibld.c, * m32c-ibld.c, * m32r-ibld.c, * mep-ibld.c,
+	* mt-ibld.c, * openrisc-ibld.c, * xc16x-ibld.c,
+	* xstormy16-ibld.c: Regenerate.
+
 2010-01-06  Quentin Neill  <quentin.neill@amd.com>
 
 	* i386-gen.c (cpu_flag_init): Add new CPU_AMDFAM15_FLAGS.

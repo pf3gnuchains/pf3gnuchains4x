@@ -1,7 +1,7 @@
 /* fhandler_tty.cc
 
    Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009 Red Hat, Inc.
+   2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -64,10 +64,6 @@ fhandler_tty_master::init ()
       termios_printf ("can't create fhandler");
       return -1;
     }
-
-  termios ti;
-  memset (&ti, 0, sizeof (ti));
-  console->tcsetattr (0, &ti);
 
   if (!setup (false))
     return 1;
@@ -585,6 +581,7 @@ fhandler_tty_slave::open (int flags, mode_t)
 
   set_io_handle (from_master_local);
   set_output_handle (to_master_local);
+  set_close_on_exec (!!(flags & O_CLOEXEC));
 
   set_open_status ();
   if (cygheap->manage_console_count ("fhandler_tty_slave::open", 1) == 1

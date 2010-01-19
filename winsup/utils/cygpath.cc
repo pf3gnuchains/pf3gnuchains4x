@@ -1,6 +1,6 @@
 /* cygpath.cc -- convert pathnames between Windows and Unix format
    Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009 Red Hat, Inc.
+   2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -16,7 +16,6 @@ details. */
 #include <wchar.h>
 #include <locale.h>
 #include <stdlib.h>
-#include <argz.h>
 #include <limits.h>
 #include <getopt.h>
 #include <windows.h>
@@ -30,7 +29,7 @@ details. */
 #include <ddk/ntifs.h>
 #include "wide_path.h"
 
-static const char version[] = "$Revision$";
+static const char version[] = "$Revision: 1.59 $";
 
 static char *prog_name;
 static char *file_arg, *output_arg;
@@ -227,6 +226,7 @@ get_device_name (char *path)
 		 a valid DOS device name, if prepended with "\\.\".  Return that
 		 valid DOS path. */
 	      ULONG len = RtlUnicodeStringToAnsiSize (&odi->ObjectName);
+	      free (ret);
 	      ret = (char *) malloc (len + 4);
 	      strcpy (ret, "\\\\.\\");
 	      ans.Length = 0;
@@ -539,22 +539,6 @@ convert_slashes (char* name)
    }
 }
 
-static char *
-get_mixed_name (const char* filename)
-{
-  char* mixed_buf = strdup (filename);
-
-  if (mixed_buf == NULL)
-    {
-      fprintf (stderr, "%s: out of memory\n", prog_name);
-      exit (1);
-    }
-
-  convert_slashes (mixed_buf);
-
-  return mixed_buf;
-}
-
 static bool
 get_special_folder (char* path, int id)
 {
@@ -575,6 +559,7 @@ static void
 do_sysfolders (char option)
 {
   char *buf, buf1[PATH_MAX], buf2[PATH_MAX];
+  char *tmp = NULL;
   WCHAR wbuf[MAX_PATH];
   DWORD len = MAX_PATH;
   WIN32_FIND_DATAW w32_fd;
@@ -668,11 +653,13 @@ do_sysfolders (char option)
   else
     {
       if (shortname_flag)
-	buf = get_short_name (buf);
+	  tmp = buf = get_short_name (buf);
       if (mixed_flag)
-	buf = get_mixed_name (buf);
+	convert_slashes (buf);
     }
   printf ("%s\n", buf);
+  if (tmp)
+    free (tmp);
 }
 
 static void
@@ -696,8 +683,8 @@ report_mode (char *filename)
 static void
 do_pathconv (char *filename)
 {
-  char *buf;
-  wchar_t *buf2;
+  char *buf = NULL, *tmp;
+  wchar_t *buf2 = NULL;
   DWORD len;
   ssize_t err;
   cygwin_conv_path_t conv_func =
@@ -738,13 +725,20 @@ do_pathconv (char *filename)
 	{
 	  if (err)
 	    /* oops */;
-	  buf = get_device_paths (buf);
+	  buf = get_device_paths (tmp = buf);
+	  free (tmp);
 	  if (shortname_flag)
-	    buf = get_short_paths (buf);
+	    {
+	      buf = get_short_paths (tmp = buf);
+	      free (tmp);
+	    }
 	  if (longname_flag)
-	    buf = get_long_paths (buf);
+	    {
+	      buf = get_long_paths (tmp = buf);
+	      free (tmp);
+	    }
 	  if (mixed_flag)
-	    buf = get_mixed_name (buf);
+	    convert_slashes (buf);
 	}
       if (err)
 	{
@@ -766,11 +760,21 @@ do_pathconv (char *filename)
       if (!unix_flag)
 	{
 	  my_wcstombs (buf, buf2, 32768);
-	  buf = get_device_name (buf);
+	  buf = get_device_name (tmp = buf);
+	  free (tmp);
 	  if (shortname_flag)
-	    buf = get_short_name (buf);
+	    {
+	      buf = get_short_name (tmp = buf);
+	      free (tmp);
+	    }
 	  if (longname_flag)
-	    buf = get_long_name (buf, len);
+	    {
+	      buf = get_long_name (tmp = buf, len);
+	      free (tmp);
+	    }
+	  /* buf gets moved into the array so we have to set tmp for later
+	     freeing beforehand. */
+	  tmp = buf;
 	  if (strncmp (buf, "\\\\?\\", 4) == 0)
 	    {
 	      len = 4;
@@ -784,11 +788,15 @@ do_pathconv (char *filename)
 		}
 	    }
 	  if (mixed_flag)
-	    buf = get_mixed_name (buf);
+	    convert_slashes (buf);
 	}
     }
 
   puts (buf);
+  if (buf2)
+    free (buf2);
+  if (buf)
+    free (tmp);
 }
 
 static void
@@ -1029,10 +1037,7 @@ main (int argc, char **argv)
 {
   int o;
 
-  /* Use locale from environment.  If not set or set to "C", use UTF-8. */
   setlocale (LC_CTYPE, "");
-  if (!strcmp (setlocale (LC_CTYPE, NULL), "C"))
-    setlocale (LC_CTYPE, "en_US.UTF-8");
   prog_name = strrchr (argv[0], '/');
   if (!prog_name)
     prog_name = strrchr (argv[0], '\\');
@@ -1070,35 +1075,33 @@ main (int argc, char **argv)
 
       while (fgets (buf, sizeof (buf), fp))
 	{
-	  size_t azl = 0;
-	  int ac;
-	  char *az, **av;
+	  int ac = 0;
+	  char *av[4] = { NULL, NULL, NULL, NULL };
 	  char *p = strchr (buf, '\n');
 	  if (p)
 	    *p = '\0';
-	  if (argz_create_sep (buf, ' ', &az, &azl))
+	  p = buf;
+	  av[ac++] = prog_name;
+	  av[ac++] = p;
+	  if (options_from_file_flag && *p == '-')
 	    {
-	      perror ("cygpath");
-	      exit (1);
+	      while (*p && !isspace (*p))
+		++p;
+	      if (*p)
+		{
+		  *p++ = '\0';
+		  while (*p && isspace (*p))
+		    ++p;
+		  av[ac++] = p;
+		}
+	      o = do_options (ac, av, 1);
 	    }
-	  if (!az)
-	    continue;
-	  ac = argz_count (az, azl) + 1;
-	  av = (char **) malloc ((ac + 1) * sizeof (char *));
-	  if (!av)
-	    {
-	      perror ("cygpath");
-	      exit (1);
-	    }
-	  av[0] = prog_name;
-	  argz_extract (az, azl, av + 1);
-	  if (options_from_file_flag)
-	    o = do_options (ac, av, 1);
 	  else
-	    optind = 1;
+	    {
+	      output_flag = 0;
+	      optind = 1;
+	    }
 	  action (ac, av, o);
-	  free (az);
-	  free (av);
 	}
     }
   exit (0);

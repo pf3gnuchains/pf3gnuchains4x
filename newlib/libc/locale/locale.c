@@ -51,8 +51,10 @@ the form
 
   language[_TERRITORY][.charset][@@modifier]
 
-<<"language">> is a two character string per ISO 639.  <<"TERRITORY">> is a
-country code per ISO 3166.  For <<"charset">> and <<"modifier">> see below.
+<<"language">> is a two character string per ISO 639, or, if not available
+for a given language, a three character string per ISO 639-3.
+<<"TERRITORY">> is a country code per ISO 3166.  For <<"charset">> and
+<<"modifier">> see below.
 
 Additionally to the POSIX specifier, seven extensions are supported for
 backward compatibility with older implementations using newlib:
@@ -242,7 +244,7 @@ static const char *__get_locale_env(struct _reent *, int);
 
 #endif
 
-#ifdef __CYGWIN__
+#if 0 /*def __CYGWIN__  TODO: temporarily(?) disable C == UTF-8 */
 static char lc_ctype_charset[ENCODING_LEN + 1] = "UTF-8";
 static char lc_message_charset[ENCODING_LEN + 1] = "UTF-8";
 #else
@@ -450,7 +452,7 @@ loadlocale(struct _reent *p, int category)
   if (!strcmp (locale, "POSIX"))
     strcpy (locale, "C");
   if (!strcmp (locale, "C"))				/* Default "C" locale */
-#ifdef __CYGWIN__
+#if 0 /*def __CYGWIN__  TODO: temporarily(?) disable C == UTF-8 */
     strcpy (charset, "UTF-8");
 #else
     strcpy (charset, "ASCII");
@@ -473,6 +475,9 @@ loadlocale(struct _reent *p, int category)
 	  || c[1] < 'a' || c[1] > 'z')
 	return NULL;
       c += 2;
+      /* Allow three character Language per ISO 639-3 */
+      if (c[0] >= 'a' && c[0] <= 'z')
+      	++c;
       if (c[0] == '_')
         {
 	  /* Territory */

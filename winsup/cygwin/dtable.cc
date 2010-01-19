@@ -1,7 +1,7 @@
 /* dtable.cc: file descriptor support.
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -400,9 +400,10 @@ dtable::init_std_file_from_handle (int fd, HANDLE handle)
 
 #define cnew(name) new ((void *) ccalloc (HEAP_FHANDLER, 1, sizeof (name))) name
 
-static fhandler_base *
-build_fh_name_worker (path_conv& pc, HANDLE h, unsigned opt, suffix_info *si)
+fhandler_base *
+build_fh_name (const char *name, unsigned opt, suffix_info *si)
 {
+  path_conv pc (name, opt | PC_NULLEMPTY | PC_POSIX, si);
   if (pc.error)
     {
       fhandler_base *fh = cnew (fhandler_nodevice) ();
@@ -412,27 +413,8 @@ build_fh_name_worker (path_conv& pc, HANDLE h, unsigned opt, suffix_info *si)
       return fh;
     }
 
-  if (!pc.exists () && h)
-    pc.fillin (h);
-
   return build_fh_pc (pc);
 }
-fhandler_base *
-build_fh_name (const char *name, HANDLE h, unsigned opt, suffix_info *si)
-{
-  path_conv pc (name, opt | PC_NULLEMPTY | PC_POSIX, si);
-  return build_fh_name_worker (pc, h, opt, si);
-}
-
-#if 0 /* Not needed yet */
-#define cnew(name) new ((void *) ccalloc (HEAP_FHANDLER, 1, sizeof (name))) name
-fhandler_base *
-build_fh_name (const UNICODE_STRING *name, HANDLE h, unsigned opt, suffix_info *si)
-{
-  path_conv pc (name, opt | PC_NULLEMPTY | PC_POSIX, si);
-  return build_fh_name_worker (pc, h, opt, si);
-}
-#endif
 
 fhandler_base *
 build_fh_dev (const device& dev, const char *unix_name)
@@ -577,7 +559,7 @@ build_fh_pc (path_conv& pc, bool set_name)
 }
 
 fhandler_base *
-dtable::dup_worker (fhandler_base *oldfh)
+dtable::dup_worker (fhandler_base *oldfh, int flags)
 {
   /* Don't call set_name in build_fh_pc.  It will be called in
      fhandler_base::operator= below.  Calling it twice will result
@@ -597,7 +579,11 @@ dtable::dup_worker (fhandler_base *oldfh)
 	}
       else
 	{
-	  newfh->close_on_exec (false);
+	  /* The O_CLOEXEC flag enforces close-on-exec behaviour. */
+	  if (flags & O_CLOEXEC)
+	    newfh->set_close_on_exec (true);
+	  else
+	    newfh->close_on_exec (false);
 	  debug_printf ("duped '%s' old %p, new %p", oldfh->get_name (), oldfh->get_io_handle (), newfh->get_io_handle ());
 	}
     }
@@ -605,13 +591,13 @@ dtable::dup_worker (fhandler_base *oldfh)
 }
 
 int
-dtable::dup2 (int oldfd, int newfd)
+dtable::dup3 (int oldfd, int newfd, int flags)
 {
   int res = -1;
   fhandler_base *newfh = NULL;	// = NULL to avoid an incorrect warning
 
   MALLOC_CHECK;
-  debug_printf ("dup2 (%d, %d)", oldfd, newfd);
+  debug_printf ("dup3 (%d, %d, %p)", oldfd, newfd, flags);
   lock ();
 
   if (not_open (oldfd))
@@ -620,21 +606,20 @@ dtable::dup2 (int oldfd, int newfd)
       set_errno (EBADF);
       goto done;
     }
-
   if (newfd < 0)
     {
       syscall_printf ("new fd out of bounds: %d", newfd);
       set_errno (EBADF);
       goto done;
     }
-
-  if (newfd == oldfd)
+  if ((flags & ~O_CLOEXEC) != 0)
     {
-      res = newfd;
-      goto done;
+      syscall_printf ("invalid flags value %x", flags);
+      set_errno (EINVAL);
+      return -1;
     }
 
-  if ((newfh = dup_worker (fds[oldfd])) == NULL)
+  if ((newfh = dup_worker (fds[oldfd], flags)) == NULL)
     {
       res = -1;
       goto done;
@@ -662,7 +647,7 @@ dtable::dup2 (int oldfd, int newfd)
 done:
   MALLOC_CHECK;
   unlock ();
-  syscall_printf ("%d = dup2 (%d, %d)", res, oldfd, newfd);
+  syscall_printf ("%d = dup3 (%d, %d, %p)", res, oldfd, newfd, flags);
 
   return res;
 }

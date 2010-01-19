@@ -1,3 +1,48 @@
+2010-01-15  Sebastian Pop  <sebastian.pop@amd.com>
+
+	* config/tc-i386.c (md_assemble): Before accessing the IMM field
+	check that it's not an XOP insn.
+
+2010-01-14  Jie Zhang  <jie.zhang@analog.com>
+
+	* config/bfin-aux.h: Remove argument names in function
+	declarations.
+	* config/bfin-lex.l (parse_int): Fix shadowed variable name
+	warning.
+	* config/bfin-parse.y (value_match): Remove argument names
+	in declaration.
+	(notethat): Likewise.
+	(yyerror): Likewise.
+
+2010-01-13  Daniel Jacobowitz  <dan@codesourcery.com>
+
+	* config/tc-arm.c (do_t_nop): Correct check for Thumb-2 NOP.
+
+2010-01-13  Nick Clifton  <nickc@redhat.com>
+
+	* config/tc-h8300.c (h8300_elf_section): New function - issue a
+	warning message if a new section is created without setting any
+	attributes for it.
+	(md_pseudo_table): Intercept section creation pseudos.
+	(md_pcrel_from): Replace abort with an error message.
+	* config/obj-elf.c (obj_elf_section_name): Export this function.
+	* config/obj-elf.h (obj_elf_section_name): Prototype.
+
+2010-01-12  Alan Modra  <amodra@gmail.com>
+
+	PR 11122
+	* listing.c (print_source): Add one to line number.
+
+2010-01-09  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+
+	* Makefile.in: Regenerate.
+	* configure: Regenerate.
+	* doc/Makefile.in: Regenerate.
+
+2010-01-08  H.J. Lu  <hongjiu.lu@intel.com>
+
+	* version.c (parse_args): Change to "Copyright 2010".
+
 2010-01-06  Quentin Neill  <quentin.neill@amd.com>
 
 	* config/tc-i386.c (cpu_arch): Add amdfam15.

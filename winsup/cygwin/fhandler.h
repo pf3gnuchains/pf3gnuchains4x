@@ -1,7 +1,7 @@
 /* fhandler.h
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -280,10 +280,10 @@ class fhandler_base
   virtual int __stdcall fstat (struct __stat64 *buf) __attribute__ ((regparm (2)));
   int __stdcall fstat_fs (struct __stat64 *buf) __attribute__ ((regparm (2)));
   int __stdcall fstat_helper (struct __stat64 *buf,
-			      FILETIME ftChangeTime,
-			      FILETIME ftLastAccessTime,
-			      FILETIME ftLastWriteTime,
-			      FILETIME ftCreationTime,
+			      PLARGE_INTEGER ChangeTime,
+			      PLARGE_INTEGER LastAccessTime,
+			      PLARGE_INTEGER LastWriteTime,
+			      PLARGE_INTEGER CreationTime,
 			      DWORD dwVolumeSerialNumber,
 			      ULONGLONG nFileSize,
 			      LONGLONG nAllocSize,
@@ -399,7 +399,7 @@ class fhandler_base
 
 class fhandler_mailslot : public fhandler_base
 {
-  POBJECT_ATTRIBUTES get_object_attr (OBJECT_ATTRIBUTES &, PUNICODE_STRING);
+  POBJECT_ATTRIBUTES get_object_attr (OBJECT_ATTRIBUTES &, PUNICODE_STRING, int);
  public:
   fhandler_mailslot ();
   int __stdcall fstat (struct __stat64 *buf) __attribute__ ((regparm (2)));
@@ -505,7 +505,7 @@ class fhandler_socket: public fhandler_base
   int bind (const struct sockaddr *name, int namelen);
   int connect (const struct sockaddr *name, int namelen);
   int listen (int backlog);
-  int accept (struct sockaddr *peer, int *len);
+  int accept4 (struct sockaddr *peer, int *len, int flags);
   int getsockname (struct sockaddr *name, int *namelen);
   int getpeername (struct sockaddr *name, int *namelen);
   int getpeereid (pid_t *pid, __uid32_t *euid, __gid32_t *egid);

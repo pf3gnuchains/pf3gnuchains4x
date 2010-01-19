@@ -1,7 +1,7 @@
 /* fhandler_disk_file.cc
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -337,12 +337,25 @@ fhandler_base::fstat_by_handle (struct __stat64 *buf)
      than a filename, so it needs a really big buffer for no good reason
      since we don't need the name anyway.  So we just call the three info
      classes necessary to get all information required by stat(2). */
-  FILE_BASIC_INFORMATION fbi;
+
+  union {
+    FILE_BASIC_INFORMATION fbi;
+    FILE_NETWORK_OPEN_INFORMATION fnoi;
+  } fi;
   FILE_STANDARD_INFORMATION fsi;
   FILE_INTERNAL_INFORMATION fii;
 
-  status = NtQueryInformationFile (get_handle (), &io, &fbi, sizeof fbi,
-				   FileBasicInformation);
+  if (pc.has_buggy_basic_info ())
+    {
+      status = NtQueryInformationFile (get_handle (), &io, &fi, sizeof fi,
+				       FileNetworkOpenInformation);
+      /* The timestamps are in the same relative memory location, only
+	 the DOS attributes have to be moved. */
+      fi.fbi.FileAttributes = fi.fnoi.FileAttributes;
+    }
+  else
+    status = NtQueryInformationFile (get_handle (), &io, &fi.fbi, sizeof fi.fbi,
+				     FileBasicInformation);
   if (!NT_SUCCESS (status))
     {
       debug_printf ("%p = NtQueryInformationFile(%S, FileBasicInformation)",
@@ -369,21 +382,20 @@ fhandler_base::fstat_by_handle (struct __stat64 *buf)
      support a change timestamp.  In that case use the LastWriteTime
      entry, as in other calls to fstat_helper. */
   if (pc.is_rep_symlink ())
-    fbi.FileAttributes &= ~FILE_ATTRIBUTE_DIRECTORY;
-  pc.file_attributes (fbi.FileAttributes);
+    fi.fbi.FileAttributes &= ~FILE_ATTRIBUTE_DIRECTORY;
+  pc.file_attributes (fi.fbi.FileAttributes);
   return fstat_helper (buf,
-		   fbi.ChangeTime.QuadPart
-		   ? *(FILETIME *) (void *) &fbi.ChangeTime
-		   : *(FILETIME *) (void *) &fbi.LastWriteTime,
-		   *(FILETIME *) (void *) &fbi.LastAccessTime,
-		   *(FILETIME *) (void *) &fbi.LastWriteTime,
-		   *(FILETIME *) (void *) &fbi.CreationTime,
-		   get_dev (),
-		   fsi.EndOfFile.QuadPart,
-		   fsi.AllocationSize.QuadPart,
-		   fii.FileId.QuadPart,
-		   fsi.NumberOfLinks,
-		   fbi.FileAttributes);
+		       fi.fbi.ChangeTime.QuadPart ? &fi.fbi.ChangeTime
+						  : &fi.fbi.LastWriteTime,
+		       &fi.fbi.LastAccessTime,
+		       &fi.fbi.LastWriteTime,
+		       &fi.fbi.CreationTime,
+		       get_dev (),
+		       fsi.EndOfFile.QuadPart,
+		       fsi.AllocationSize.QuadPart,
+		       fii.FileId.QuadPart,
+		       fsi.NumberOfLinks,
+		       fi.fbi.FileAttributes);
 }
 
 int __stdcall
@@ -440,12 +452,11 @@ fhandler_base::fstat_by_name (struct __stat64 *buf)
     fdi_buf.fdi.FileAttributes &= ~FILE_ATTRIBUTE_DIRECTORY;
   pc.file_attributes (fdi_buf.fdi.FileAttributes);
   return fstat_helper (buf,
-		       fdi_buf.fdi.ChangeTime.QuadPart ?
-		       *(FILETIME *) (void *) &fdi_buf.fdi.ChangeTime :
-		       *(FILETIME *) (void *) &fdi_buf.fdi.LastWriteTime,
-		       *(FILETIME *) (void *) &fdi_buf.fdi.LastAccessTime,
-		       *(FILETIME *) (void *) &fdi_buf.fdi.LastWriteTime,
-		       *(FILETIME *) (void *) &fdi_buf.fdi.CreationTime,
+		       fdi_buf.fdi.ChangeTime.QuadPart
+		       ? &fdi_buf.fdi.ChangeTime : &fdi_buf.fdi.LastWriteTime,
+		       &fdi_buf.fdi.LastAccessTime,
+		       &fdi_buf.fdi.LastWriteTime,
+		       &fdi_buf.fdi.CreationTime,
 		       pc.fs_serial_number (),
 		       fdi_buf.fdi.EndOfFile.QuadPart,
 		       fdi_buf.fdi.AllocationSize.QuadPart,
@@ -458,10 +469,10 @@ too_bad:
   /* Arbitrary value: 2006-12-01 */
   RtlSecondsSince1970ToTime (1164931200L, &ft);
   return fstat_helper (buf,
-		       *(FILETIME *) (void *) &ft,
-		       *(FILETIME *) (void *) &ft,
-		       *(FILETIME *) (void *) &ft,
-		       *(FILETIME *) (void *) &ft,
+		       &ft,
+		       &ft,
+		       &ft,
+		       &ft,
 		       0,
 		       0ULL,
 		       -1LL,
@@ -506,7 +517,7 @@ fhandler_base::fstat_fs (struct __stat64 *buf)
   return res;
 }
 
-/* The ftChangeTime is taken from the NTFS ChangeTime entry, if reading
+/* The ChangeTime is taken from the NTFS ChangeTime entry, if reading
    the file information using NtQueryInformationFile succeeded.  If not,
    it's faked using the LastWriteTime entry from GetFileInformationByHandle
    or FindFirstFile.  We're deliberatly not using the creation time anymore
@@ -518,10 +529,10 @@ fhandler_base::fstat_fs (struct __stat64 *buf)
    the latter might be old and not reflect the actual state of the file. */
 int __stdcall
 fhandler_base::fstat_helper (struct __stat64 *buf,
-			     FILETIME ftChangeTime,
-			     FILETIME ftLastAccessTime,
-			     FILETIME ftLastWriteTime,
-			     FILETIME ftCreationTime,
+			     PLARGE_INTEGER ChangeTime,
+			     PLARGE_INTEGER LastAccessTime,
+			     PLARGE_INTEGER LastWriteTime,
+			     PLARGE_INTEGER CreationTime,
 			     DWORD dwVolumeSerialNumber,
 			     ULONGLONG nFileSize,
 			     LONGLONG nAllocSize,
@@ -532,10 +543,10 @@ fhandler_base::fstat_helper (struct __stat64 *buf,
   IO_STATUS_BLOCK st;
   FILE_COMPRESSION_INFORMATION fci;
 
-  to_timestruc_t (&ftLastAccessTime, &buf->st_atim);
-  to_timestruc_t (&ftLastWriteTime, &buf->st_mtim);
-  to_timestruc_t (&ftChangeTime, &buf->st_ctim);
-  to_timestruc_t (&ftCreationTime, &buf->st_birthtim);
+  to_timestruc_t ((PFILETIME) LastAccessTime, &buf->st_atim);
+  to_timestruc_t ((PFILETIME) LastWriteTime, &buf->st_mtim);
+  to_timestruc_t ((PFILETIME) ChangeTime, &buf->st_ctim);
+  to_timestruc_t ((PFILETIME) CreationTime, &buf->st_birthtim);
   buf->st_dev = dwVolumeSerialNumber;
   buf->st_size = (_off64_t) nFileSize;
   /* The number of links to a directory includes the

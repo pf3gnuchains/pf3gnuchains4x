@@ -1,3 +1,174 @@
+2010-01-17  Corinna Vinschen  <corinna@vinschen.de>
+
+	* syscalls.cc (internal_setlocale): Use UTF-8 internally if external
+	charset is ASCII.
+
+2010-01-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* libc/fnmatch.c: Replace with multibyte capable version from FreeBSD.
+
+2010-01-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* fhandler_socket.cc (fhandler_socket::accept4): Reset async flag
+	on accepted socket.
+
+2010-01-15  Pierre A. Humblet  <phumblet@phumblet.no-ip.org>
+
+	* fhandler_socket.cc (fhandler_socket::accept4): Set nonblocking
+	flag exactly according to flags, as on Linux.
+	* net.cc (cygwin_accept): Maintain BSD semantics here.
+
+2010-01-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygwin.din (accept4): Export.
+	* fhandler.h (fhandler_socket::accept4): Rename from accept.  Take
+	additional flag parameter.
+	* fhandler_socket.cc (fhandler_socket::accept4): Ditto.  Handle
+	SOCK_NONBLOCK and SOCK_CLOEXEC flags.
+	* net.cc (cygwin_socket): Handle SOCK_NONBLOCK and SOCK_CLOEXEC flags
+	in type.  Check for invalid flag values.
+	(socketpair): Ditto.
+	(cygwin_accept): Accommodate renaming of fhandler_socket::accept
+	function to accept4.
+	(accept4): New function.
+	* posix.sgml: Mention accept4 as GNU extensions.
+	* include/cygwin/socket.h (SOCK_NONBLOCK): Define.
+	(SOCK_CLOEXEC): Define.
+	(_SOCK_FLAG_MASK): Define when building Cygwin.
+	* include/cygwin/version.h (CYGWIN_VERSION_API_MINOR): Bump.
+	* include/sys/socket.h (accept4): Declare.
+
+2010-01-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* posix.sgml: Mention dup3 and pipe2 as GNU extensions.
+
+2010-01-14  Corinna Vinschen  <corinna@vinschen.de>
+
+	* dcrt0.cc (dll_crt0_1): Reset locale to "C" at the last moment before
+	calling the application's main.
+	* syscalls.cc (internal_setlocale): Don't reset locale to "C here.
+	Change comment accordingly.
+
+2010-01-14  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygwin.din (dup3): Export.
+	(pipe2): Export.
+	* dtable.cc (dtable::dup_worker): Take additional flags parameter.
+	Handle O_CLOEXEC flag.
+	(dtable::dup3): Rename from dup2.  Take additional flags parameter.
+	Check for valid flags.  Drop check for newfd == oldfd.
+	* dtable.h (dtable::dup_worker): Add flags parameter.
+	(dtable::dup3): Rename from dup2.
+	* fcntl.cc (fcntl64): Add F_DUPFD_CLOEXEC case.
+	* fhandler.h (fhandler_mailslot::get_object_attr): Add flags parameter.
+	* fhandler.cc (fhandler_base::open): Use security attribute with
+	inheritance according to setting of O_CLOEXEC flag.
+	* fhandler_console.cc (fhandler_console::open): Ditto.
+	* fhandler_fifo.cc (sec_user_cloexec): New inline function to
+	create security attribute with inheritance according to setting of
+	O_CLOEXEC flag.
+	(fhandler_fifo::open): Call sec_user_cloexec to fetch security
+	attribute.
+	(fhandler_fifo::wait): Ditto.
+	* fhandler_mem.cc (fhandler_dev_mem::open): Ditto.
+	* fhandler_mailslot.cc (fhandler_mailslot::get_object_attr): Take
+	additional flags parameter.  Use security attribute with inheritance
+	according to setting of O_CLOEXEC flag.
+	(fhandler_mailslot::open): Call get_object_attr with flags parameter.
+	* fhandler_registry.cc (fhandler_registry::open): Call set_close_on_exec
+	on real handles to accommodate O_CLOEXEC flag.
+	* fhandler_tty.cc (fhandler_tty_slave::open): Ditto.
+	* fhandler_tape.cc: Create mutex with inheritance according to setting
+	of O_CLOEXEC flag.
+	* pipe.cc: Replace usage of O_NOINHERIT with O_CLOEXEC.
+	 (fhandler_pipe::init): Simplify setting close_on_exec flag.
+	(fhandler_pipe::open): Remove setting close_on_exec flag.
+	(fhandler_pipe::create): Use security attribute with inheritance
+	according to setting of O_CLOEXEC flag.
+	(pipe2): New exported function.
+	* posix_ipc.cc: Throughout, open backing files with O_CLOEXEC
+	flag to follow POSIX semantics.
+	* security.h (sec_none_cloexec): New define.
+	* syscalls.cc (dup): Add missing extern "C" qualifier.  Accommodate
+	renaming of dtable::dup2 to dtable::dup3.
+	(dup2): Ditto.  Check newfd == oldfd here.
+	(dup3): New function.  Check newfd == oldfd here.
+	(open): Set close_on_exec flag according to O_CLOEXEC flag before
+	calling fhandler->open.
+	* include/cygwin/version.h (CYGWIN_VERSION_API_MINOR): Bump.
+
+2010-01-13  Corinna Vinschen  <corinna@vinschen.de>
+
+	* include/fcntl.h (O_TTY_INIT): Define as 0.
+
+2010-01-13  Corinna Vinschen  <corinna@vinschen.de>
+
+	* fhandler_tty.cc (fhandler_tty_master::init): Don't erase all default
+	termios settings of slave console.
+
+2010-01-13  Corinna Vinschen  <corinna@vinschen.de>
+
+	* syscalls.cc (rename): Don't exit prematurely with EROFS when trying
+	to rename an AF_LOCAL socket or when trying to replace an AF_LOCAL
+	socket.
+
+2010-01-12  Corinna Vinschen  <corinna@vinschen.de>
+
+	* globals.cc (ro_u_nwfs): New R/O unicode string.
+	* mount.cc (fs_info::update): Check for NWFS filesystem.  Set
+	has_buggy_basic_info, if so.  Add comment to explain why.
+	(fillout_mntent): Add "nwfs" string to fs_names array.
+	* mount.h (enum fs_info_type): Add nwfs.
+	(class fs_info): Add has_buggy_basic_info status flag.  Add accessors
+	for has_buggy_basic_info and is_nwfs.
+	* fhandler_disk_file.cc (fhandler_base::fstat_by_handle): Accommodate
+	filesystems with broken FileBasicInformation handling.
+	* path.cc (symlink_info::check): Ditto.
+	* path.h (path_conv::has_buggy_basic_info): Add method.
+
+2010-01-12  Corinna Vinschen  <corinna@vinschen.de>
+
+	* dtable.cc (build_fh_name_worker): Remove.  Move all functionality
+	back into build_fh_name.
+	(build_fh_name): Drop unused HANDLE parameter.  Drop call to pc.fillin.
+	Remove disabled build_fh_name with UNICODE_STRING name parameter.
+	* dtable.h (build_fh_name): Drop HANDLE parameter from declaration.
+	Remove declaration for build_fh_name with UNICODE_STRING name parameter.
+	* path.cc (path_conv::fillin): Remove.
+	(symlink_info::check): Fix comment.
+	* path.h (path_conv::fillin): Remove declaration.
+	* dir.cc: Accommodate change in build_fh_name parameters throughout.
+	* sec_acl.cc: Ditto.
+	* syscalls.cc: Ditto.
+
+	* ntea.cc (getxattr_worker): Fix debug output.
+	(setxattr_worker): Ditto.
+	* times.cc (utimens_worker): Ditto.
+
+2010-01-11  Corinna Vinschen  <corinna@vinschen.de>
+
+	* fhandler_proc.cc (format_proc_stat): Use new in_buf.
+	(format_proc_cpuinfo): Replace szBuffer with a union in_buf.  Use type
+	correct throughout.  Add a couple of missing or newer cpu flags.  Allow
+	certain AMD flags for intel as well.
+
+2010-01-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* fhandler.h (fhandler_base::fstat_helper): Declare timestamps as
+	PLARGE_INTEGER.
+	* fhandler_disk_file.cc (fhandler_base::fstat_by_handle):
+	Accommodate fstat_helper change of timestamp arguments.
+	(fhandler_base::fstat_by_name): Ditto.
+	(fhandler_base::fstat_helper): Define with timestamps as PLARGE_INTEGER.
+	Accommodate in call to to_timestruc_t.
+
+2010-01-08  Corinna Vinschen  <corinna@vinschen.de>
+
+	* sec_auth.cc (get_token_group_sidlist): Add BUILTIN\Users account
+	to all created tokens.
+	* sec_helper.cc (well_known_users_sid): Define as BUILTIN\Users.
+	* security.h (well_known_users_sid): Declare.
+
 2010-01-01  Christopher Faylor  <me+cygwin@cgf.cx>
 
 	* dcrt0.cc: Bump copyright.

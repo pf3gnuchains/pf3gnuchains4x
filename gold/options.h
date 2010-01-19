@@ -244,12 +244,18 @@ struct Struct_special : public Struct_var
 // var() and set_var() as General_options methods.  Arguments as are
 // for the constructor for One_option.  param_type__ is the same as
 // type__ for built-in types, and "const type__ &" otherwise.
+//
+// When we define the linker command option "assert", the macro argument
+// varname__ of DEFINE_var below will be replaced by "assert".  On Mac OSX
+// assert.h is included implicitly by one of the library headers we use.  To
+// avoid unintended macro substitution of "assert()", we need to enclose
+// varname__ with parenthese.
 #define DEFINE_var(varname__, dashes__, shortname__, default_value__,        \
                    default_value_as_string__, helpstring__, helparg__,       \
                    optional_arg__, type__, param_type__, parse_fn__)	     \
  public:                                                                     \
   param_type__                                                               \
-  varname__() const                                                          \
+  (varname__)() const                                                        \
   { return this->varname__##_.value; }                                       \
                                                                              \
   bool                                                                       \
@@ -309,7 +315,10 @@ struct Struct_special : public Struct_var
     void                                                                 \
     parse_to_value(const char*, const char*,                             \
                    Command_line*, General_options* options)              \
-    { options->set_##varname__(false); }                                 \
+    {                                                                    \
+      options->set_##varname__(false);                                   \
+      options->set_user_set_##varname__();                               \
+    }                                                                    \
                                                                          \
     options::One_option option;                                          \
   };                                                                     \
@@ -713,6 +722,10 @@ class General_options
   DEFINE_string(fini, options::ONE_DASH, '\0', "_fini",
                 N_("Call SYMBOL at unload-time"), N_("SYMBOL"));
 
+  DEFINE_bool(fix_cortex_a8, options::TWO_DASHES, '\0', false,
+	      N_("(ARM only) Fix binaries for Cortex-A8 erratum."),
+	      N_("(ARM only) Do not fix binaries for Cortex-A8 erratum."));
+
   DEFINE_bool(g, options::EXACTLY_ONE_DASH, '\0', false,
 	      N_("Ignored"), NULL);
 
@@ -972,6 +985,14 @@ class General_options
 	      N_("Warn if text segment is not shareable"),
 	      N_("Do not warn if text segment is not shareable (default)"));
 
+  DEFINE_bool(warn_unresolved_symbols, options::TWO_DASHES, '\0', false,
+	      N_("Report unresolved symbols as warnings"),
+	      NULL);
+  DEFINE_bool_alias(error_unresolved_symbols, warn_unresolved_symbols,
+		    options::TWO_DASHES, '\0',
+		    N_("Report unresolved symbols as errors"),
+		    NULL, true);
+
   DEFINE_bool(whole_archive, options::TWO_DASHES, '\0', false,
               N_("Include all archive contents"),
               N_("Include only needed archive contents"));
@@ -1052,6 +1073,12 @@ class General_options
   DEFINE_bool(relro, options::DASH_Z, '\0', false,
 	      N_("Where possible mark variables read-only after relocation"),
 	      N_("Don't mark variables read-only after relocation"));
+  DEFINE_bool(text, options::DASH_Z, '\0', false,
+	      N_("Do not permit relocations in read-only segments"),
+	      NULL);
+  DEFINE_bool_alias(textoff, text, options::DASH_Z, '\0',
+		    N_("Permit relocations in read-only segments (default)"),
+		    NULL, true);
 
  public:
   typedef options::Dir_list Dir_list;
