@@ -1,3 +1,74 @@
+2010-01-18  Tom Tromey  <tromey@redhat.com>
+
+	PR c++/9680:
+	* c-exp.y (REINTERPRET_CAST, DYNAMIC_CAST, STATIC_CAST)
+	(CONST_CAST): New tokens.
+	(exp): Add new productions.
+	(ident_tokens): Add const_cast, dynamic_cast, static_cast, and
+	reinterpret_cast.
+	(is_cast_operator): New function.
+	(yylex): Handle cast operators specially.
+	* eval.c (evaluate_subexp_standard) <UNOP_DYNAMIC_CAST,
+	UNOP_REINTERPRET_CAST>: New cases.
+	* expprint.c (print_subexp_standard): Likewise.
+	(op_name_standard): Likewise.
+	(dump_subexp_body_standard): Likewise.
+	* parse.c (operator_length_standard): Likewise.
+	* expression.h (enum exp_opcode): New constants UNOP_DYNAMIC_CAST,
+	UNOP_REINTERPRET_CAST.
+	* gdbtypes.c (class_types_same_p): New function.
+	(is_ancestor): Use it.
+	(is_public_ancestor): New function.
+	(is_unique_ancestor_worker): Likewise.
+	(is_unique_ancestor): Likewise.
+	* gdbtypes.h (class_types_same_p, is_public_ancestor)
+	(is_unique_ancestor): Declare.
+	* valops.c (value_reinterpret_cast): New function.
+	(dynamic_cast_check_1): Likewise.
+	(dynamic_cast_check_2): Likewise.
+	(value_dynamic_cast): Likewise.
+	* value.h (value_reinterpret_cast, value_dynamic_cast): Declare.
+
+2010-01-18  Joel Brobecker  <brobecker@adacore.com>
+
+	Fix build failure when building without Python support.
+	* python/python.c: Always include exceptions.h, even when HAVE_PYTHON
+	is not defined.
+
+2010-01-18  Joel Brobecker  <brobecker@adacore.com>
+
+	Use XVS field type instead of doing a parallel lookup.
+	* ada-lang.c (ada_get_base_type): Follow the XVS field type
+	if it is a reference type instead of doing a type lookup using
+	the XVS field name.
+
+2010-01-18  Joel Brobecker  <brobecker@adacore.com>
+
+	Trust PAD types instead of using PAD___XVS.
+	* ada-lang.c (trust_pad_over_xvs): New static variable.
+	(ada_is_aligner_type): If !trust_pad_over_xvs and there is a
+	parallel XVS type, follow the XVS type instead of the PAD type.
+	(unwrap_value): Make sure that there is no parallel XVE type
+	before returning the value as is.
+	(set_ada_list, show_ada_list): New static variables.
+	(set_ada_command, show_ada_command): New functions.
+	(_initialize_ada_language): Add new "set/show ada" prefix commands.
+	Add new "set/show ada trust-PAD-over-XVS" setting.
+
+2010-01-18  Tom Tromey  <tromey@redhat.com>
+	    Thiago Jung Bauermann  <bauerman@br.ibm.com>
+
+	Allow "source" to load python scripts.
+	* exceptions.h (enum errors): Add UNSUPPORTED_ERROR.
+	* python/python.c (source_python_script): New function.
+	* python/python.h (source_python_script): Add declaration.
+	* cli/cli-cmds.c: #include exceptions.h and python/python.h.
+	(script_ext_off, script_ext_soft, script_ext_strict)
+	(script_ext_enums, script_ext_mode): New static constants.
+	(show_script_ext_mode, find_and_open_script): New functions.
+	(source_script): Enhance to handle Python scripts.
+	(init_cli_cmds): Add set/show script-extension commands.
+
 2010-01-16  Stan Shebs  <stan@codesourcery.com>
 
 	* tracepoint.h (struct trace_status): Use unsigned long long
