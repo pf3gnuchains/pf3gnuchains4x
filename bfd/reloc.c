@@ -5235,51 +5235,14 @@ ENUMDOC
  Lattice Mico32 relocations.
 
 ENUM
-  BFD_RELOC_MACH_O_SECTDIFF
+   BFD_RELOC_MACH_O_SECTDIFF
 ENUMDOC
-  Difference between two section addreses.  Must be followed by a
-  BFD_RELOC_MACH_O_PAIR.
+   Difference between two section addreses.  Must be followed by a
+   BFD_RELOC_MACH_O_PAIR.
 ENUM
-  BFD_RELOC_MACH_O_PAIR
+   BFD_RELOC_MACH_O_PAIR
 ENUMDOC
-  Pair of relocation.  Contains the first symbol.
-
-ENUM
-  BFD_RELOC_MACH_O_X86_64_BRANCH32
-ENUMX
-  BFD_RELOC_MACH_O_X86_64_BRANCH8
-ENUMDOC
-  PCREL relocations.  They are marked as branch to create PLT entry if
-  required.
-ENUM
-  BFD_RELOC_MACH_O_X86_64_GOT
-ENUMDOC
-  Used when referencing a GOT entry.
-ENUM
-  BFD_RELOC_MACH_O_X86_64_GOT_LOAD
-ENUMDOC
-  Used when loading a GOT entry with movq.  It is specially marked so that
-  the linker could optimize the movq to a leaq if possible.
-ENUM
-  BFD_RELOC_MACH_O_X86_64_SUBTRACTOR32
-ENUMDOC
-  Symbol will be substracted.  Must be followed by a BFD_RELOC_64.
-ENUM
-  BFD_RELOC_MACH_O_X86_64_SUBTRACTOR64
-ENUMDOC
-  Symbol will be substracted.  Must be followed by a BFD_RELOC_64.
-ENUM
-  BFD_RELOC_MACH_O_X86_64_PCREL32_1
-ENUMDOC
-  Same as BFD_RELOC_32_PCREL but with an implicit -1 addend.
-ENUM
-  BFD_RELOC_MACH_O_X86_64_PCREL32_2
-ENUMDOC
-  Same as BFD_RELOC_32_PCREL but with an implicit -2 addend.
-ENUM
-  BFD_RELOC_MACH_O_X86_64_PCREL32_4
-ENUMDOC
-  Same as BFD_RELOC_32_PCREL but with an implicit -4 addend.
+ Mach-O generic relocations.
 
 ENUM
   BFD_RELOC_MICROBLAZE_32_LO

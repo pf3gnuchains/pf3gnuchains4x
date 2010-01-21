@@ -16,8 +16,7 @@ DEFS=
 OPT=/noopt/debug
 CFLAGS=$(OPT)/include=([],"../include",[-.bfd])$(DEFS)\
  /name=(as_is,shortened)\
- /prefix=(all,except=("getopt","optarg","optopt","optind","opterr"))\
- /warns=(info=(ptrmismatch,shiftcount))
+ /prefix=(all,except=("getopt","optarg","optopt","optind","opterr"))
 endif
 
 LIBBFD = [-.bfd]libbfd.olb/lib

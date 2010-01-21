@@ -1,6 +1,6 @@
 /* ELF linking support for BFD.
    Copyright 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010
+   2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of BFD, the Binary File Descriptor library.
@@ -8492,14 +8492,10 @@ elf_link_check_versioned_symbol (struct bfd_link_info *info,
 
 	  _bfd_elf_swap_versym_in (input, ever, &iver);
 
-	  if ((iver.vs_vers & VERSYM_HIDDEN) == 0
-	      && !(h->def_regular
-		   && h->forced_local))
+	  if ((iver.vs_vers & VERSYM_HIDDEN) == 0)
 	    {
 	      /* If we have a non-hidden versioned sym, then it should
-		 have provided a definition for the undefined sym unless
-		 it is defined in a non-shared object and forced local.
-	       */
+		 have provided a definition for the undefined sym.  */
 	      abort ();
 	    }
 
@@ -11335,8 +11331,6 @@ _bfd_elf_gc_mark_hook (asection *sec,
 		       struct elf_link_hash_entry *h,
 		       Elf_Internal_Sym *sym)
 {
-  const char *sec_name;
-
   if (h != NULL)
     {
       switch (h->root.type)
@@ -11347,33 +11341,6 @@ _bfd_elf_gc_mark_hook (asection *sec,
 
 	case bfd_link_hash_common:
 	  return h->root.u.c.p->section;
-
-	case bfd_link_hash_undefined:
-	case bfd_link_hash_undefweak:
-	  /* To work around a glibc bug, keep all XXX input sections
-	     when there is an as yet undefined reference to __start_XXX
-	     or __stop_XXX symbols.  The linker will later define such
-	     symbols for orphan input sections that have a name
-	     representable as a C identifier.  */
-	  if (strncmp (h->root.root.string, "__start_", 8) == 0)
-	    sec_name = h->root.root.string + 8;
-	  else if (strncmp (h->root.root.string, "__stop_", 7) == 0)
-	    sec_name = h->root.root.string + 7;
-	  else
-	    sec_name = NULL;
-
-	  if (sec_name && *sec_name != '\0')
-	    {
-	      bfd *i;
-	      
-	      for (i = info->input_bfds; i; i = i->link_next)
-		{
-		  sec = bfd_get_section_by_name (i, sec_name);
-		  if (sec)
-		    sec->flags |= SEC_KEEP;
-		}
-	    }
-	  break;
 
 	default:
 	  break;
@@ -11560,10 +11527,9 @@ elf_gc_sweep (bfd *abfd, struct bfd_link_info *info)
 	      o->gc_mark = first->gc_mark;
 	    }
 	  else if ((o->flags & (SEC_DEBUGGING | SEC_LINKER_CREATED)) != 0
-		   || (o->flags & (SEC_ALLOC | SEC_LOAD | SEC_RELOC)) == 0
-		   || elf_section_data (o)->this_hdr.sh_type == SHT_NOTE)
+		   || (o->flags & (SEC_ALLOC | SEC_LOAD | SEC_RELOC)) == 0)
 	    {
-	      /* Keep debug, special and SHT_NOTE sections.  */
+	      /* Keep debug and special sections.  */
 	      o->gc_mark = 1;
 	    }
 

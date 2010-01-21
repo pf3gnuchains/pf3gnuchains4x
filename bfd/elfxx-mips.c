@@ -680,11 +680,6 @@ static bfd *reldyn_sorting_bfd;
    all CPUs.  */
 #define JALR_TO_BAL_P(abfd) 1
 
-/* True if ABFD is for CPUs that are faster if JR is converted to B.
-   This should be safe for all architectures.  We enable this predicate for
-   all CPUs.  */
-#define JR_TO_B_P(abfd) 1
-
 /* True if ABFD is a PIC object.  */
 #define PIC_OBJECT_P(abfd) \
   ((elf_elfheader (abfd)->e_flags & EF_MIPS_PIC) != 0)
@@ -1874,12 +1869,6 @@ static inline bfd_boolean
 mips16_call_reloc_p (int r_type)
 {
   return r_type == R_MIPS16_26 || r_type == R_MIPS16_CALL16;
-}
-
-static inline bfd_boolean
-jal_reloc_p (int r_type)
-{
-  return r_type == R_MIPS_26 || r_type == R_MIPS16_26;
 }
 
 void
@@ -4782,8 +4771,8 @@ mips_elf_relocation_needs_la25_stub (bfd *input_bfd, int r_type)
    RELOCATION; RELOCATION->R_ADDEND is ignored.
 
    The result of the relocation calculation is stored in VALUEP.
-   On exit, set *CROSS_MODE_JUMP_P to true if the relocation field
-   is a MIPS16 jump to non-MIPS16 code, or vice versa.
+   REQUIRE_JALXP indicates whether or not the opcode used with this
+   relocation must be JALX.
 
    This function returns bfd_reloc_continue if the caller need take no
    further action regarding this relocation, bfd_reloc_notsupported if
@@ -4798,8 +4787,7 @@ mips_elf_calculate_relocation (bfd *abfd, bfd *input_bfd,
 			       bfd_vma addend, reloc_howto_type *howto,
 			       Elf_Internal_Sym *local_syms,
 			       asection **local_sections, bfd_vma *valuep,
-			       const char **namep,
-			       bfd_boolean *cross_mode_jump_p,
+			       const char **namep, bfd_boolean *require_jalxp,
 			       bfd_boolean save_addend)
 {
   /* The eventual value we will return.  */
@@ -5088,11 +5076,10 @@ mips_elf_calculate_relocation (bfd *abfd, bfd *input_bfd,
 	      + h->la25_stub->offset);
 
   /* Calls from 16-bit code to 32-bit code and vice versa require the
-     mode change.  */
-  *cross_mode_jump_p = !info->relocatable
-		       && ((r_type == R_MIPS16_26 && !target_is_16_bit_code_p)
-			   || ((r_type == R_MIPS_26 || r_type == R_MIPS_JALR)
-			       && target_is_16_bit_code_p));
+     special jalx instruction.  */
+  *require_jalxp = (!info->relocatable
+                    && (((r_type == R_MIPS16_26) && !target_is_16_bit_code_p)
+                        || ((r_type == R_MIPS_26) && target_is_16_bit_code_p)));
 
   local_p = mips_elf_local_relocation_p (input_bfd, relocation,
 					 local_sections, TRUE);
@@ -5546,9 +5533,9 @@ mips_elf_obtain_contents (reloc_howto_type *howto,
 /* It has been determined that the result of the RELOCATION is the
    VALUE.  Use HOWTO to place VALUE into the output file at the
    appropriate position.  The SECTION is the section to which the
-   relocation applies.  
-   CROSS_MODE_JUMP_P is true if the relocation field
-   is a MIPS16 jump to non-MIPS16 code, or vice versa.
+   relocation applies.  If REQUIRE_JALX is TRUE, then the opcode used
+   for the relocation must be either JAL or JALX, and it is
+   unconditionally converted to JALX.
 
    Returns FALSE if anything goes wrong.  */
 
@@ -5558,7 +5545,7 @@ mips_elf_perform_relocation (struct bfd_link_info *info,
 			     const Elf_Internal_Rela *relocation,
 			     bfd_vma value, bfd *input_bfd,
 			     asection *input_section, bfd_byte *contents,
-			     bfd_boolean cross_mode_jump_p)
+			     bfd_boolean require_jalx)
 {
   bfd_vma x;
   bfd_byte *location;
@@ -5579,7 +5566,7 @@ mips_elf_perform_relocation (struct bfd_link_info *info,
   x |= (value & howto->dst_mask);
 
   /* If required, turn JAL into JALX.  */
-  if (cross_mode_jump_p && jal_reloc_p (r_type))
+  if (require_jalx)
     {
       bfd_boolean ok;
       bfd_vma opcode = x >> 26;
@@ -5613,19 +5600,15 @@ mips_elf_perform_relocation (struct bfd_link_info *info,
       x = (x & ~(0x3f << 26)) | (jalx_opcode << 26);
     }
 
-  /* Try converting JAL to BAL and J(AL)R to B(AL), if the target is in
-     range.  */
+  /* Try converting JAL and JALR to BAL, if the target is in range.  */
   if (!info->relocatable
-      && !cross_mode_jump_p
+      && !require_jalx
       && ((JAL_TO_BAL_P (input_bfd)
 	   && r_type == R_MIPS_26
 	   && (x >> 26) == 0x3)		/* jal addr */
 	  || (JALR_TO_BAL_P (input_bfd)
 	      && r_type == R_MIPS_JALR
-	      && x == 0x0320f809)	/* jalr t9 */
-	  || (JR_TO_B_P (input_bfd)
-	      && r_type == R_MIPS_JALR
-	      && x == 0x03200008)))	/* jr t9 */
+	      && x == 0x0320f809)))	/* jalr t9 */
     {
       bfd_vma addr;
       bfd_vma dest;
@@ -5641,12 +5624,7 @@ mips_elf_perform_relocation (struct bfd_link_info *info,
 	dest = value;
       off = dest - addr;
       if (off <= 0x1ffff && off >= -0x20000)
-	{
-	  if (x == 0x03200008)	/* jr t9 */
-	    x = 0x10000000 | (((bfd_vma) off >> 2) & 0xffff);   /* b addr */
-	  else
-	    x = 0x04110000 | (((bfd_vma) off >> 2) & 0xffff);   /* bal addr */
-	}
+	x = 0x04110000 | (((bfd_vma) off >> 2) & 0xffff);   /* bal addr */
     }
 
   /* Put the value into the output.  */
@@ -8908,7 +8886,7 @@ _bfd_mips_elf_relocate_section (bfd *output_bfd, struct bfd_link_info *info,
       const char *name;
       bfd_vma value = 0;
       reloc_howto_type *howto;
-      bfd_boolean cross_mode_jump_p;
+      bfd_boolean require_jalx;
       /* TRUE if the relocation is a RELA relocation, rather than a
          REL relocation.  */
       bfd_boolean rela_relocation_p = TRUE;
@@ -9108,7 +9086,7 @@ _bfd_mips_elf_relocate_section (bfd *output_bfd, struct bfd_link_info *info,
 					     input_section, info, rel,
 					     addend, howto, local_syms,
 					     local_sections, &value,
-					     &name, &cross_mode_jump_p,
+					     &name, &require_jalx,
 					     use_saved_addend_p))
 	{
 	case bfd_reloc_continue:
@@ -9220,7 +9198,7 @@ _bfd_mips_elf_relocate_section (bfd *output_bfd, struct bfd_link_info *info,
       /* Actually perform the relocation.  */
       if (! mips_elf_perform_relocation (info, howto, rel, value,
 					 input_bfd, input_section,
-					 contents, cross_mode_jump_p))
+					 contents, require_jalx))
 	return FALSE;
     }
 

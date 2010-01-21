@@ -1,5 +1,5 @@
 /* bfin-parse.y  ADI Blackfin parser
-   Copyright 2005, 2006, 2007, 2008, 2009, 2010
+   Copyright 2005, 2006, 2007, 2008, 2009
    Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
@@ -152,7 +152,7 @@
 	(value_match (expr, 24, 0, 2, 1))
 
 
-static int value_match (Expr_Node *, int, int, int, int);
+static int value_match (Expr_Node *expr, int sz, int sign, int mul, int issigned);
 
 extern FILE *errorf;
 extern INSTR_T insn;
@@ -160,11 +160,11 @@ extern INSTR_T insn;
 static Expr_Node *binary (Expr_Op_Type, Expr_Node *, Expr_Node *);
 static Expr_Node *unary  (Expr_Op_Type, Expr_Node *);
 
-static void notethat (char *, ...);
+static void notethat (char *format, ...);
 
 char *current_inputline;
 extern char *yytext;
-int yyerror (char *);
+int yyerror (char *msg);
 
 void error (char *format, ...)
 {
