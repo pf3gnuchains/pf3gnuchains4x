@@ -1,3 +1,111 @@
+2010-01-20  Jan Kratochvil  <jan.kratochvil@redhat.com>
+
+	* varobj.c (varobj_add_child, install_dynamic_child): Wrap into #if
+	HAVE_PYTHON.
+	(instantiate_pretty_printer): Move HAVE_PYTHON outside of the function.
+
+2010-01-20  Joel Brobecker  <brobecker@adacore.com>
+
+	Get rid of ada-lang.c:function_name_from_pc.
+	* ada-lang.c: Add "stack.h" #include.
+	(function_name_from_pc): Delete.
+	(is_known_support_routine): Replace call to function_name_from_pc
+	by call to find_frame_funname.
+	(ada_unhandled_exception_name_addr_from_raise): Likewise.
+
+2010-01-19  Tom Tromey  <tromey@redhat.com>
+
+	PR c++/11026:
+	* dwarf2read.c (read_partial_die): Allocate partial DIE's name on
+	objfile obstack.
+
+2010-01-19  Tom Tromey  <tromey@redhat.com>
+
+	* top.c (stop_sig, float_handler, do_nothing): Remove.
+
+2010-01-19  Jan Kratochvil  <jan.kratochvil@redhat.com>
+
+	* breakpoint.c (watchpoint_check): Check the call
+	gdbarch_in_function_epilogue_p before calling frame_find_by_id.
+	Extend the comment.
+	* config/djgpp/fnchange.lst: Add translations for 
+	watchpoint-cond-gone.exp, watchpoint-cond-gone.c and
+	watchpoint-cond-gone-stripped.c.
+
+2010-01-19  Tom Tromey  <tromey@redhat.com>
+
+	PR c++/8000:
+	* dwarf2read.c (partial_die_parent_scope): Put enumeration type
+	into parent scope, and enumerator into grandparent scope.
+
+2010-01-19  Joel Brobecker  <brobecker@adacore.com>
+
+	* NEWS: Add entry for "set/show ada trust-PAD-over-XVS" commands.
+
+2010-01-19  Joel Brobecker  <brobecker@adacore.com>
+
+	* configure.host: Make x86_64-*-solaris2.1[0-9]* an alias of
+	i[34567]86-*-solaris2.1[0-9]*.
+	* configure.tgt: Likewise.
+
+2010-01-19  Joel Brobecker  <brobecker@adacore.com>
+
+	* NEWS: Document the source command enhancement allowing it
+	to load Python scripts. Document the "set/show script-extension"
+	commands.
+
+2010-01-19  Joel Brobecker  <brobecker@adacore.com>
+
+	Add -Wunused-function to compile flags.
+	* configure.ac: Add -Wunused-function to build_warnings.
+	* configure: Regenerate.
+
+2010-01-19  Joel Brobecker  <brobecker@adacore.com>
+
+	"delete" ada-lex.c:input function, not used.
+	* ada-lex.l: #define YY_NO_INPUT.
+
+2010-01-19  Joel Brobecker  <brobecker@adacore.com>
+
+	Delete free_named_symtabs and associated cleanup.
+	* symfile.h (free_named_symtabs): Delete declaration.
+	* symfile.c: Remove some commented out code (clear_symtab_users_once).
+	(cashier_psymtab): Comment function out.
+	Delete declaration.
+	(free_named_symtabs): Delete.
+	* coffread.c (coff_end_symtab): Remove call to free_named_symtabs.
+	* dbxread.c (end_psymtab): Likewise.
+	* dwarf2read.c (process_psymtab_comp_unit): Ditto.
+	* exec.c (exec_close_1): Ditto.
+	* xcoffread.c (xcoff_end_psymtab): Likewise.
+
+2010-01-19  Joel Brobecker  <brobecker@adacore.com>
+
+	* stack.c (print_block_frame_labels): Comment function out.
+
+2010-01-19  Joel Brobecker  <brobecker@adacore.com>
+
+	Delete unused or undefined functions.
+	* breakpoint.c (ep_parse_optional_filename): Delete.
+	* dcache.c (dcache_write_line): Remove declaration.
+	* infrun.c (build_infrun): Remove declaration.
+	* tracepoint.c (tracepoint_save_command): Remove declaration.
+	* linux-nat.c (init_lwp_list): Delete. No longer used.
+	* event-loop.c (check_async_signal_handlers): Delete declaration.
+	* infrun.c (init_execution_control_state): Delete.
+	(proceed): Update comment to avoid mentioning
+	init_execution_control_state.
+	* target.c (kill_or_be_killed, nosupport_runtime): Delete.
+	* ada-lang.c (ada_to_static_fixed_value): Delete.
+	* scm-lang.c (evaluate_subexp_scm): Delete declaration.
+	* cp-namespace.c (cp_copy_usings): Delete.
+	* xml-syscall.c (xml_number_of_syscalls): Delete.
+	* progspace.c (find_program_space_by_num): Delete.
+	* inflow.c (handle_sigio): Delete declaration.
+	* hppa-tdep.c (hppa_alignof): Delete.
+	* mipsnbsd-tdep.c (mipsnbsd_sigtramp_offset)
+	(mipsnbsd_core_osabi_sniffer): Delete.
+
 2010-01-18  Tom Tromey  <tromey@redhat.com>
 
 	PR c++/9680:
