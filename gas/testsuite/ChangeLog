@@ -1,3 +1,29 @@
+2010-01-15  Sebastian Pop  <sebastian.pop@amd.com>
+
+	* gas/i386/x86-64-xop.d: Add missing patterns.
+	* gas/i386/x86-64-xop.s: Same.
+	* gas/i386/xop.d: Same.
+	* gas/i386/xop.s: Same.
+
+2010-01-13  Daniel Jacobowitz  <dan@codesourcery.com>
+
+	* gas/arm/thumb-nop.s: Add .syntax unified.
+
+2010-01-13  Daniel Jacobowitz  <dan@codesourcery.com>
+
+	* gas/arm/thumb-nop.d, gas/arm/thumb-nop.s: New test.
+	* gas/arm/relax_branch_align.d: Expect a default NOP instruction.
+	* gas/arm/vfp1_t2.d, gas/arm/vfp1xD_t2.d: Specify a CPU with
+	Thumb-2.
+
+2010-01-13  Nick Clifton  <nickc@redhat.com>
+
+	* gas/elf/section0.d: Skip this test for the h8300.
+	* gas/elf/section1.d: Likewise.
+	* gas/elf/section6.d: Likewise.
+	* gas/elf/elf.exp: Skip section2 and section5 tests when the
+	target is the h8300.
+
 2010-01-06  Quentin Neill  <quentin.neill@amd.com>
 
 	* gas/i386/i386.exp: Add new amdfam15 test cases.
