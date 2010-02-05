@@ -638,9 +638,9 @@ __set_lc_monetary_from_win (const char *name,
   return 1;
 }
 
-static LCID collate_lcid = 0;
+LCID collate_lcid = 0;
 static mbtowc_p collate_mbtowc = __ascii_mbtowc;
-static char collate_charset[ENCODING_LEN + 1] = "ASCII";
+char collate_charset[ENCODING_LEN + 1] = "ASCII";
 
 /* Called from newlib's setlocale() if category is LC_COLLATE.  Stores
    LC_COLLATE locale information.  This is subsequently accessed by the
@@ -861,9 +861,10 @@ __set_charset_from_locale (const char *locale, char *charset)
       cs = has_modifier ("@euro") ? "ISO-8859-15" : "ISO-8859-7";
       break;
     case 1254:
-      if (lcid == 0x042c		/* az_AZ (Azeri/Azerbaijan) */
-	  || lcid == 0x0443)		/* uz_UZ (Uzbek/Uzbekistan) */
+      if (lcid == 0x042c)		/* az_AZ (Azeri/Azerbaijan) */
       	cs = "UTF-8";
+      else if (lcid == 0x0443)		/* uz_UZ (Uzbek/Uzbekistan) */
+	cs = has_modifier ("@cyrillic") ? "UTF-8" : "ISO-8859-1";
       else
 	cs = has_modifier ("@euro") ? "ISO-8859-15" : "ISO-8859-9";
       break;
