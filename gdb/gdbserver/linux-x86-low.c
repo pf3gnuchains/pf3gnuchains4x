@@ -27,10 +27,10 @@
 
 #include "gdb_proc_service.h"
 
-/* Defined in auto-generated file reg-i386-linux.c.  */
+/* Defined in auto-generated file i386-linux.c.  */
 void init_registers_i386_linux (void);
-/* Defined in auto-generated file reg-x86-64-linux.c.  */
-void init_registers_x86_64_linux (void);
+/* Defined in auto-generated file amd64-linux.c.  */
+void init_registers_amd64_linux (void);
 
 #include <sys/reg.h>
 #include <sys/procfs.h>
@@ -507,10 +507,11 @@ x86_linux_new_thread (void)
 static void
 x86_linux_prepare_to_resume (struct lwp_info *lwp)
 {
+  ptid_t ptid = ptid_of (lwp);
+
   if (lwp->arch_private->debug_registers_changed)
     {
       int i;
-      ptid_t ptid = ptid_of (lwp);
       int pid = ptid_get_pid (ptid);
       struct process_info *proc = find_process_pid (pid);
       struct i386_debug_reg_state *state = &proc->private->arch_private->debug_reg_state;
@@ -522,6 +523,9 @@ x86_linux_prepare_to_resume (struct lwp_info *lwp)
 
       lwp->arch_private->debug_registers_changed = 0;
     }
+
+  if (lwp->stopped_by_watchpoint)
+    x86_linux_dr_set (ptid, DR_STATUS, 0);
 }
 
 /* When GDBSERVER is built as a 64-bit application on linux, the
@@ -792,7 +796,7 @@ x86_arch_setup (void)
     }
   else if (use_64bit)
     {
-      init_registers_x86_64_linux ();
+      init_registers_amd64_linux ();
 
       /* Amd64 doesn't have HAVE_LINUX_USRREGS.  */
       the_low_target.num_regs = -1;
