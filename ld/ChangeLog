@@ -1,3 +1,18 @@
+2010-06-29  Nick Clifton  <nickc@redhat.com>
+
+	* scripttempl/xstormy16.sc (.gcc_except_table): Include sections
+	with the .gcc_except_table. prefix.
+
+2010-06-29  Alan Modra  <amodra@gmail.com>
+
+	* emulparams/maxqcoff.sh: Delete file.
+	* scripttempl/maxqcoff.sc: Delete file.
+	* Makefile.am: Remove references to maxq.
+	* configure.tgt: Likewise.
+	* Makefile.in: Regenerate.
+	* configure: Regenerate.
+	* po/POTFILES.in: Regenerate.
+
 2010-06-27  Alan Modra  <amodra@gmail.com>
 
 	* pe-dll.c (fill_edata): Avoid set but unused warning.
