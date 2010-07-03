@@ -73,14 +73,14 @@ CONFIG_CLEAN_FILES = gdb.ini .gdbinit po/Makefile.in
 CONFIG_CLEAN_VPATH_FILES =
 PROGRAMS = $(noinst_PROGRAMS)
 am__objects_1 = app.$(OBJEXT) as.$(OBJEXT) atof-generic.$(OBJEXT) \
-	cond.$(OBJEXT) depend.$(OBJEXT) dwarf2dbg.$(OBJEXT) \
-	dw2gencfi.$(OBJEXT) ecoff.$(OBJEXT) ehopt.$(OBJEXT) \
-	expr.$(OBJEXT) flonum-copy.$(OBJEXT) flonum-konst.$(OBJEXT) \
-	flonum-mult.$(OBJEXT) frags.$(OBJEXT) hash.$(OBJEXT) \
-	input-file.$(OBJEXT) input-scrub.$(OBJEXT) listing.$(OBJEXT) \
-	literal.$(OBJEXT) macro.$(OBJEXT) messages.$(OBJEXT) \
-	output-file.$(OBJEXT) read.$(OBJEXT) remap.$(OBJEXT) \
-	sb.$(OBJEXT) stabs.$(OBJEXT) subsegs.$(OBJEXT) \
+	compress-debug.$(OBJEXT) cond.$(OBJEXT) depend.$(OBJEXT) \
+	dwarf2dbg.$(OBJEXT) dw2gencfi.$(OBJEXT) ecoff.$(OBJEXT) \
+	ehopt.$(OBJEXT) expr.$(OBJEXT) flonum-copy.$(OBJEXT) \
+	flonum-konst.$(OBJEXT) flonum-mult.$(OBJEXT) frags.$(OBJEXT) \
+	hash.$(OBJEXT) input-file.$(OBJEXT) input-scrub.$(OBJEXT) \
+	listing.$(OBJEXT) literal.$(OBJEXT) macro.$(OBJEXT) \
+	messages.$(OBJEXT) output-file.$(OBJEXT) read.$(OBJEXT) \
+	remap.$(OBJEXT) sb.$(OBJEXT) stabs.$(OBJEXT) subsegs.$(OBJEXT) \
 	symbols.$(OBJEXT) write.$(OBJEXT)
 am_as_new_OBJECTS = $(am__objects_1)
 as_new_OBJECTS = $(am_as_new_OBJECTS)
@@ -311,6 +311,7 @@ GAS_CFILES = \
 	app.c \
 	as.c \
 	atof-generic.c \
+	compress-debug.c \
 	cond.c \
 	depend.c \
 	dwarf2dbg.c \
@@ -345,6 +346,7 @@ HFILES = \
 	bignum.h \
 	bit_fix.h \
 	cgen.h \
+	compress-debug.h \
 	dwarf2dbg.h \
 	dw2gencfi.h \
 	ecoff.h \
@@ -399,7 +401,6 @@ TARGET_CPU_CFILES = \
 	config/tc-m32r.c \
 	config/tc-m68hc11.c \
 	config/tc-m68k.c \
-	config/tc-maxq.c \
 	config/tc-mcore.c \
 	config/tc-mep.c \
 	config/tc-microblaze.c \
@@ -464,7 +465,6 @@ TARGET_CPU_HFILES = \
 	config/tc-m32r.h \
 	config/tc-m68hc11.h \
 	config/tc-m68k.h \
-	config/tc-maxq.h \
 	config/tc-mcore.h \
 	config/tc-mep.h \
 	config/tc-microblaze.h \
@@ -773,6 +773,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/atof-vax.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/bfin-parse.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cgen.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/compress-debug.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cond.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/depend.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/dw2gencfi.Po@am__quote@
@@ -845,7 +846,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tc-m32r.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tc-m68hc11.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tc-m68k.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tc-maxq.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tc-mcore.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tc-mep.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tc-microblaze.Po@am__quote@
@@ -1282,20 +1282,6 @@ tc-m68k.obj: config/tc-m68k.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='config/tc-m68k.c' object='tc-m68k.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tc-m68k.obj `if test -f 'config/tc-m68k.c'; then $(CYGPATH_W) 'config/tc-m68k.c'; else $(CYGPATH_W) '$(srcdir)/config/tc-m68k.c'; fi`
-
-tc-maxq.o: config/tc-maxq.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tc-maxq.o -MD -MP -MF $(DEPDIR)/tc-maxq.Tpo -c -o tc-maxq.o `test -f 'config/tc-maxq.c' || echo '$(srcdir)/'`config/tc-maxq.c
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/tc-maxq.Tpo $(DEPDIR)/tc-maxq.Po
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='config/tc-maxq.c' object='tc-maxq.o' libtool=no @AMDEPBACKSLASH@
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tc-maxq.o `test -f 'config/tc-maxq.c' || echo '$(srcdir)/'`config/tc-maxq.c
-
-tc-maxq.obj: config/tc-maxq.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tc-maxq.obj -MD -MP -MF $(DEPDIR)/tc-maxq.Tpo -c -o tc-maxq.obj `if test -f 'config/tc-maxq.c'; then $(CYGPATH_W) 'config/tc-maxq.c'; else $(CYGPATH_W) '$(srcdir)/config/tc-maxq.c'; fi`
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/tc-maxq.Tpo $(DEPDIR)/tc-maxq.Po
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='config/tc-maxq.c' object='tc-maxq.obj' libtool=no @AMDEPBACKSLASH@
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tc-maxq.obj `if test -f 'config/tc-maxq.c'; then $(CYGPATH_W) 'config/tc-maxq.c'; else $(CYGPATH_W) '$(srcdir)/config/tc-maxq.c'; fi`
 
 tc-mcore.o: config/tc-mcore.c
 @am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tc-mcore.o -MD -MP -MF $(DEPDIR)/tc-mcore.Tpo -c -o tc-mcore.o `test -f 'config/tc-mcore.c' || echo '$(srcdir)/'`config/tc-mcore.c

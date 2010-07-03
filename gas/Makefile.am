@@ -43,6 +43,7 @@ GAS_CFILES = \
 	app.c \
 	as.c \
 	atof-generic.c \
+	compress-debug.c \
 	cond.c \
 	depend.c \
 	dwarf2dbg.c \
@@ -78,6 +79,7 @@ HFILES = \
 	bignum.h \
 	bit_fix.h \
 	cgen.h \
+	compress-debug.h \
 	dwarf2dbg.h \
 	dw2gencfi.h \
 	ecoff.h \
@@ -132,7 +134,6 @@ TARGET_CPU_CFILES = \
 	config/tc-m32r.c \
 	config/tc-m68hc11.c \
 	config/tc-m68k.c \
-	config/tc-maxq.c \
 	config/tc-mcore.c \
 	config/tc-mep.c \
 	config/tc-microblaze.c \
@@ -197,7 +198,6 @@ TARGET_CPU_HFILES = \
 	config/tc-m32r.h \
 	config/tc-m68hc11.h \
 	config/tc-m68k.h \
-	config/tc-maxq.h \
 	config/tc-mcore.h \
 	config/tc-mep.h \
 	config/tc-microblaze.h \
