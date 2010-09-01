@@ -2094,22 +2094,6 @@ coff_set_arch_mach_hook (bfd *abfd, void * filehdr)
       machine = bfd_mach_m68020;
       break;
 #endif
-#ifdef MAXQ20MAGIC
-    case MAXQ20MAGIC:
-      arch = bfd_arch_maxq;
-      switch (internal_f->f_flags & F_MACHMASK)
-	{
-	case F_MAXQ10:
-	  machine = bfd_mach_maxq10;
-	  break;
-	case F_MAXQ20:
-	  machine = bfd_mach_maxq20;
-	  break;
-	default:
-	  return FALSE;
-	}
-      break;
-#endif
 #ifdef MC88MAGIC
     case MC88MAGIC:
     case MC88DMAGIC:
@@ -3016,17 +3000,6 @@ coff_set_flags (bfd * abfd,
       else
 	* magicp = OR32_MAGIC_LITTLE;
       return TRUE;
-#endif
-
-#ifdef MAXQ20MAGIC
-    case bfd_arch_maxq:
-      * magicp = MAXQ20MAGIC;
-      switch (bfd_get_mach (abfd))
-	{
-	case bfd_mach_maxq10: * flagsp = F_MAXQ10; return TRUE;
-	case bfd_mach_maxq20: * flagsp = F_MAXQ20; return TRUE;
-	default:	      return FALSE;
-	}
 #endif
 
     default:			/* Unknown architecture.  */
@@ -4111,11 +4084,6 @@ coff_write_object_contents (bfd * abfd)
     internal_a.magic = NMAGIC; /* Assume separate i/d.  */
 #endif
 
-#ifdef MAXQ20MAGIC
-#define __A_MAGIC_SET__
-      internal_a.magic = MAXQ20MAGIC;
-#endif
-
 #ifndef __A_MAGIC_SET__
 #include "Your aouthdr magic number is not being set!"
 #else
@@ -4519,7 +4487,7 @@ coff_slurp_line_table (bfd *abfd, asection *asect)
 	    {
 	      (*_bfd_error_handler)
 		(_("%B: warning: illegal symbol index %ld in line numbers"),
-		 abfd, dst.l_addr.l_symndx);
+		 abfd, (long) symndx);
 	      symndx = 0;
 	      warned = TRUE;
 	    }
@@ -5155,7 +5123,7 @@ coff_slurp_reloc_table (bfd * abfd, sec_ptr asect, asymbol ** symbols)
 	    {
 	      (*_bfd_error_handler)
 		(_("%B: warning: illegal symbol index %ld in relocs"),
-		 abfd, dst.r_symndx);
+		 abfd, (long) dst.r_symndx);
 	      cache_ptr->sym_ptr_ptr = bfd_abs_section_ptr->symbol_ptr_ptr;
 	      ptr = NULL;
 	    }
