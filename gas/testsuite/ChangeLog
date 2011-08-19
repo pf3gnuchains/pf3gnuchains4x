@@ -1,3 +1,32 @@
+2011-08-19  Sergey A. Guriev  <sergeya.a.guriev@intel.com>
+
+	* gas/i386/avx-gather-intel.d: Added missing vpgather tests.
+	* gas/i386/avx-gather.d: Likewise.
+	* gas/i386/x86-64-avx-gather-intel.d: Likewise.
+	* gas/i386/x86-64-avx-gather.d: Likewise.
+
+	* gas/i386/avx-intel.d: Added missing vpinsrd and removed
+	duplicated vpinsrb instructions.
+	* gas/i386/avx.d: Likewise.
+	* gas/i386/avx.s: Likewise.
+	* gas/i386/ilp32/x86-64-avx-intel.d: Likewise.
+	* gas/i386/ilp32/x86-64-avx.d: Likewise.
+	* gas/i386/x86-64-avx-intel.d: Likewise.
+	* gas/i386/x86-64-avx.d: Likewise.
+	* gas/i386/x86-64-avx.s: Likewise.
+
+2011-08-10  Maciej W. Rozycki  <macro@codesourcery.com>
+
+	* gas/mips/micromips@mips5.d: Rename to...
+	* gas/mips/micromips@mips5-fp.d: ... this.
+	* gas/mips/mips5.d: Rename to...
+	* gas/mips/mips5-fp.d: ... this.
+	* gas/mips/mips5.l: Rename to...
+	* gas/mips/mips5-fp.l: ... this.
+	* gas/mips/mips5.s: Rename to...
+	* gas/mips/mips5-fp.s: ... this.
+	* gas/mips/mips.exp: Update accordingly.
+
 2011-08-10  Maciej W. Rozycki  <macro@codesourcery.com>
 
 	* gas/mips/mips.exp: Define new "fpisa3", "fpisa4" and "fpisa5"
