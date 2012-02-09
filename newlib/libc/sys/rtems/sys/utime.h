@@ -1,9 +1,11 @@
 /*
- *  $Id$
+ *  $Id: utime.h,v 1.2 2012/02/09 13:05:15 corinna Exp $
  */
 
 #ifndef __UTIME_h__
 #define __UTIME_h__
+
+#include <sys/types.h>
 
 #ifdef __cplusplus
 extern "C" {
