@@ -34,7 +34,6 @@
 # endif
 #endif
 
-#include "sysdep.h"
 #include "bfd.h"
 #include "gdb/callback.h"
 #include "gdb/remote-sim.h"
