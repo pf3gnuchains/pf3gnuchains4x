@@ -2843,6 +2843,11 @@ do
       skip_next=$separate_arg
       continue
       ;;
+    --enable-multilib | \
+    --disable-multilib )
+      # Only add multilib to target args
+      tbaseargs="$tbaseargs '$ac_arg'"
+      ;;
     -*)
       # An option.  Add it.
       case $ac_arg in
