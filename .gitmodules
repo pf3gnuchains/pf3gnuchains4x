@@ -1,6 +1,6 @@
 [submodule "gcc.git"]
 	path = gcc.git
-	url = monamour@git.sourceforge.jp:/gitroot/pf3gnuchains/gcc-fork.git
+	url = https://bitbucket.org/pizzafactory/pf-gcc.git
 [submodule "mpc"]
 	path = mpc
 	url = https://android.googlesource.com/toolchain/mpc
