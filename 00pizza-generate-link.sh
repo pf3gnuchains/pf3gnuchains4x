@@ -22,3 +22,6 @@ ln -s gcc.git/libstdc++-v3
 ln -s gcc.git/libtool-ldflags
 ln -s gcc.git/maintainer-scripts
 ln -s gcc.git/zlib
+ln -s gcc-deplibs.git/gmp
+ln -s gcc-deplibs.git/mpc
+ln -s gcc-deplibs.git/mpfr

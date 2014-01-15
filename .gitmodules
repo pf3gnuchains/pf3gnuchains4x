@@ -1,12 +1,6 @@
 [submodule "gcc.git"]
 	path = gcc.git
 	url = https://bitbucket.org/pizzafactory/pf-gcc.git
-[submodule "mpc"]
-	path = mpc
-	url = https://android.googlesource.com/toolchain/mpc
-[submodule "mpfr"]
-	path = mpfr
-	url = https://android.googlesource.com/toolchain/mpfr
-[submodule "gmp"]
-	path = gmp
-	url = https://android.googlesource.com/toolchain/gmp
+[submodule "gcc-deplibs.git"]
+	path = gcc-deplibs.git
+	url = git@bitbucket.org:pizzafactory/gcc-deplibs.git
