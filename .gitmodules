@@ -3,4 +3,4 @@
 	url = https://bitbucket.org/pizzafactory/pf-gcc.git
 [submodule "gcc-deplibs.git"]
 	path = gcc-deplibs.git
-	url = git@bitbucket.org:pizzafactory/gcc-deplibs.git
+	url = https://bitbucket.org/pizzafactory/gcc-deplibs.git
