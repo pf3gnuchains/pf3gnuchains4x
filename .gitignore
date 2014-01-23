@@ -7,6 +7,7 @@ boehm-gc
 contrib
 fixincludes
 gcc
+gmp
 gnattools
 libada
 libcpp
@@ -21,4 +22,6 @@ libssp
 libstdc++-v3
 libtool-ldflags
 maintainer-scripts
+mpc
+mpfr
 zlib
