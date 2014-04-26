@@ -1,6 +1,5 @@
 /* Low level interface to ptrace, for the remote server for GDB.
-   Copyright (C) 1995, 1996, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1995-1996, 1998-2012 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -40,7 +39,8 @@
 #define SPARC_F_REGS_NUM 48
 #define SPARC_CONTROL_REGS_NUM 6
 
-#define sparc_num_regs (SPARC_R_REGS_NUM + SPARC_F_REGS_NUM + SPARC_CONTROL_REGS_NUM)
+#define sparc_num_regs \
+  (SPARC_R_REGS_NUM + SPARC_F_REGS_NUM + SPARC_CONTROL_REGS_NUM)
 
 /* Each offset is multiplied by 8, because of the register size.
    These offsets apply to the buffer sent/filled by ptrace.
@@ -49,10 +49,10 @@
 
 static int sparc_regmap[] = {
   /* These offsets correspond to GET/SETREGSET.  */
-	-1,  0*8,  1*8,  2*8,  3*8,  4*8,  5*8,  6*8,	   /* g0 .. g7 */
-	7*8,  8*8,  9*8, 10*8, 11*8, 12*8, 13*8, 14*8,	   /* o0 .. o5, sp, o7 */
-	-1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,	   /* l0 .. l7 */
-	-1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,	   /* i0 .. i5, fp, i7 */
+	-1,  0*8,  1*8,  2*8,  3*8,  4*8,  5*8,  6*8,	 /* g0 .. g7 */
+	7*8,  8*8,  9*8, 10*8, 11*8, 12*8, 13*8, 14*8,	 /* o0 .. o5, sp, o7 */
+	-1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,	 /* l0 .. l7 */
+	-1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,	 /* i0 .. i5, fp, i7 */
 
   /* Floating point registers offsets correspond to GET/SETFPREGSET.  */
     0*4,  1*4,  2*4,  3*4,  4*4,  5*4,  6*4,  7*4,	   /*  f0 ..  f7 */
@@ -67,7 +67,8 @@ static int sparc_regmap[] = {
    17 *8, /*    pc */
    18 *8, /*   npc */
    16 *8, /* state */
-  /* FSR offset also corresponds to GET/SETFPREGSET, ans is placed next to f62.  */
+  /* FSR offset also corresponds to GET/SETFPREGSET, ans is placed
+     next to f62.  */
    32 *8, /*   fsr */
       -1, /*  fprs */
   /* Y register is 32-bits length, but gdb takes care of that.  */
@@ -113,7 +114,7 @@ sparc_cannot_fetch_register (int regno)
 }
 
 static void
-sparc_fill_gregset_to_stack (const void *buf)
+sparc_fill_gregset_to_stack (struct regcache *regcache, const void *buf)
 {
   int i;
   CORE_ADDR addr = 0;
@@ -128,40 +129,42 @@ sparc_fill_gregset_to_stack (const void *buf)
 
   for (i = l0_regno; i <= i7_regno; i++)
     {
-      collect_register (i, tmp_reg_buf);
+      collect_register (regcache, i, tmp_reg_buf);
       (*the_target->write_memory) (addr, tmp_reg_buf, sizeof(tmp_reg_buf));
       addr += sizeof(tmp_reg_buf);
     }
 }
 
 static void
-sparc_fill_gregset (void *buf)
+sparc_fill_gregset (struct regcache *regcache, void *buf)
 {
   int i;
   int range;
 
   for (range = 0; range < N_GREGS_RANGES; range++)
-    for (i = gregs_ranges[range].regno_start; i <= gregs_ranges[range].regno_end; i++)
+    for (i = gregs_ranges[range].regno_start;
+	 i <= gregs_ranges[range].regno_end; i++)
       if (sparc_regmap[i] != -1)
-	collect_register (i, ((char *) buf) + sparc_regmap[i]);
+	collect_register (regcache, i, ((char *) buf) + sparc_regmap[i]);
 
-  sparc_fill_gregset_to_stack (buf);
+  sparc_fill_gregset_to_stack (regcache, buf);
 }
 
 static void
-sparc_fill_fpregset (void *buf)
+sparc_fill_fpregset (struct regcache *regcache, void *buf)
 {
   int i;
   int range;
 
   for (range = 0; range < N_FPREGS_RANGES; range++)
-    for (i = fpregs_ranges[range].regno_start; i <= fpregs_ranges[range].regno_end; i++)
-      collect_register (i, ((char *) buf) + sparc_regmap[i]);
+    for (i = fpregs_ranges[range].regno_start;
+	 i <= fpregs_ranges[range].regno_end; i++)
+      collect_register (regcache, i, ((char *) buf) + sparc_regmap[i]);
 
 }
 
 static void
-sparc_store_gregset_from_stack (const void *buf)
+sparc_store_gregset_from_stack (struct regcache *regcache, const void *buf)
 {
   int i;
   CORE_ADDR addr = 0;
@@ -177,13 +180,13 @@ sparc_store_gregset_from_stack (const void *buf)
   for (i = l0_regno; i <= i7_regno; i++)
     {
       (*the_target->read_memory) (addr, tmp_reg_buf, sizeof(tmp_reg_buf));
-      supply_register (i, tmp_reg_buf);
+      supply_register (regcache, i, tmp_reg_buf);
       addr += sizeof(tmp_reg_buf);
     }
 }
 
 static void
-sparc_store_gregset (const void *buf)
+sparc_store_gregset (struct regcache *regcache, const void *buf)
 {
   int i;
   char zerobuf[8];
@@ -192,39 +195,44 @@ sparc_store_gregset (const void *buf)
   memset (zerobuf, 0, sizeof(zerobuf));
 
   for (range = 0; range < N_GREGS_RANGES; range++)
-    for (i = gregs_ranges[range].regno_start; i <= gregs_ranges[range].regno_end; i++)
+    for (i = gregs_ranges[range].regno_start;
+	 i <= gregs_ranges[range].regno_end; i++)
       if (sparc_regmap[i] != -1)
-	supply_register (i, ((char *) buf) + sparc_regmap[i]);
+	supply_register (regcache, i, ((char *) buf) + sparc_regmap[i]);
       else
-	supply_register (i, zerobuf);
+	supply_register (regcache, i, zerobuf);
 
-  sparc_store_gregset_from_stack (buf);
+  sparc_store_gregset_from_stack (regcache, buf);
 }
 
 static void
-sparc_store_fpregset (const void *buf)
+sparc_store_fpregset (struct regcache *regcache, const void *buf)
 {
   int i;
   int range;
 
   for (range = 0; range < N_FPREGS_RANGES; range++)
-    for (i = fpregs_ranges[range].regno_start; i <= fpregs_ranges[range].regno_end; i++)
-      supply_register (i, ((char *) buf) + sparc_regmap[i]);
+    for (i = fpregs_ranges[range].regno_start;
+	 i <= fpregs_ranges[range].regno_end;
+	 i++)
+      supply_register (regcache, i, ((char *) buf) + sparc_regmap[i]);
 }
 
 extern int debug_threads;
 
 static CORE_ADDR
-sparc_get_pc ()
+sparc_get_pc (struct regcache *regcache)
 {
-  CORE_ADDR pc;
-  collect_register_by_name ("pc", &pc);
+  unsigned long pc;
+  collect_register_by_name (regcache, "pc", &pc);
   if (debug_threads)
     fprintf (stderr, "stop pc is %08lx\n", pc);
   return pc;
 }
 
-static const unsigned char sparc_breakpoint[INSN_SIZE] = { 0x91, 0xd0, 0x20, 0x01 };
+static const unsigned char sparc_breakpoint[INSN_SIZE] = {
+  0x91, 0xd0, 0x20, 0x01
+};
 #define sparc_breakpoint_len INSN_SIZE
 
 
@@ -238,7 +246,8 @@ sparc_breakpoint_at (CORE_ADDR where)
   if (memcmp(sparc_breakpoint, insn, sizeof(insn)) == 0)
     return 1;
 
-  /* If necessary, recognize more trap instructions here.  GDB only uses TRAP Always.  */
+  /* If necessary, recognize more trap instructions here.  GDB only
+     uses TRAP Always.  */
 
   return 0;
 }
@@ -247,23 +256,24 @@ sparc_breakpoint_at (CORE_ADDR where)
    is outside of the function.  So rather than importing software single-step,
    we can just run until exit.  */
 static CORE_ADDR
-sparc_reinsert_addr ()
+sparc_reinsert_addr (void)
 {
+  struct regcache *regcache = get_thread_regcache (current_inferior, 1);
   CORE_ADDR lr;
   /* O7 is the equivalent to the 'lr' of other archs.  */
-  collect_register_by_name ("o7", &lr);
+  collect_register_by_name (regcache, "o7", &lr);
   return lr;
 }
 
 
 struct regset_info target_regsets[] = {
-  { PTRACE_GETREGS, PTRACE_SETREGS, sizeof (elf_gregset_t),
+  { PTRACE_GETREGS, PTRACE_SETREGS, 0, sizeof (elf_gregset_t),
     GENERAL_REGS,
     sparc_fill_gregset, sparc_store_gregset },
-  { PTRACE_GETFPREGS, PTRACE_SETFPREGS, sizeof (fpregset_t),
+  { PTRACE_GETFPREGS, PTRACE_SETFPREGS, 0, sizeof (fpregset_t),
     FP_REGS,
     sparc_fill_fpregset, sparc_store_fpregset },
-  { 0, 0, -1, -1, NULL, NULL }
+  { 0, 0, 0, -1, -1, NULL, NULL }
 };
 
 struct linux_target_ops the_low_target = {

@@ -1,7 +1,7 @@
 /* thread.h: Locking and threading module definitions
 
    Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2007,
-   2008, 2009 Red Hat, Inc.
+   2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -9,8 +9,7 @@ This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
 details. */
 
-#ifndef _THREAD_H
-#define _THREAD_H
+#pragma once
 
 #define LOCK_MMAP_LIST   1
 
@@ -21,6 +20,7 @@ details. */
 #include <limits.h>
 #include "security.h"
 #include <errno.h>
+#include "cygerrno.h"
 
 enum cw_sig_wait
 {
@@ -36,7 +36,8 @@ enum cw_cancel_action
   cw_no_cancel
 };
 
-DWORD cancelable_wait (HANDLE, DWORD, const cw_cancel_action = cw_cancel_self,
+DWORD cancelable_wait (HANDLE, PLARGE_INTEGER timeout = NULL,
+		       const cw_cancel_action = cw_cancel_self,
 		       const enum cw_sig_wait = cw_sig_nosig)
   __attribute__ ((regparm (3)));
 
@@ -57,10 +58,10 @@ public:
   bool init ()
   {
     lock_counter = 0;
-    win32_obj_id = ::CreateSemaphore (&sec_none_nih, 0, LONG_MAX, NULL);
+    win32_obj_id = ::CreateEvent (&sec_none_nih, false, false, NULL);
     if (!win32_obj_id)
       {
-	debug_printf ("CreateSemaphore failed. %E");
+	debug_printf ("CreateEvent failed. %E");
 	return false;
       }
     return true;
@@ -69,13 +70,13 @@ public:
   void lock ()
   {
     if (InterlockedIncrement ((long *) &lock_counter) != 1)
-      cancelable_wait (win32_obj_id, INFINITE, cw_no_cancel, cw_sig_resume);
+      cancelable_wait (win32_obj_id, NULL, cw_no_cancel, cw_sig_resume);
   }
 
   void unlock ()
   {
     if (InterlockedDecrement ((long *) &lock_counter))
-      ::ReleaseSemaphore (win32_obj_id, 1, NULL);
+      ::SetEvent (win32_obj_id);
   }
 
 private:
@@ -97,18 +98,21 @@ class pinfo;
 #define PTHREAD_ONCE_MAGIC PTHREAD_MAGIC+8
 #define PTHREAD_RWLOCK_MAGIC PTHREAD_MAGIC+9
 #define PTHREAD_RWLOCKATTR_MAGIC PTHREAD_MAGIC+10
+#define PTHREAD_SPINLOCK_MAGIC PTHREAD_MAGIC+11
 
 #define MUTEX_OWNER_ANONYMOUS ((pthread_t) -1)
+
+typedef unsigned long thread_magic_t;
 
 /* verifyable_object should not be defined here - it's a general purpose class */
 
 class verifyable_object
 {
 public:
-  long magic;
+  thread_magic_t magic;
 
-  verifyable_object (long);
-  virtual ~verifyable_object ();
+  verifyable_object (thread_magic_t verifyer): magic (verifyer) {}
+  virtual ~verifyable_object () { magic = 0; }
 };
 
 typedef enum
@@ -246,7 +250,9 @@ public:
   int contentionscope;
   int inheritsched;
   struct sched_param schedparam;
+  void *stackaddr;
   size_t stacksize;
+  size_t guardsize;
 
   pthread_attr ();
   ~pthread_attr ();
@@ -265,49 +271,50 @@ public:
 class pthread_mutex: public verifyable_object
 {
 public:
-  static bool is_good_object (pthread_mutex_t const *);
-  static bool is_good_initializer (pthread_mutex_t const *);
-  static bool is_good_initializer_or_object (pthread_mutex_t const *);
-  static bool is_good_initializer_or_bad_object (pthread_mutex_t const *mutex);
-  static bool can_be_unlocked (pthread_mutex_t const *mutex);
   static void init_mutex ();
-  static int init (pthread_mutex_t *mutex, const pthread_mutexattr_t *attr,
-		   const pthread_mutex_t initializer = NULL);
+  static int init (pthread_mutex_t *, const pthread_mutexattr_t *attr,
+		   const pthread_mutex_t);
+  static bool is_good_object (pthread_mutex_t const *);
+  static bool is_initializer (pthread_mutex_t const *);
+  static bool is_initializer_or_object (pthread_mutex_t const *);
+  static bool is_initializer_or_bad_object (pthread_mutex_t const *);
 
+  int lock ();
+  int trylock ();
+  int unlock ();
+  int destroy ();
+  void set_type (int in_type) {type = in_type;}
+
+  int lock_recursive ()
+  {
+    if (recursion_counter == UINT_MAX)
+      return EAGAIN;
+    recursion_counter++;
+    return 0;
+  }
+
+  bool can_be_unlocked ();
+
+  pthread_mutex (pthread_mutexattr * = NULL);
+  pthread_mutex (pthread_mutex_t *, pthread_mutexattr *);
+  ~pthread_mutex ();
+
+  class pthread_mutex *next;
+  static void fixup_after_fork ()
+  {
+    mutexes.fixup_after_fork ();
+    mutexes.for_each (&pthread_mutex::_fixup_after_fork);
+  }
+
+protected:
   unsigned long lock_counter;
   HANDLE win32_obj_id;
-  unsigned int recursion_counter;
-  LONG condwaits;
   pthread_t owner;
 #ifdef DEBUGGING
   DWORD tid;		/* the thread id of the owner */
 #endif
-  int type;
-  int pshared;
 
-  pthread_t get_pthread_self () const
-  {
-    return PTHREAD_MUTEX_NORMAL == type ? MUTEX_OWNER_ANONYMOUS :
-      ::pthread_self ();
-  }
-
-  int lock ()
-  {
-    return _lock (get_pthread_self ());
-  }
-  int trylock ()
-  {
-    return _trylock (get_pthread_self ());
-  }
-  int unlock ()
-  {
-    return _unlock (get_pthread_self ());
-  }
-  int destroy ()
-  {
-    return _destroy (get_pthread_self ());
-  }
-
+  void set_shared (int in_shared) { pshared = in_shared; }
   void set_owner (pthread_t self)
   {
     recursion_counter = 1;
@@ -317,35 +324,34 @@ public:
 #endif
   }
 
-  int lock_recursive ()
-  {
-    if (UINT_MAX == recursion_counter)
-      return EAGAIN;
-    ++recursion_counter;
-    return 0;
-  }
-
-  pthread_mutex (pthread_mutexattr * = NULL);
-  pthread_mutex (pthread_mutex_t *, pthread_mutexattr *);
-  ~pthread_mutex ();
-
-  class pthread_mutex * next;
-  static void fixup_after_fork ()
-  {
-    mutexes.fixup_after_fork ();
-    mutexes.for_each (&pthread_mutex::_fixup_after_fork);
-  }
+  static const pthread_t _new_mutex;
+  static const pthread_t _unlocked_mutex;
+  static const pthread_t _destroyed_mutex;
 
 private:
-  int _lock (pthread_t self);
-  int _trylock (pthread_t self);
-  int _unlock (pthread_t self);
-  int _destroy (pthread_t self);
+  unsigned int recursion_counter;
+  LONG condwaits;
+  int type;
+  int pshared;
 
+  bool no_owner ();
   void _fixup_after_fork ();
 
   static List<pthread_mutex> mutexes;
   static fast_mutex mutex_initialization_lock;
+  friend class pthread_cond;
+};
+
+class pthread_spinlock: public pthread_mutex
+{
+public:
+  static bool is_good_object (pthread_spinlock_t const *);
+  static int init (pthread_spinlock_t *, int);
+
+  int lock ();
+  int unlock ();
+
+  pthread_spinlock (int);
 };
 
 #define WAIT_CANCELED   (WAIT_OBJECT_0 + 1)
@@ -362,6 +368,7 @@ public:
   void *return_ptr;
   bool valid;
   bool suspended;
+  bool canceled;
   int cancelstate, canceltype;
   _cygtls *cygtls;
   HANDLE cancel_event;
@@ -394,7 +401,8 @@ public:
   virtual int cancel ();
 
   virtual void testcancel ();
-  static void static_cancel_self ();
+  static HANDLE get_cancel_event ();
+  static void static_cancel_self () __attribute__ ((noreturn));
 
   virtual int setcancelstate (int state, int *oldstate);
   virtual int setcanceltype (int type, int *oldtype);
@@ -435,7 +443,7 @@ private:
   DWORD thread_id;
   __pthread_cleanup_handler *cleanup_stack;
   pthread_mutex mutex;
-  _cygtls *parent_tls;
+  sigset_t parent_sigmask;
 
   void suspend_except_self ();
   void resume ();
@@ -446,9 +454,8 @@ private:
   void precreate (pthread_attr *);
   void postcreate ();
   bool create_cancel_event ();
-  static pthread *get_tls_self_pointer ();
   static void set_tls_self_pointer (pthread *);
-  void cancel_self ();
+  void cancel_self () __attribute__ ((noreturn));
   DWORD get_thread_id ();
 };
 
@@ -481,6 +488,7 @@ class pthread_condattr: public verifyable_object
 public:
   static bool is_good_object(pthread_condattr_t const *);
   int shared;
+  clockid_t clock_id;
 
   pthread_condattr ();
   ~pthread_condattr ();
@@ -490,13 +498,14 @@ class pthread_cond: public verifyable_object
 {
 public:
   static bool is_good_object (pthread_cond_t const *);
-  static bool is_good_initializer (pthread_cond_t const *);
-  static bool is_good_initializer_or_object (pthread_cond_t const *);
-  static bool is_good_initializer_or_bad_object (pthread_cond_t const *);
+  static bool is_initializer (pthread_cond_t const *);
+  static bool is_initializer_or_object (pthread_cond_t const *);
+  static bool is_initializer_or_bad_object (pthread_cond_t const *);
   static void init_mutex ();
   static int init (pthread_cond_t *, const pthread_condattr_t *);
 
   int shared;
+  clockid_t clock_id;
 
   unsigned long waiting;
   unsigned long pending;
@@ -508,7 +517,7 @@ public:
   pthread_mutex_t mtx_cond;
 
   void unblock (const bool all);
-  int wait (pthread_mutex_t mutex, DWORD dwMilliseconds = INFINITE);
+  int wait (pthread_mutex_t mutex, PLARGE_INTEGER timeout = NULL);
 
   pthread_cond (pthread_condattr *);
   ~pthread_cond ();
@@ -541,9 +550,9 @@ class pthread_rwlock: public verifyable_object
 {
 public:
   static bool is_good_object (pthread_rwlock_t const *);
-  static bool is_good_initializer (pthread_rwlock_t const *);
-  static bool is_good_initializer_or_object (pthread_rwlock_t const *);
-  static bool is_good_initializer_or_bad_object (pthread_rwlock_t const *);
+  static bool is_initializer (pthread_rwlock_t const *);
+  static bool is_initializer_or_object (pthread_rwlock_t const *);
+  static bool is_initializer_or_bad_object (pthread_rwlock_t const *);
   static void init_mutex ();
   static int init (pthread_rwlock_t *, const pthread_rwlockattr_t *);
 
@@ -656,6 +665,7 @@ public:
   }
   static void terminate ()
   {
+    save_errno save;
     semaphores.for_each (&semaphore::_terminate);
   }
 
@@ -703,4 +713,3 @@ struct MTinterface
 };
 
 #define MT_INTERFACE user_data->threadinterface
-#endif // _THREAD_H

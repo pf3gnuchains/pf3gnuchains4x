@@ -1,3 +1,786 @@
+2012-01-16  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Correct misused 'rm -r' command in uninstall rules.
+
+	* lib/Makefile.in lib/ddk/Makefile.in lib/directx/Makefile.in:
+	(uninstall-headers): Don't use 'rm -r' when removing individual files;
+	correct this typo, substituting 'rm -f' as appropriate.
+
+2012-01-16  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Generalise makefile references to subdirectories of lib.
+
+	* lib/Makefile.in (ddk, directx): Replace explicit references using...
+	(SUBDIRS): ...this macro; it already implements the same references in
+	a more generalised and extensible fashion.
+
+2012-01-16  Corinna Vinschen  <corinna@vinschen.de>
+
+	* configure: Regenerate and re-add to repository.
+	* .cvsignore: Fix accordingly.
+
+2012-01-15  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Add 'check' as GCS conforming alias for make's 'test' goal.
+
+	* Makefile.in (check): New goal; declare as .PHONY; implement it as...
+	(test): ... alternative goal name for this; the original 'test' goal
+	may now be considered as deprecated, but there is no pressing need to
+	withdraw support for it.
+
+	* lib/Makefile.in lib/ddk/Makefile.in lib/directx/Makefile.in:
+	(check, test): Likewise.
+
+2012-01-15  Keith Marshall  <keithmarshall@users.sf.net>
+
+	More makefile code refactoring; remove redundant INCLUDES references.
+
+	* lib/directx/Makefile.in (INCLUDES): Reference to include/directx
+	is redundant; remove it.  This results in identical definitions...
+	* lib/Makefile.in lib/ddk/Makefile.in (INCLUDES): ...here; factor out
+	from all three independent makefile locations; relocate to...
+	* Makefile.comm.in (INCLUDES): ...here.
+
+2012-01-15  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Add smart identification of auxiliary header file paths.
+
+	* aclocal.m4: New file; replaces previously removed file of
+	same name, with entirely new content.
+
+	* Makefile.in (DISTFILES): Reinstate aclocal.m4
+
+	* Makefile.comm.in (EXTRA_INCLUDES): Use AC_SUBST to assign it.
+	(BUILDENV): No longer required; remove all references to it.
+
+	* configure.ac (BUILDENV): Redundant AC_SUBST variable; delete it.
+	(MINGW_AC_CONFIG_SRCDIR): Factor out; relocate it to aclocal.m4
+	(EXTRA_INCLUDES): Define as AC_SUBST variable; assign value using...
+	(MINGW_AC_RUNTIME_SRCDIR): ...this new aclocal.m4 macro.
+
+	* configure: Regenerated.
+
+2012-01-15  Keith Marshall  <keithmarshall@users.sf.net>
+
+	More makefile code refactoring; fix top_srcdir references.
+
+	* Makefile.comm.in (EXTRA_INCLUDES): Add definitions from...
+	* lib/Makefile.in (EXTRA_INCLUDES): ...here; factor out common code.
+	(top_srcdir): Use this throughout, in place of ${srcdir}/../
+
+	* lib/ddk/Makefile.in lib/directx/Makefile.in (EXTRA_INCLUDES):
+	Factor out; use corrected definitions from Makefile.comm.in
+	(top_srcdir): Use throughout, in place of ${srcdir}/../../
+	(INCLUDES): Adjust incorrect references to ${srcdir}/../include;
+	should be ${top_srcdir}/include
+
+2012-01-15  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Update and correct makefile rebuilding rules.
+
+	* Makefile.in (Makefile): Remove dependency on configure; it causes
+	incorrect invocation of config.status when configure is regenerated.
+	(config.status): New rule; it invokes the corrected command.
+
+	* lib/Makefile.in lib/ddk/Makefile.in lib/directx/Makefile.in:
+	(Makefile): Factor out rebuilding rules; replace by...
+	* Makefile.comm.in (Makefile): ...corrected implementation here.
+	(top_builddir/Makefile.comm): New rebuilding rule; it establishes the
+	commands to rebuild Makefile.comm and all other makefiles, when its
+	own Makefile.comm.in, or any subdirectory Makefile.in is modified,
+	or when config.status is updated.
+	(top_builddir/config.status): New rule; it corrects the previously
+	inappropriate command implementation to update config.status, when the
+	configure script is regenerated.
+
+2012-01-15  Keith Marshall  <keithmarshall@users.sf.net>
+
+	More formatting adjustments.
+
+	* lib/directx/Makefile.in (LIBS, DINPUT_OBJS): Adjust indentation.
+	(INCLUDES, EXTRA_INCLUDES): Fold definitions; adjust indentation.
+
+2012-01-15  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Miscellaneous formatting adjustments.
+
+	* lib/Makefile.in (subdirs): Unreferenced macro; delete it.
+	(srcdir, inst_includedir, inst_libdir, distdir): Use braces in macro
+	references; don't respecify $file in destination path when installing.
+	(UUID_OBJS, EXTRA_OBJS, UUID_SOURCES, SOURCES): Adjust indentation.
+	(TEST_OPTIONS): Fold definition; adjust indentation.
+
+	* lib/ddk/Makefile.in lib/directx/Makefile.in:
+	(srcdir, inst_includedir, inst_libdir, distdir): Use braces in macro
+	references; don't respecify $file in destination path when installing.
+	(TEST_OPTIONS): Fold definition; adjust indentation.
+
+2012-01-15  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Improve self-documentation of 'for' loop commands.
+
+	* Makefile.in lib/Makefile.in:
+	* lib/ddk/Makefile.in lib/directx/Makefile.in: In 'for' loops invoked
+	by rule commands, prefer use of 'dir' and 'file' appropriately, as the
+	loop control variables, rather than non-descript 'i'.
+
+2012-01-15  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Generalise 'all' rule to arbitrary prerequisite sub-directories.
+
+	* Makefile.in: (all): Make it depend on all $(SUBDIRS), not just on...
+	(lib): ...this; replace it with a generic $(SUBDIRS) goal.
+
+2012-01-15  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Derive package release index from configure time specification.
+
+	* configure.ac (PACKAGE_RELEASE): New variable; define it, such that
+	AC_SUBST will propagate it to generated makefiles; initialise from...
+	(RELEASE): ...this configure time variable; make it precious.
+
+	* Makefile.in (CYGRELEASE): Reassign its value, to match...
+	(RELEASE): ...this; assign AC_SUBST propagated PACKAGE_RELEASE value.
+	(PACKAGE): Assign AC_SUBST propagated PACKAGE_TARNAME value.
+	(VERSION): Assign AC_SUBST propagated PACKAGE_VERSION value.
+	(CC, CFLAGS, AS, LD, AR, RANLIB): Unreferenced macros; delete them.
+	(CC_FOR_TARGET, AS_FOR_TARGET, DLLTOOL, WINDRES): Likewise.
+	(prefix, exec_prefix, datadir, infodir, includedir): Likewise.
+	(bindir, libdir, tooldir, program_transform_name): Likewise.
+	(build_alias, host_alias): Likewise.
+
+2012-01-14  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Discontinue CVS tracking of generated 'configure' script.
+
+	* configure: Remove it; user may regenerate it when required.
+	* .cvsignore: New file; mark configure, autom4te.cache, and all
+	mercurial related files as ignored.
+
+2012-01-06  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Ensure Makefile.comm source is included in distribution tarballs.
+
+	* Makefile.in (DISTFILES): Add Makefile.comm.in
+
+2012-01-06  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	* include/windef.h (WINVER): Back off to 0x0500.
+
+2012-01-05  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	* include/windef.h (WINVER): Bump to 0x0501.
+
+2012-01-03  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	Return value, identified by 'make test'.
+
+	* include/gdiplus/gdiplustypes.h (Gdiplus::GdiplusAbort::Abort()): Return
+	NO_ERROR in virtual definition.
+
+2012-01-03  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	Remove duplicate definitions, identified by 'make test'.
+
+	* include/wincrypt.h (CRYPT_NEWKEYSET, CRYPT_DELETEKEYSET,
+	CRYPT_MACHINE_KEYSET, CRYPT_SILENT, CRYPT_EXPORTABLE, CRYPT_USER_PROTECTED,
+	CRYPT_CREATE_SALT, CRYPT_UPDATE_KEY, CRYPT_NO_SALT, CRYPT_PREGEN,
+	CRYPT_RECIPIENT, CRYPT_INITIATOR, CRYPT_ONLINE, CRYPT_SF, CRYPT_CREATE_IV,
+	CRYPT_KEK, CRYPT_DATA_KEY, CRYPT_VOLATILE, CRYPT_SGCKEY): Remove duplicate
+	definitions.
+	* include/winerror.h (CRYPT_E_REVOKED): Removed - already defined in
+	wincrypt (which is where it should be defined according to MSDN).
+
+2012-01-03  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Correct misuse of #ifdef, identified by 'make test'.
+
+	* include/shlwapi.h (enum ASSOCSTR, enum ASSOCDATA): Fix typos;
+	/#ifdef _WIN32_IE >= 0x0600/s/#ifdef/#if/
+
+2011-12-22  Corinna Vinschen  <corinna@vinschen.de>
+
+	* include/winnt.h (JOB_OBJECT_LIMIT_BREAKAWAY_OK): Define.
+	(JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK): Define.
+	(JOB_OBJECT_BREAKAWAY_OK): Define as JOB_OBJECT_LIMIT_BREAKAWAY_OK
+	and mark as kept for backward compatibility only.
+	(JOB_OBJECT_SILENT_BREAKAWAY): Define as
+	JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK and mark as kept for backward
+	compatibility only.
+
+2011-12-22  Corinna Vinschen  <corinna@vinschen.de>
+
+	* include/winnt.h: Add missing PROCESS_QUERY_LIMITED_INFORMATION.
+
+2011-12-13  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Factor common makefile code into single include file.
+
+	* configure.ac (AC_CONFIG_FILES): Add Makefile.comm
+	(AC_PROG_MKDIR_P): Add, to AC_SUBST result for mkinstalldirs.
+
+	* configure: Regenerated.
+
+	* lib/Makefile.in lib/ddk/Makefile.in lib/directx/Makefile.in:
+	(top_srcdir, top_builddir): Define using value passed by AC_SUBST.
+	(all): Original default goal; rename it as...
+	(all-default): ...this, to facilitate factoring out of common code,
+	which we then reinstate by including ${top_builddir}/Makefile.comm
+
+	* Makefile.comm.in: New include file, containing factored-out code.
+	(all): Redefined default goal; it redirects to renamed original...
+	(all-default): ...i.e. this; as defined in the original makefiles.
+	(CC_FOR_TARGET, AS_FOR_TARGET): Unreferenced macros; delete them.
+	(bindir, program_transform_name, datadir, infodir): Likewise.
+
+2011-12-13  Keith Marshall  <keithmarshall@users.sf.net>
+
+	Prepare for makefile code refactoring.
+
+	* lib/ddk/Makefile.in (ddk_includedir): New macro; define it, then use
+	it in install-headers and uninstall-headers rules, in place of...
+	(inst_includedir): ...this; we then redefine this for consistency with
+	makefiles in other subdirectories, as a prerequisite to factoring out
+	of common code.
+
+2011-12-12  Keith Marshall  <keithmarshall@users.sf.net>
+
+	* Makefile.in (FLAGS_TO_PASS): Pointless macro; remove it.  (Defaults
+	for all are propagated by configure, and make automatically propagates
+	any user specified overrides.
+
+	* lib/Makefile.in (FLAGS_TO_PASS): Similarly removed, as pointless.
+	(uninstall-ddk, uninstall-directx): Remove improperly used '-C' from
+	make command; the directory to process was previously selected by cd,
+	and not properly specified as argument to '-C'.
+
+2011-12-10  Keith Marshall  <keithmarshall@users.sf.net>
+
+	* aclocal.m4: Redundant file; delete it.
+
+	* configure.in: Deprecated file name; rename it as...
+	* configure.ac: ...this.  Correct macro argument quoting throughout.
+	(AC_INIT, AC_OUTPUT): Update to modern autoconf syntax, adding...
+	(AC_CONFIG_FILES): ...this, as required to specify output files.
+	(__ver__): New m4_define'd macro; use it to propagate package version
+	from include/w32api.h to AC_INIT, at autoconf run time.
+	(AC_CONFIG_SRCDIR): Now invoked indirectly, as a function of...
+	(MINGW_AC_CONFIG_SRCDIR): New AC_DEFUN'd macro; as a side effect, it
+	propagates the package version from include/w32api.h to all generated
+	makefiles at configure run time, overriding the AC_INIT value.
+	(AC_SUBST): Remove redundant references, for symbols declared by...
+	(AC_CHECK_TOOL): ...this; it implies AC_SUBST anyway.
+
+	* configure: Regenerated.
+
+	* Makefile.in (DIST_FILES): Cosmetic change; rename it as...
+	(DISTFILES): ...this; remove aclocal.m4; adjust to capture rename of
+	configure.in to configure.ac
+
+2011-08-19  Corinna Vinschen  <corinna@vinschen.de>
+
+	* include/winuser.h: Add missing MAPVK_xxx definitions.
+
+2011-08-05  Corinna Vinschen  <corinna@vinschen.de>
+
+	* include/winnt.h (IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE,
+	IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY,
+	IMAGE_DLLCHARACTERISTICS_NX_COMPAT): Fix typo in definitions.
+	(IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE,
+	IMAGE_DLL_CHARACTERISTICS_FORCE_INTEGRITY,
+	IMAGE_DLL_CHARACTERISTICS_NX_COMPAT): Keep broken definitions for
+	backward compatibility.
+
+2011-07-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* include/winsock2.h (SIO_UDP_CONNRESET): Define.
+
+2011-05-22  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	* include/wingdi.h (GCP_RESULTSW):  Correct defintion.
+
+	Thanks to Albrecht Schlosser for the report and the fix.
+
+2011-05-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* include/winbase.h (STACK_SIZE_PARAM_IS_A_RESERVATION): Define.
+
+2011-04-21  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	* include/windef.h (PACKED): Remove macro.
+	* include/wincon.h: Replace PACKED macro with __attribute__((packed)).
+
+	Thanks to Keith Marshall for the fix.
+
+2011-04-21  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	* include/imagehlp.h (PREAD_PROCESS_MEMORY_ROUTINE): Correct definition.
+
+	Thanks to Safety0ff for the report.
+
+2011-04-04  Corinna Vinschen  <corinna@vinschen.de>
+
+	* include/winnt.h (DOMAIN_ALIAS_RID_REMOTE_DESKTOP_USERS): Add.
+
+2011-03-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* include/userenv.h: Add functions and definitions added with Windows
+	2000 and Vista.
+
+2011-03-25  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	* Makefile.in: Increment CYGRELEASE to 2.
+
+2011-03-25  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	* lib/Makefile.in: Include GDIPLUS_HEADERS in dist target.
+
+2011-03-11  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	* include/w32api.h: Increment version to 3.17.
+	* Makefile.in: Ditto.
+
+2011-03-07  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	* include/winbase.h (PSAPI_WORKING_SET_BLOCK,
+	PSAPI_WORKING_SET_INFORMATION): Move from here...
+	* include/psapi.h (PSAPI_WORKING_SET_BLOCK,
+	PSAPI_WORKING_SET_INFORMATION): ... to here.
+
+2011-03-05  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	* include/w32api.h: Increment version to 3.16.
+	* Makefile.in: Ditto.
+
+2011-03-05  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/commctrl.h (NMTCKEYDOWN): Define.
+
+2011-03-05  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/wtsapi32.h (WTSSendMessageA, WTSSendMessageW, WTSSendMessage):
+	Define.
+
+2011-03-05  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winbase.h (PSAPI_WORKING_SET_BLOCK,
+	PSAPI_WORKING_SET_INFORMATION): Define.
+
+2011-03-05  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winbase.h (__GNUC_EXTENSION): Define, replacing __MINGW_EXTENSION.
+
+2011-03-05  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* lib/kernel32.def (FreeLibraryAndExitThread): Fix definition.
+
+2011-03-04  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winbase.h (FILE_ENCRYPTABLE, FILE_IS_ENCRYPTED, FILE_READ_ONLY,
+	FILE_ROOT_DIR, FILE_SYSTEM_ATTR, FILE_SYSTEM_DIR, FILE_SYSTEM_NOT_SUPPORT,
+	FILE_UNKNOWN, FILE_USER_DISALLOWED): Define.
+
+2011-03-04  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winioctl.h (_DRIVE_LAYOUT_INFORMATION_MBR): Add
+	_DRIVE_LAYOUT_INFORMATION_MBR_DEFINED guard.
+	* include/ddk/winddk.h (_DRIVE_LAYOUT_INFORMATION_MBR): Ditto.
+
+2011-03-04  Seth Jackson  <sethj@users.sourceforge.net>
+
+	* include/winnt.h (PAGE_WRITECOMBINE): Define.
+	* include/winbase.h (THREAD_MODE_BACKGROUND_BEGIN, THREAD_MODE_BACKGROUND_END): Define.
+
+2011-03-04  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winbase.h (__MINGW_EXTENSION): Define.
+	(OVERLAPPED): Add __MINGW_EXTENSION around nameless union /
+	struct to correct issue with -std=c99.
+
+2011-03-02  Corinna Vinschen  <corinna@vinschen.de>
+
+	* include/ddk/winddk.h (TIMER_INFORMATION_CLASS): Define.
+	(TIMER_BASIC_INFORMATION): Define.
+	(NtQueryTimer): Define.
+	(ZwQueryTimer): Define.
+
+2010-12-27  David Byron  <dbyron0@users.sourceforge.net>
+
+	* include/winioctl.h (STORAGE_BUS_TYPE): Define.
+
+2010-12-27  Seth Jackson  <sethj@users.sourceforge.net>
+
+	* include/winbase.h (GetComputerNameEx): Define.
+
+2010-12-27  Ryan Lortie  <desrt@desrt.ca>
+
+	* include/winbase.h (TzSpecificLocalTimeToSystemTime): Define.
+
+2010-12-27  Markus Koenig  <basilo@users.sourceforge.net>
+
+	* include/gdiplus/gdipluspixelformats.h (PixelFormatIndexed,
+	PixelFormatGDI, PixelFormatAlpha, PixelFormatPAlpha,
+	PixelFormatExtended, PixelFormatCanonical, PixelFormatUndefined,
+	PixelFormatDontCare, PixelFormat1bppIndexed, PixelFormat4bppIndexed,
+	PixelFormat8bppIndexed, PixelFormat16bppGrayScale,
+	PixelFormat16bppRGB555, PixelFormat16bppRGB565, PixelFormat16bpp1555,
+	PixelFormat24bppRGB, PixelFormat32bppRGB, PixelFormat32bppARGB,
+	PixelFormat32bppPARGB, PixelFormat48bppRGB, PixelFormat64bppARGB,
+	PixelFormat64bppPARGB, PixelFormatMax): Fix definition.
+
+2010-10-20  Seth Jackson  <sethj@users.sourceforge.net>
+
+	* include/commctrl.h (TC_ITEMHEADER[AW]): Rename to TCITEMHEADER[AW].
+	Add defines for backward compatibility.
+
+2010-12-27  Johann Hanne  <jonnyh33@users.sourceforge.net>
+
+	* include/oaidl.h (GetTypeComp, GetTypeComp, IsMatchingType): Fix defintion.
+	* include/objidl.h (AddConnection, ReleaseConnection): Ditto.
+	* include/winbase.h (EnumResourceLanguagesA, EnumResourceLanguagesW,
+	EnumResourceNamesA, EnumResourceNamesW, EnumResourceTypesA,
+	EnumResourceTypesW): Ditto.
+	* include/winnt.h (_SYSTEM_POWER_CAPABILITIES): Ditto.
+
+2010-12-27  Seth Jackson  <sethj@users.sourceforge.net>
+
+	* include/basetsd.h: (INT8, UINT8, INT16, UINT16): Define.
+
+2010-12-27  Paul Sokolovsky  <pfalcon@users.sf.net>
+
+	* include/bdatypes.h: Add missing semicolons.
+
+2010-08-26  Chris Sutcliffe  <ir0nh34d@users.sf.net>
+
+	* include/w32api.h: Increment version to 3.15.
+	* Makefile.in: Ditto.
+
+2010-08-26  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* Makefile.in: Update naming convention and compression format (lzma),
+	leaving existing naming convention and compression format as is for Cygwin.
+
+2010-08-25  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/oleacc.h (STATE_SYSTEM_HASPOPUP, STATE_SYSTEM_NORMAL,
+	STATE_SYSTEM_PROTECTED): Define.
+
+	Thank you to Marcus von Appen for reporting the issue.
+
+2010-08-25  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winuser.h (CF_DIBV5): Define.
+	(CF_MAX): Adjust accordingly.
+
+	Thank you to Lenard Lindstrom for reporting the issue.
+
+2010-08-25  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/sspi.h (QuerySecurityContextToken): Define.
+	* lib/secur32.def: Regenerate using gendef on a Win7 machine.
+
+	Thank you to Magnus Hagander for reporting the issue.
+
+2010-08-25  Ali Sabil  <asabil@users.sourceforge.net>
+
+	* include/ocidl.h: Define COBJMACROS for IPropertyBag and IPropertyBag2.
+
+2010-08-25  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/shlwapi (ASSOCDATA): Update definition.
+
+	Thank you to Frederic Deschamps for reporting the issue.
+
+2010-08-25  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winbase.h (COPY_FILE_OPEN_SOURCE_FOR_WRITE,
+	COPY_FILE_ALLOW_DECRYPTED_DESTINATION, COPY_FILE_COPY_SYMLINK,
+	COPY_FILE_NO_BUFFERING): Define.
+
+	Thank you to Roland Schwingel for reporting the issue.
+
+2010-08-25  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winuser.h (HHOOK): Move definition from here...
+	* include/windef.h: ...to here, as per MSDN.
+
+	Thank you to Samuel Thibault for reporting the issue.
+
+2010-08-25  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winbase.h (GetEnvironmentStrings, GetEnvironmentStringsA): Per
+	MSDN, change return type to LPCH.
+	(GetEnvironmentStringsW): Per MSDN, change return type to LPWCH.
+
+	Thank you to Emmanuel Stapf for reporting the issue.
+
+2010-08-24  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/prsht.h (SNDMDG, POSTMSG): Fix typo.
+	* include/windowsx.h (SNDMSG): Ditto.
+
+2010-08-24  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/prsht.h (SNDMSG, POSTMSG): Define macros and use throughout.
+
+	Thank you to Ozkan Sezer for reporting the issue.
+
+2010-08-24  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/windowsx.h (SNDMSG): Define macro and use throughout.
+
+	Thank you to Chris Oldwood for reporting the issue.
+
+2010-08-24  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/oleacc.h (AccessibleObjectFromEvent): Correct definition.
+
+	Thank you to Rick Walsh for reporting the issue.
+
+2010-08-24  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winbase.h (MoveFileWithProcessA, MoveFileWithProgressW): Define.
+
+2010-08-24  Vinky  <rabbit_vinky@users.sourceforge.net>
+
+	* include/winbase.h (OVERLAPPED): Correct definition.
+
+2010-08-24  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winnt.h (IMAGE_NT_HEADERS32, IMAGE_NT_HEADERS64): Correct
+	definition.
+
+	Thank you to Pasi Ruokola for reporting the issue.
+
+2010-08-24  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/exdisp.h (get_RegisterAsBrowser): Fix typo.
+
+	Thank you to cheznonnon for reporting the issue.
+
+2010-08-24  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* lib/ws2_32.def: Regenerate using gendef on a Win7 machine.
+
+2010-08-24  Ozkan Sezer  <sezero@users.sourceforge.net>
+
+	* winnt.h: Fix several SUBLANG ID errors (ref:
+	http://msdn.microsoft.com/en-us/library/dd318693(VS.85).aspx).
+	(SUBLANG_UI_CUSTOM_DEFAULT): 0x05, not 0x03.
+	(SUBLANG_HAUSA_NIGERIA): Bad ID name, correct one is ...
+	(SUBLANG_HAUSA_NIGERIA_LATIN): ... this.
+	(SUBLANG_INUKTITUT_CANADA_LATIN): 0x02, not 0x01.
+	(SUBLANG_IRISH_IRELAND): 0x02, not 0x01.
+	(SUBLANG_LAO_LAO_PDR): Bad ID name, correct one is ...
+	(SUBLANG_LAO_LAO): ... this.
+	(SUBLANG_LOWER_SORBIAN_GERMANY): 0x02, not 0x01.
+	(SUBLANG_SAMI_SKOLT_FINLAND): 0x08, not 0x03.
+	(SUBLANG_SAMI_INARI_FINLAND): 0x09, not 0x03.
+	(SUBLANG_SYRIAC_SYRIA): define as SUBLANG_SYRIAC (what MSDN mentions).
+	(SUBLANG_TIGRIGNA_ERITREA): 0x02, not 0x01.
+	(SUBLANG_BENGALI_INDIA): 0x01, not 0x00.
+	(SUBLANG_BENGALI_BANGLADESH): 0x02, not 0x01.
+	(SUBLANG_PUNJABI_INDIA): 0x01, not 0x00.
+	(SUBLANG_PUNJABI_PAKISTAN): not defined in MSDN.
+	(SUBLANG_ROMANIAN_ROMANIA): 0x01, not 0x00.
+	(SUBLANG_ROMANIAN_MOLDOVA): not defined in MSDN.
+
+2010-08-24  LRN  <lrn1986@gmail.com>
+
+	* include/mmreg.h (MPEGLAYER3WAVEFORMAT, WAVE_FORMAT_UNKNOWN,
+	WAVE_FORMAT_PCM, WAVE_FORMAT_ADPCM, WAVE_FORMAT_IEEE_FLOAT,
+	WAVE_FORMAT_VSELP, WAVE_FORMAT_IBM_CVSD, WAVE_FORMAT_ALAW,
+	WAVE_FORMAT_MULAW, WAVE_FORMAT_OKI_ADPCM, WAVE_FORMAT_DVI_ADPCM,
+	WAVE_FORMAT_MEDIASPACE_ADPCM, WAVE_FORMAT_SIERRA_ADPCM,
+	WAVE_FORMAT_G723_ADPCM, WAVE_FORMAT_DIGIFIX, WAVE_FORMAT_DIALOGIC_OKI_ADPCM,
+	WAVE_FORMAT_MEDIAVISION_ADPCM, WAVE_FORMAT_CU_CODEC,
+	WAVE_FORMAT_YAMAHA_ADPCM, WAVE_FORMAT_SONARC,
+	WAVE_FORMAT_DSPGROUP_TRUESPEECH, WAVE_FORMAT_ECHOSC1,
+	WAVE_FORMAT_AUDIOFILE_AF36, WAVE_FORMAT_APTX, WAVE_FORMAT_AUDIOFILE_AF10,
+	WAVE_FORMAT_PROSODY_1612, WAVE_FORMAT_LRC, WAVE_FORMAT_DOLBY_AC2,
+	WAVE_FORMAT_GSM610, WAVE_FORMAT_MSNAUDIO, WAVE_FORMAT_ANTEX_ADPCME,
+	WAVE_FORMAT_CONTROL_RES_VQLPC, WAVE_FORMAT_DIGIREAL, WAVE_FORMAT_DIGIADPCM,
+	WAVE_FORMAT_CONTROL_RES_CR10, WAVE_FORMAT_NMS_VBXADPCM,
+	WAVE_FORMAT_ROLAND_RDAC, WAVE_FORMAT_ECHOSC3, WAVE_FORMAT_ROCKWELL_ADPCM,
+	WAVE_FORMAT_ROCKWELL_DIGITALK, WAVE_FORMAT_XEBEC, WAVE_FORMAT_G721_ADPCM,
+	WAVE_FORMAT_G728_CELP, WAVE_FORMAT_MSG723, WAVE_FORMAT_MPEG,
+	WAVE_FORMAT_RT24, WAVE_FORMAT_PAC, WAVE_FORMAT_MPEGLAYER3,
+	WAVE_FORMAT_LUCENT_G723, WAVE_FORMAT_CIRRUS, WAVE_FORMAT_ESPCM,
+	WAVE_FORMAT_VOXWARE, WAVE_FORMAT_CANOPUS_ATRAC, WAVE_FORMAT_G726_ADPCM,
+	WAVE_FORMAT_G722_ADPCM, WAVE_FORMAT_DSAT, WAVE_FORMAT_DSAT_DISPLAY,
+	WAVE_FORMAT_VOXWARE_BYTE_ALIGNED, WAVE_FORMAT_VOXWARE_AC8,
+	WAVE_FORMAT_VOXWARE_AC10, WAVE_FORMAT_VOXWARE_AC16,
+	WAVE_FORMAT_VOXWARE_AC20, WAVE_FORMAT_VOXWARE_RT24,
+	WAVE_FORMAT_VOXWARE_RT29, WAVE_FORMAT_VOXWARE_RT29HW,
+	WAVE_FORMAT_VOXWARE_VR12, WAVE_FORMAT_VOXWARE_VR18,
+	WAVE_FORMAT_VOXWARE_TQ40, WAVE_FORMAT_SOFTSOUND, WAVE_FORMAT_VOXWARE_TQ60,
+	WAVE_FORMAT_MSRT24, WAVE_FORMAT_G729A, WAVE_FORMAT_MVI_MV12,
+	WAVE_FORMAT_DF_G726, WAVE_FORMAT_DF_GSM610, WAVE_FORMAT_ISIAUDIO,
+	WAVE_FORMAT_ONLIVE, WAVE_FORMAT_SBC24, WAVE_FORMAT_DOLBY_AC3_SPDIF,
+	WAVE_FORMAT_ZYXEL_ADPCM, WAVE_FORMAT_PHILIPS_LPCBB, WAVE_FORMAT_PACKED,
+	WAVE_FORMAT_RHETOREX_ADPCM, WAVE_FORMAT_IRAT, WAVE_FORMAT_VIVO_G723,
+	WAVE_FORMAT_VIVO_SIREN, WAVE_FORMAT_DIGITAL_G723,
+	WAVE_FORMAT_CREATIVE_ADPCM, WAVE_FORMAT_CREATIVE_FASTSPEECH8,
+	WAVE_FORMAT_CREATIVE_FASTSPEECH10, WAVE_FORMAT_QUARTERDECK,
+	WAVE_FORMAT_FM_TOWNS_SND, WAVE_FORMAT_BTV_DIGITAL, WAVE_FORMAT_VME_VMPCM,
+	WAVE_FORMAT_OLIGSM, WAVE_FORMAT_OLIADPCM, WAVE_FORMAT_OLICELP,
+	WAVE_FORMAT_OLISBC, WAVE_FORMAT_OLIOPR, WAVE_FORMAT_LH_CODEC,
+	WAVE_FORMAT_NORRIS, WAVE_FORMAT_ISIAUDIO,
+	WAVE_FORMAT_SOUNDSPACE_MUSICOMPRESS, WAVE_FORMAT_DVM, WAVE_FORMAT_RAW_AAC1,
+	WAVE_FORMAT_MPEG_HEAAC, WAVE_FORMAT_MPEG_ADTS_AAC, WAVE_FORMAT_DRM,
+	WAVE_FORMAT_DTS, WAVE_FORMAT_WMAVOICE9, WAVE_FORMAT_WMASPDIF,
+	WAVE_FORMAT_WMAUDIO_LOSSLESS, WAVE_FORMAT_WMAUDIO2, WAVE_FORMAT_WMAUDIO3,
+	WAVE_FORMAT_MPEG_LOAS, WAVE_FORMAT_RAW_SPORT, WAVE_FORMAT_ESST_AC3,
+	WAVE_FORMAT_DTS2): Define.
+	* include/msacm.h (HACMDRIVERID, HACMDRIVER, HACMSTREAM, HACMOBJ,
+	ACMSTREAMHEADER, WAVEFILTER, acmDriverAddA, acmDriverAddW, acmDriverRemove,
+	acmMetrics, acmStreamOpen, acmStreamSize, acmStreamPrepareHeader,
+	acmStreamUnprepareHeader, acmStreamReset, acmStreamClose, acmStreamConvert):
+	Define.
+
+2010-08-23  LRN  <lrn1986@gmail.com>
+
+	* include/winbase.h (SYMBOLIC_LINK_FLAG_DIRECTORY, FILE_NAME_NORMALIZED,
+	FILE_NAME_OPENED, VOLUME_NAME_DOS, VOLUME_NAME_GUID, VOLUME_NAME_NONE,
+	VOLUME_NAME_NT, FILE_BASIC_INFO, FILE_STANDARD_INFO, FILE_NAME_INFO,
+	FILE_STREAM_INFO, FILE_COMPRESSION_INFO, FILE_ATTRIBUTE_TAG_INFO,
+	FILE_ID_BOTH_DIR_INFO, FILE_REMOTE_PROTOCOL_INFO, FILE_INFO_BY_HANDLE_CLASS,
+	GetFileInformationByHandleEx, GetFinalPathNameByHandleA,
+	GetFinalPathNameByHandleW): Define.
+
+2010-08-22  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* lib/CheckConflicts.sh: New file.
+
+2010-08-21  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* lib/kernel32.def (CopyLZFile, GetExpandedNameA, GetExpandedNameW, LZClose,
+	LZCopy, LZInit, LZOpenFileA, LZOpenFileW, LZRead, LZSeek, OpenProcessToken,
+	OpenThreadToken, RegCloseKey, RegCreateKeyExA, RegCreateKeyExW,
+	RegDeleteKeyExA, RegDeleteKeyExW, RegDeleteValueA, RegDeleteValueW,
+	RegEnumKeyExA, RegEnumKeyExW, RegEnumValueA, RegEnumValueW, RegFlushKey,
+	RegGetKeySecurity, RegLoadKeyA, RegLoadKeyW, RegNotifyChangeKeyValue,
+	RegOpenCurrentUser, RegOpenKeyExA, RegOpenKeyExW, RegOpenUserClassesRoot,
+	RegQueryInfoKeyA, RegQueryInfoKeyW, RegQueryValueExA, RegQueryValueExW,
+	RegRestoreKeyA, RegRestoreKeyW, RegSetKeySecurity, RegSetValueExA,
+	RegSetValueW, RegUnLoadKeyA, RegUnLoadKeyW, RtlCaptureStackBackTrace,
+	RtlFillMemory, RtlMoveMemory, RtlZeroMemory, SetThreadToken): Remove
+	conflicting definition.
+	* lib/th32.def: Remove.
+	* lib/ntdll.def (RtlUnwind): Remove conflicting definition.
+	* lib/version.def (VerLanguageNameA, VerLanguageNameW): Remove conflicting
+	definition.
+
+2010-08-21  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* lib/kernel32.def (CreateProcessAsUserW): Remove definition.
+
+2010-08-20  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* lib/kernel32.def: Regenerate using gendef on a Win7 machine.
+
+2010-08-19  Corinna Vinschen  <corinna@vinschen.de>
+
+	* include/winnt.h: Define FILE_ATTRIBUTE_VIRTUAL.  Change
+	FILE_ATTRIBUTE_VALID_FLAGS accordingly.
+	* include/ddk/winddk.h: Ditto.
+
+2010-08-18  Ladislav Michl  <ladis@users.sourceforge.net>
+
+	* include/winbase.h (SYMBOLIC_LINK_FLAG_DIRECTORY, CreateSymbolicLinkW,
+	CreateSymbolicLinkA, CreateSymbolicLink): Define
+
+2010-07-22  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* lib/kernel32.def(FatalExit): Correct definiton.
+
+2010-07-22  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/basetyps.h (REFGUID, REFIID, REFCLSID, REFFMTID): Revert change
+	from 2010-07-17 since it breaks several applications.
+
+2010-07-21  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* lib/kernel32.def: Regenerate using gendef.
+
+2010-07-20  Ozkan Sezer  <sezero@users.sourceforge.net>
+
+	* include/commctrl.h (LVIF_GROUPID): Fix definition.
+
+2010-07-20  Michael James  <james.me@gmail.com>
+
+	* include/commctrl.h (LVIF_COLUMNS): Fix definition.
+
+2010-07-17  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/winnt.h (HEAP_MAKE_TAG_FLAGS, VALID_INHERIT_FLAGS): Correct
+	definition.
+	* include/rpcndr.h (NdrUnMarshConfStringHdr, NdrUnMarshCCtxtHdl,
+	NdrMarshSCtxtHdl): Ditto.
+	* include/basetyps.h (REFGUID, REFIID, REFCLSID, REFFMTID): Remove macro
+	definition in favour of typedef definition.
+
+	Thank you to Yuta Tomino for reporting the issues.
+
+2010-07-08  Markus Koenig  <basilo@users.sourceforge.net>
+
+	* include/gdiplus.h: New file.
+	* include/gdiplus/gdiplus.h: New file.
+	* include/gdiplus/gdiplusbase.h: New file.
+	* include/gdiplus/gdiplusbrush.h: New file.
+	* include/gdiplus/gdipluscolor.h: New file.
+	* include/gdiplus/gdipluscolormatrix.h: New file.
+	* include/gdiplus/gdipluseffects.h: New file.
+	* include/gdiplus/gdiplusenums.h: New file.
+	* include/gdiplus/gdiplusflat.h: New file.
+	* include/gdiplus/gdiplusgpstubs.h: New file.
+	* include/gdiplus/gdiplusgraphics.h: New file.
+	* include/gdiplus/gdiplusheaders.h: New file.
+	* include/gdiplus/gdiplusimageattributes.h: New file.
+	* include/gdiplus/gdiplusimagecodec.h: New file.
+	* include/gdiplus/gdiplusimaging.h: New file.
+	* include/gdiplus/gdiplusimpl.h: New file.
+	* include/gdiplus/gdiplusinit.h: New file.
+	* include/gdiplus/gdipluslinecaps.h: New file.
+	* include/gdiplus/gdiplusmatrix.h: New file.
+	* include/gdiplus/gdiplusmem.h: New file.
+	* include/gdiplus/gdiplusmetafile.h: New file.
+	* include/gdiplus/gdiplusmetaheader.h: New file.
+	* include/gdiplus/gdipluspath.h: New file.
+	* include/gdiplus/gdipluspen.h: New file.
+	* include/gdiplus/gdipluspixelformats.h: New file.
+	* include/gdiplus/gdiplusstringformat.h: New file.
+	* include/gdiplus/gdiplustypes.h: New file.
+	* lib/gdiplus.c: New file containing GDI+ variable definitions
+	and GUIDs.
+	* lib/gdiplus.def: New file.
+	* lib/Makefile.in: Add gdiplus.o to EXTRA_OBJS,
+	add gdiplus.c to SOURCES.
+	* lib/test.c: Include gdiplus.h.
+
+2010-06-28 Rick Rankin <rrankin1424-mingw@yahoo.com>
+
+	* include/psapi.h (PROCESS_MEMORY_COUNTERS_EX, PERFORMANCE_INFORMATION,
+	GetPerformanceInfo): Define.
+	* lib/psapi.def (GetPerformanceInfo): Define.
+	* include/wincrypt.h (CryptEnumProvidersA, CryptEnumProvidersW,
+	CryptEnumProviders): Define.
+
+2010-02-17  LRN  <lrn1986@gmail.com>
+
+	* include/shlguid.h (IID_IFolderView): Define.
+	* include/shlobj.h (IFolderView interface): Define.
+	* lib/shell32.c (IID_IFolderView): Export.
+
+2010-01-26  Chris Sutcliffe  <ir0n3h4d@users.sourceforge.net>
+
+	* include/shldisp.h (AUTOCOMPLETEOPTIONS): Add version guard around
+	ACO_WORD_FILTER and ACO_NOPREFIXFILTERING.
+
+2010-01-26  Chris Sutcliffe  <ir0n3h4d@users.sourceforge.net>
+
+	* include/shldisp.h (AUTOCOMPLETEOPTIONS): Add enum.
+
 2009-20-10  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
 
 	* include/shlobj.h (SHParseDisplayName): Fix definition.

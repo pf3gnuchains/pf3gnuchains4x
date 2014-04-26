@@ -187,8 +187,9 @@ readdir_r (DIR *dir, dirent *de, dirent **ode)
   return res;
 }
 
-extern "C" _off64_t
-telldir64 (DIR *dir)
+/* telldir */
+extern "C" long
+telldir (DIR *dir)
 {
   myfault efault;
   if (efault.faulted (EFAULT))
@@ -199,15 +200,18 @@ telldir64 (DIR *dir)
   return ((fhandler_base *) dir->__fh)->telldir (dir);
 }
 
-/* telldir */
-extern "C" _off_t
-telldir (DIR *dir)
+/* telldir was never defined using off_t in POSIX, only in early versions
+   of glibc.  We have to keep the function in as entry point for backward
+   compatibility. */
+extern "C" _off64_t
+telldir64 (DIR *dir)
 {
-  return telldir64 (dir);
+  return (_off64_t) telldir (dir);
 }
 
+/* seekdir */
 extern "C" void
-seekdir64 (DIR *dir, _off64_t loc)
+seekdir (DIR *dir, long loc)
 {
   myfault efault;
   if (efault.faulted (EFAULT))
@@ -219,11 +223,13 @@ seekdir64 (DIR *dir, _off64_t loc)
   return ((fhandler_base *) dir->__fh)->seekdir (dir, loc);
 }
 
-/* seekdir */
+/* seekdir was never defined using off_t in POSIX, only in early versions
+   of glibc.  We have to keep the function in as entry point for backward
+   compatibility. */
 extern "C" void
-seekdir (DIR *dir, _off_t loc)
+seekdir64 (DIR *dir, _off64_t loc)
 {
-  seekdir64 (dir, (_off64_t)loc);
+  seekdir (dir, (long) loc);
 }
 
 /* rewinddir: POSIX 5.1.2.1 */
@@ -251,7 +257,7 @@ closedir (DIR *dir)
   if (dir->__d_cookie != __DIRENT_COOKIE)
     {
       set_errno (EBADF);
-      syscall_printf ("-1 = closedir (%p)", dir);
+      syscall_printf ("%R = closedir(%p)", -1, dir);
       return -1;
     }
 
@@ -265,7 +271,7 @@ closedir (DIR *dir)
   free (dir->__d_dirname);
   free (dir->__d_dirent);
   free (dir);
-  syscall_printf ("%d = closedir (%p)", res);
+  syscall_printf ("%R = closedir(%p)", res);
   return res;
 }
 
@@ -297,7 +303,7 @@ mkdir (const char *dir, mode_t mode)
       char *p = stpcpy (buf = tp.c_get (), dir) - 1;
       dir = buf;
       while (p > dir && isdirsep (*p))
-        *p-- = '\0';
+	*p-- = '\0';
     }
   if (!(fh = build_fh_name (dir, PC_SYM_NOFOLLOW)))
     goto done;   /* errno already set */;
@@ -314,7 +320,7 @@ mkdir (const char *dir, mode_t mode)
   delete fh;
 
  done:
-  syscall_printf ("%d = mkdir (%s, %d)", res, dir, mode);
+  syscall_printf ("%R = mkdir(%s, %d)", res, dir, mode);
   return res;
 }
 
@@ -347,6 +353,6 @@ rmdir (const char *dir)
   delete fh;
 
  done:
-  syscall_printf ("%d = rmdir (%s)", res, dir);
+  syscall_printf ("%R = rmdir(%s)", res, dir);
   return res;
 }

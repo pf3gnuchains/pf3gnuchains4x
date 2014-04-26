@@ -39,7 +39,7 @@ char *
 tmp_pathbuf::c_get ()
 {
   if (tls_pbuf.c_cnt >= TP_NUM_C_BUFS)
-    api_fatal ("Internal error: TP_NUM_C_BUFS too small.");
+    api_fatal ("Internal error: TP_NUM_C_BUFS too small: %u > %u", tls_pbuf.c_cnt, TP_NUM_C_BUFS);
   if (!tls_pbuf.c_buf[tls_pbuf.c_cnt]
       && !(tls_pbuf.c_buf[tls_pbuf.c_cnt] = (char *) malloc (NT_MAX_PATH)))
     api_fatal ("Internal error: Out of memory for new path buf.");
@@ -50,7 +50,7 @@ PWCHAR
 tmp_pathbuf::w_get ()
 {
   if (tls_pbuf.w_cnt >= TP_NUM_W_BUFS)
-    api_fatal ("Internal error: TP_NUM_W_BUFS too small.");
+    api_fatal ("Internal error: TP_NUM_W_BUFS too small %d >= %d.", tls_pbuf.w_cnt, TP_NUM_W_BUFS);
   if (!tls_pbuf.w_buf[tls_pbuf.w_cnt]
       && !(tls_pbuf.w_buf[tls_pbuf.w_cnt]
 	   = (PWCHAR) malloc (NT_MAX_PATH * sizeof (WCHAR))))

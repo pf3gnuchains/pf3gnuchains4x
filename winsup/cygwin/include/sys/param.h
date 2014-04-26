@@ -1,6 +1,6 @@
 /* sys/param.h
 
-   Copyright 2001, 2003, 2007 Red Hat, Inc.
+   Copyright 1996, 1997, 1998, 2002, 2003, 2007, 2009, 2011 Red Hat, Inc.
 
    This software is a copyrighted work licensed under the terms of the
    Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
@@ -19,36 +19,27 @@
 #define NOFILE		8192
 
 /* Max number of groups; must keep in sync with NGROUPS_MAX in limits.h */
-#define NGROUPS		1024
+#define NGROUPS		NGROUPS_MAX
 
 /* Ticks/second for system calls such as times() */
 /* FIXME: is this the appropriate value? */
 #define HZ		1000
 
-/* Max hostname size that can be dealt with */
-/* FIXME: is this the appropriate value? */
-#define MAXHOSTNAMELEN	64
+/* Max hostname size that can be dealt with (== Win32 MAX_HOSTNAME_LEN) */
+#define MAXHOSTNAMELEN	128
 
-/* The Posix version is PATH_MAX.  MAXPATHLEN is the BSD variant. */
+/* Maximum path length including trailing NUL; the Posix version is PATH_MAX.
+   MAXPATHLEN is the BSD variant. */
 #define MAXPATHLEN      PATH_MAX
+
+/* Maximum number of nested symlinks; the Posix version is SYMLOOP_MAX.
+   MAXSYMLINKS is the BSD variant. */
+#define MAXSYMLINKS	SYMLOOP_MAX
 
 /* This is the number of bytes per block given in the st_blocks stat member.
    It should be in sync with S_BLKSIZE in sys/stat.h.  S_BLKSIZE is the
    BSD variant of this constant. */
 #define DEV_BSIZE	1024
-
-#if 0	/* defined in endian.h */
-/* Some autoconf'd packages check for endianness.  When cross-building we
-   can't run programs on the target.  Fortunately, autoconf supports the
-   definition of byte order in sys/param.h (that's us!).
-   The values here are the same as used in gdb/defs.h (are the more
-   appropriate values?).  */
-#define BIG_ENDIAN	4321
-#define LITTLE_ENDIAN	1234
-
-/* All known win32 systems are little endian.  */
-#define BYTE_ORDER	LITTLE_ENDIAN
-#endif
 
 #ifndef NULL
 #define NULL            0L

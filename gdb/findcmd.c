@@ -1,6 +1,6 @@
 /* The find command.
 
-   Copyright (C) 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2008-2012 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -126,11 +126,13 @@ parse_find_args (char *args, ULONGEST *max_countp,
   if (*s == '+')
     {
       LONGEST len;
+
       ++s;
       v = parse_to_comma_and_eval (&s);
       len = value_as_long (v);
       if (len == 0)
 	{
+	  do_cleanups (old_cleanups);
 	  printf_filtered (_("Empty search range.\n"));
 	  return;
 	}
@@ -145,16 +147,18 @@ parse_find_args (char *args, ULONGEST *max_countp,
   else
     {
       CORE_ADDR end_addr;
+
       v = parse_to_comma_and_eval (&s);
       end_addr = value_as_address (v);
       if (start_addr > end_addr)
-	error (_("Invalid search space, end preceeds start."));
+	error (_("Invalid search space, end precedes start."));
       search_space_len = end_addr - start_addr + 1;
       /* We don't support searching all of memory
 	 (i.e. start=0, end = 0xff..ff).
 	 Bail to avoid overflows later on.  */
       if (search_space_len == 0)
-	error (_("Overflow in address range computation, choose smaller range."));
+	error (_("Overflow in address range "
+		 "computation, choose smaller range."));
     }
 
   if (*s == ',')
@@ -179,6 +183,7 @@ parse_find_args (char *args, ULONGEST *max_countp,
 	  > pattern_buf_size)
 	{
 	  size_t current_offset = pattern_buf_end - pattern_buf;
+
 	  pattern_buf_size *= 2;
 	  pattern_buf = xrealloc (pattern_buf, pattern_buf_size);
 	  pattern_buf_end = pattern_buf + current_offset;
@@ -208,7 +213,7 @@ parse_find_args (char *args, ULONGEST *max_countp,
 	}
       else
 	{
-	  memcpy (pattern_buf_end, value_contents_raw (v), val_bytes);
+	  memcpy (pattern_buf_end, value_contents (v), val_bytes);
 	  pattern_buf_end += val_bytes;
 	}
 
@@ -298,6 +303,7 @@ find_command (char *args, int from_tty)
   if (found_count > 0)
     {
       struct type *ptr_type = builtin_type (gdbarch)->builtin_data_ptr;
+
       set_internalvar (lookup_internalvar ("_"),
 		       value_from_pointer (ptr_type, last_found_addr));
     }
@@ -319,8 +325,8 @@ _initialize_mem_search (void)
 {
   add_cmd ("find", class_vars, find_command, _("\
 Search memory for a sequence of bytes.\n\
-Usage:\n\
-find [/size-char] [/max-count] start-address, end-address, expr1 [, expr2 ...]\n\
+Usage:\nfind \
+[/size-char] [/max-count] start-address, end-address, expr1 [, expr2 ...]\n\
 find [/size-char] [/max-count] start-address, +length, expr1 [, expr2 ...]\n\
 size-char is one of b,h,w,g for 8,16,32,64 bit values respectively,\n\
 and if not specified the size is taken from the type of the expression\n\

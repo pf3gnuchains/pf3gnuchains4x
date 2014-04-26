@@ -1,6 +1,6 @@
 /* resource.cc: getrusage () and friends.
 
-   Copyright 1996, 1997, 1998, 2000, 2001, 2002, 2009 Red Hat, Inc.
+   Copyright 1996, 1997, 1998, 2000, 2001, 2002, 2009, 2010, 2011 Red Hat, Inc.
 
    Written by Steve Chamberlain (sac@cygnus.com), Doug Evans (dje@cygnus.com),
    Geoffrey Noer (noer@cygnus.com) of Cygnus Support.
@@ -14,6 +14,7 @@ details. */
 
 #include "winsup.h"
 #include <unistd.h>
+#include <sys/param.h>
 #include "pinfo.h"
 #include "psapi.h"
 #include "cygtls.h"
@@ -21,6 +22,8 @@ details. */
 #include "fhandler.h"
 #include "pinfo.h"
 #include "dtable.h"
+#include "cygheap.h"
+#include "ntdll.h"
 
 /* add timeval values */
 static void
@@ -75,13 +78,13 @@ fill_rusage (struct rusage *r, HANDLE h)
   totimeval (&tv, &user_time, 0, 0);
   add_timeval (&r->ru_utime, &tv);
 
-  PROCESS_MEMORY_COUNTERS pmc;
-
-  memset (&pmc, 0, sizeof (pmc));
-  if (GetProcessMemoryInfo (h, &pmc, sizeof (pmc)))
+  VM_COUNTERS vmc;
+  NTSTATUS status = NtQueryInformationProcess (h, ProcessVmCounters, &vmc,
+					       sizeof vmc, NULL);
+  if (NT_SUCCESS (status))
     {
-      r->ru_maxrss += (long) (pmc.WorkingSetSize /1024);
-      r->ru_majflt += pmc.PageFaultCount;
+      r->ru_maxrss += (long) (vmc.WorkingSetSize / 1024);
+      r->ru_majflt += vmc.PageFaultCount;
     }
 }
 
@@ -105,11 +108,9 @@ getrusage (int intwho, struct rusage *rusage_in)
       res = -1;
     }
 
-  syscall_printf ("%d = getrusage (%d, %p)", res, intwho, rusage_in);
+  syscall_printf ("%R = getrusage(%d, %p)", res, intwho, rusage_in);
   return res;
 }
-
-unsigned long rlim_core = RLIM_INFINITY;
 
 extern "C" int
 getrlimit (int resource, struct rlimit *rlp)
@@ -128,6 +129,7 @@ getrlimit (int resource, struct rlimit *rlp)
     case RLIMIT_CPU:
     case RLIMIT_FSIZE:
     case RLIMIT_DATA:
+    case RLIMIT_AS:
       break;
     case RLIMIT_STACK:
       if (!VirtualQuery ((LPCVOID) &m, &m, sizeof m))
@@ -146,11 +148,7 @@ getrlimit (int resource, struct rlimit *rlp)
       rlp->rlim_max = OPEN_MAX_MAX;
       break;
     case RLIMIT_CORE:
-      rlp->rlim_cur = rlim_core;
-      break;
-    case RLIMIT_AS:
-      rlp->rlim_cur = 0x80000000UL;
-      rlp->rlim_max = 0x80000000UL;
+      rlp->rlim_cur = cygheap->rlim_core;
       break;
     default:
       set_errno (EINVAL);
@@ -182,7 +180,7 @@ setrlimit (int resource, const struct rlimit *rlp)
   switch (resource)
     {
     case RLIMIT_CORE:
-      rlim_core = rlp->rlim_cur;
+      cygheap->rlim_core = rlp->rlim_cur;
       break;
     case RLIMIT_NOFILE:
       if (rlp->rlim_cur != RLIM_INFINITY)

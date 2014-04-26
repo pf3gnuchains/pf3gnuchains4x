@@ -1,5 +1,5 @@
 ; Decoder generation.
-; Copyright (C) 2000, 2001, 2009 Red Hat, Inc.
+; Copyright (C) 2000, 2001, 2009, 2010 Red Hat, Inc.
 ; This file is part of CGEN.
 
 ; Names of various global vars.
@@ -70,7 +70,8 @@ static const struct insn_sem @prefix@_insn_sem[] =
    "\
 };
 
-static const struct insn_sem @prefix@_insn_sem_invalid = {
+static const struct insn_sem @prefix@_insn_sem_invalid =
+{
   VIRTUAL_INSN_X_INVALID, @PREFIX@_INSN_X_INVALID, @PREFIX@_SFMT_EMPTY"
    (if (and (with-parallel?) (not (with-parallel-only?)))
        ", NOPAR, NOPAR"

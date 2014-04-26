@@ -1,6 +1,7 @@
 /* dlfcn.cc
 
-   Copyright 1998, 2000, 2001, 2002, 2003, 2004, 2008, 2009 Red Hat, Inc.
+   Copyright 1998, 2000, 2001, 2002, 2003, 2004, 2008, 2009, 2010,
+   2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -17,6 +18,7 @@ details. */
 #include "dlfcn.h"
 #include "cygtls.h"
 #include "tls_pbuf.h"
+#include "ntdll.h"
 
 static void __stdcall
 set_dl_error (const char *str)
@@ -34,8 +36,20 @@ check_path_access (const char *mywinenv, const char *name, path_conv& buf)
   return find_exec (name, buf, mywinenv, FE_NNF | FE_NATIVE | FE_CWD | FE_DLL);
 }
 
-/* Search LD_LIBRARY_PATH for dll, if it exists.
-   Return Windows version of given path. */
+/* Search LD_LIBRARY_PATH for dll, if it exists.  Search /usr/bin and /usr/lib
+   by default.  Return valid full path in path_conv real_filename. */
+static inline bool
+gfpod_helper (const char *name, path_conv &real_filename)
+{
+  if (isabspath (name))
+    real_filename.check (name, PC_SYM_FOLLOW | PC_NULLEMPTY);
+  else if (!check_path_access ("LD_LIBRARY_PATH=", name, real_filename))
+    check_path_access ("/usr/bin:/usr/lib", name, real_filename);
+  if (!real_filename.exists ())
+    real_filename.error = ENOENT;
+  return !real_filename.error;
+}
+
 static bool __stdcall
 get_full_path_of_dll (const char* str, path_conv &real_filename)
 {
@@ -53,11 +67,39 @@ get_full_path_of_dll (const char* str, path_conv &real_filename)
 
   strcpy (name, str);	/* Put it somewhere where we can manipulate it. */
 
-  if (isabspath (name) ||
-      (check_path_access ("LD_LIBRARY_PATH=", name, real_filename)
-       ?: check_path_access ("/usr/lib", name, real_filename)) == NULL)
-    real_filename.check (name, PC_SYM_FOLLOW | PC_NOFULL | PC_NULLEMPTY);
+  char *basename = strrchr (name, '/');
+  basename = basename ? basename + 1 : name;
+  char *suffix = strrchr (name, '.');
+  if (suffix && suffix < basename)
+    suffix = NULL;
 
+  /* Is suffix ".so"? */
+  if (suffix && !strcmp (suffix, ".so"))
+    {
+      /* Does the file exist? */
+      if (gfpod_helper (name, real_filename))
+	return true;
+      /* No, replace ".so" with ".dll". */
+      strcpy (suffix, ".dll");
+    }
+  /* Does the filename start with "lib"? */
+  if (!strncmp (basename, "lib", 3))
+    {
+      /* Yes, replace "lib" with "cyg". */
+      strncpy (basename, "cyg", 3);
+      /* Does the file exist? */
+      if (gfpod_helper (name, real_filename))
+	return true;
+      /* No, revert back to "lib". */
+      strncpy (basename, "lib", 3);
+    }
+  if (gfpod_helper (name, real_filename))
+    return true;
+
+  /* If nothing worked, create a relative path from the original incoming
+     filename and let LoadLibrary search for it using the system default
+     DLL search path. */
+  real_filename.check (str, PC_SYM_FOLLOW | PC_NOFULL | PC_NULLEMPTY);
   if (!real_filename.error)
     return true;
 
@@ -65,27 +107,29 @@ get_full_path_of_dll (const char* str, path_conv &real_filename)
   return false;
 }
 
-void *
-dlopen (const char *name, int)
+extern "C" void *
+dlopen (const char *name, int flags)
 {
-  void *ret;
+  void *ret = NULL;
 
   if (name == NULL)
-    ret = (void *) GetModuleHandle (NULL); /* handle for the current module */
+    {
+      ret = (void *) GetModuleHandle (NULL); /* handle for the current module */
+      if (!ret)
+	__seterrno ();
+    }
   else
     {
       /* handle for the named library */
       path_conv pc;
-      if (!get_full_path_of_dll (name, pc))
-	ret = NULL;
-      else
+      if (get_full_path_of_dll (name, pc))
 	{
 	  tmp_pathbuf tp;
 	  wchar_t *path = tp.w_get ();
 
 	  pc.get_wide_win32_path (path);
 	  /* Check if the last path component contains a dot.  If so,
-	     leave the filename alone.  Otherwise add a traiing dot
+	     leave the filename alone.  Otherwise add a trailing dot
 	     to override LoadLibrary's automatic adding of a ".dll" suffix. */
 	  wchar_t *last_bs = wcsrchr (path, L'\\');
 	  if (last_bs && !wcschr (last_bs, L'.'))
@@ -107,12 +151,43 @@ dlopen (const char *name, int)
 	  struct per_process_cxx_malloc *tmp_malloc;
 	  tmp_malloc = __cygwin_user_data.cxx_malloc;
 
-	  ret = (void *) LoadLibraryW (path);
+	  if (!(flags & RTLD_NOLOAD)
+	      || (ret = GetModuleHandleW (path)) != NULL)
+	    {
+	      ret = (void *) LoadLibraryW (path);
+	      if (ret && (flags & RTLD_NODELETE)
+		  && !GetModuleHandleExW (GET_MODULE_HANDLE_EX_FLAG_PIN, path,
+					  (HMODULE *) &ret))
+		{
+		  /* Windows 2000 is missing the GetModuleHandleEx call, so we
+		     use a non-documented way to set the DLL to "don't free".
+		     This is how it works:  Fetch the Windows Loader data from
+		     the PEB.  Iterate backwards through the list of loaded
+		     DLLs and compare the DllBase address with the address
+		     returned by LoadLibrary.  If they are equal we found the
+		     right entry.  Now set the LoadCount to -1, which is the
+		     marker for a DLL which should never be free'd. */
+		  PPEB_LDR_DATA ldr = NtCurrentTeb ()->Peb->Ldr;
+
+		  for (PLDR_DATA_TABLE_ENTRY entry = (PLDR_DATA_TABLE_ENTRY)
+					     ldr->InLoadOrderModuleList.Blink;
+		       entry && entry->DllBase;
+		       entry = (PLDR_DATA_TABLE_ENTRY)
+			       entry->InLoadOrderLinks.Blink)
+		    {
+		      if (entry->DllBase == ret)
+			{
+			  entry->LoadCount = (WORD) -1;
+			  break;
+			}
+		    }
+		}
+	    }
 
 	  /* Restore original cxx_malloc pointer. */
 	  __cygwin_user_data.cxx_malloc = tmp_malloc;
 
-	  if (ret == NULL)
+	  if (!ret)
 	    __seterrno ();
 	}
     }
@@ -124,48 +199,68 @@ dlopen (const char *name, int)
   return ret;
 }
 
-void *
+extern "C" void *
 dlsym (void *handle, const char *name)
 {
   void *ret = NULL;
+
   if (handle == RTLD_DEFAULT)
     { /* search all modules */
-      HANDLE cur_proc = GetCurrentProcess ();
-      HMODULE *modules;
-      DWORD needed, i;
-      if (!EnumProcessModules (cur_proc, NULL, 0, &needed))
+      PDEBUG_BUFFER buf;
+      NTSTATUS status;
+
+      buf = RtlCreateQueryDebugBuffer (0, FALSE);
+      if (!buf)
 	{
-	dlsym_fail:
+	  set_errno (ENOMEM);
 	  set_dl_error ("dlsym");
 	  return NULL;
 	}
-      modules = (HMODULE*) alloca (needed);
-      if (!EnumProcessModules (cur_proc, modules, needed, &needed))
-	goto dlsym_fail;
-      for (i = 0; i < needed / sizeof (HMODULE); i++)
-	if ((ret = (void *) GetProcAddress (modules[i], name)))
-	  break;
+      status = RtlQueryProcessDebugInformation (GetCurrentProcessId (),
+						PDI_MODULES, buf);
+      if (!NT_SUCCESS (status))
+	__seterrno_from_nt_status (status);
+      else
+	{
+	  PDEBUG_MODULE_ARRAY mods = (PDEBUG_MODULE_ARRAY)
+				     buf->ModuleInformation;
+	  for (ULONG i = 0; i < mods->Count; ++i)
+	    if ((ret = (void *)
+		       GetProcAddress ((HMODULE) mods->Modules[i].Base, name)))
+	      break;
+	  if (!ret)
+	    set_errno (ENOENT);
+	}
+      RtlDestroyQueryDebugBuffer (buf);
     }
   else
-    ret = (void *) GetProcAddress ((HMODULE)handle, name);
+    {
+      ret = (void *) GetProcAddress ((HMODULE) handle, name);
+      if (!ret)
+	__seterrno ();
+    }
   if (!ret)
     set_dl_error ("dlsym");
   debug_printf ("ret %p", ret);
   return ret;
 }
 
-int
+extern "C" int
 dlclose (void *handle)
 {
-  int ret = -1;
-  if (handle == GetModuleHandle (NULL) || FreeLibrary ((HMODULE) handle))
+  int ret;
+  if (handle == GetModuleHandle (NULL))
     ret = 0;
+  else if (FreeLibrary ((HMODULE) handle))
+    ret = 0;
+  else
+    ret = -1;
   if (ret)
     set_dl_error ("dlclose");
   return ret;
 }
 
-char *
+extern "C" char *
 dlerror ()
 {
   char *res;

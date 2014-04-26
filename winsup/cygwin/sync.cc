@@ -4,7 +4,7 @@
    which is intended to operate similarly to a mutex but attempts to
    avoid making expensive calls to the kernel.
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009, 2010 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -20,7 +20,6 @@ details. */
 
 #undef WaitForSingleObject
 
-DWORD NO_COPY muto::exiting_thread;
 muto NO_COPY lock_process::locker;
 
 void
@@ -36,7 +35,7 @@ muto::init (const char *s)
   char *already_exists = (char *) InterlockedExchangePointer (&name, s);
   if (already_exists)
     while (!bruteforce)
-      low_priority_sleep (0);
+      yield ();
   else
     {
       waiters = -1;
@@ -70,16 +69,11 @@ muto::~muto ()
 
    Note: The goal here is to minimize, as much as possible, calls to the
    OS.  Hence the use of InterlockedIncrement, etc., rather than (much) more
-   expensive OS mutexes.  Also note that the only two valid "ms" times are
-   0 and INFINITE. */
+   expensive OS mutexes.  */
 int
 muto::acquire (DWORD ms)
 {
   void *this_tls = &_my_tls;
-#if 0
-  if (exiting_thread)
-    return this_tid == exiting_thread;
-#endif
 
   if (tls != this_tls)
     {

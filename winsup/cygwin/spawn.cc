@@ -1,7 +1,7 @@
 /* spawn.cc
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -12,29 +12,29 @@ details. */
 #include "winsup.h"
 #include <stdlib.h>
 #include <unistd.h>
-#include <process.h>
+#include <cygwin/process.h>
 #include <sys/wait.h>
 #include <wingdi.h>
 #include <winuser.h>
 #include <wchar.h>
 #include <ctype.h>
-#include "cygerrno.h"
 #include <sys/cygwin.h>
+#include "cygerrno.h"
 #include "security.h"
+#include "sigproc.h"
+#include "pinfo.h"
 #include "path.h"
 #include "fhandler.h"
 #include "dtable.h"
-#include "sigproc.h"
 #include "cygheap.h"
 #include "child_info.h"
-#include "pinfo.h"
 #include "environ.h"
 #include "cygtls.h"
 #include "tls_pbuf.h"
 #include "winf.h"
 #include "ntdll.h"
 
-static suffix_info exe_suffixes[] =
+static suffix_info NO_COPY exe_suffixes[] =
 {
   suffix_info ("", 1),
   suffix_info (".exe", 1),
@@ -55,8 +55,6 @@ static suffix_info dll_suffixes[] =
   suffix_info (NULL)
 };
 #endif
-
-child_info_spawn *chExeced;
 
 /* Add .exe to PROG if not already present and see if that exists.
    If not, return PROG (converted from posix to win32 rules if necessary).
@@ -111,7 +109,7 @@ find_exec (const char *name, path_conv& buf, const char *mywinenv,
   tmp_pathbuf tp;
   char *tmp = tp.c_get ();
   const char *posix = (opt & FE_NATIVE) ? NULL : name;
-  bool has_slash = strchr (name, '/');
+  bool has_slash = !!strpbrk (name, "/\\");
   int err;
 
   /* Check to see if file can be opened as is first.
@@ -173,7 +171,9 @@ find_exec (const char *name, path_conv& buf, const char *mywinenv,
 
       debug_printf ("trying %s", tmp);
 
-      if ((suffix = perhaps_suffix (tmp, buf, err, opt)) != NULL)
+      int err1;
+
+      if ((suffix = perhaps_suffix (tmp, buf, err1, opt)) != NULL)
 	{
 	  if (buf.has_acls () && check_file_access (buf, X_OK, true))
 	    continue;
@@ -217,7 +217,7 @@ find_exec (const char *name, path_conv& buf, const char *mywinenv,
   return retval;
 }
 
-/* Utility for spawn_guts.  */
+/* Utility for child_info_spawn::worker.  */
 
 static HANDLE
 handle (int fd, bool writing)
@@ -269,14 +269,21 @@ do_cleanup (void *args)
 # undef cleanup
 }
 
+child_info_spawn NO_COPY ch_spawn;
 
 int
-spawn_guts (const char *prog_arg, const char *const *argv,
-	    const char *const envp[], int mode, int __stdin, int __stdout)
+child_info_spawn::worker (const char *prog_arg, const char *const *argv,
+			  const char *const envp[], int mode,
+			  int in__stdin, int in__stdout)
 {
   bool rc;
   pid_t cygpid;
   int res = -1;
+
+  /* Check if we have been called from exec{lv}p or spawn{lv}p and mask
+     mode to keep only the spawn mode. */
+  bool p_type_exec = !!(mode & _P_PATH_TYPE_EXEC);
+  mode = _P_MODE (mode);
 
   if (prog_arg == NULL)
     {
@@ -291,7 +298,7 @@ spawn_guts (const char *prog_arg, const char *const *argv,
       return -1;
     }
 
-  syscall_printf ("spawn_guts (%d, %.9500s)", mode, prog_arg);
+  syscall_printf ("mode = %d, prog_arg = %.9500s", mode, prog_arg);
 
   /* FIXME: This is no error condition on Linux. */
   if (argv == NULL)
@@ -316,7 +323,6 @@ spawn_guts (const char *prog_arg, const char *const *argv,
   pthread_cleanup_push (do_cleanup, (void *) &cleanup);
   av newargv;
   linebuf one_line;
-  child_info_spawn ch;
   PWCHAR envblock = NULL;
   path_conv real_path;
   bool reset_sendsig = false;
@@ -325,7 +331,6 @@ spawn_guts (const char *prog_arg, const char *const *argv,
   PWCHAR runpath = tp.w_get ();
   int c_flags;
   bool wascygexec;
-  cygheap_exec_info *moreinfo;
 
   bool null_app_name = false;
   STARTUPINFOW si = {};
@@ -345,13 +350,11 @@ spawn_guts (const char *prog_arg, const char *const *argv,
 
   child_info_types chtype;
   if (mode != _P_OVERLAY)
-    chtype = PROC_SPAWN;
+    chtype = _CH_SPAWN;
   else
-    chtype = PROC_EXEC;
+    chtype = _CH_EXEC;
 
-  moreinfo = (cygheap_exec_info *) ccalloc_abort (HEAP_1_EXEC, 1,
-						  sizeof (cygheap_exec_info));
-  moreinfo->old_title = NULL;
+  moreinfo = cygheap_exec_info::alloc ();
 
   /* CreateProcess takes one long string that is the command line (sigh).
      We need to quote any argument that has whitespace or embedded "'s.  */
@@ -373,22 +376,17 @@ spawn_guts (const char *prog_arg, const char *const *argv,
 
 
   wascygexec = real_path.iscygexec ();
-  res = newargv.fixup (prog_arg, real_path, ext);
+  res = newargv.fixup (prog_arg, real_path, ext, p_type_exec);
 
   if (res)
     goto out;
 
-  if (!real_path.iscygexec ()
-      && (cygheap->cwd.drive_length == 0
-	  || cygheap->cwd.win32.Length >= MAX_PATH * sizeof (WCHAR)))
+  if (!real_path.iscygexec () && ::cygheap->cwd.get_error ())
     {
-      small_printf ("Error: Current working directory is a %s.\n"
+      small_printf ("Error: Current working directory %s.\n"
 		    "Can't start native Windows application from here.\n\n",
-		    cygheap->cwd.drive_length == 0
-		    ? "virtual Cygwin directory"
-		    : "path longer than allowed for a\n"
-		      "Win32 working directory");
-      set_errno (ENAMETOOLONG);
+		    ::cygheap->cwd.get_error_desc ());
+      set_errno (::cygheap->cwd.get_error ());
       res = -1;
       goto out;
     }
@@ -446,15 +444,35 @@ spawn_guts (const char *prog_arg, const char *const *argv,
 
   /* Set up needed handles for stdio */
   si.dwFlags = STARTF_USESTDHANDLES;
-  si.hStdInput = handle ((__stdin < 0 ? 0 : __stdin), false);
-  si.hStdOutput = handle ((__stdout < 0 ? 1 : __stdout), true);
+  si.hStdInput = handle ((in__stdin < 0 ? 0 : in__stdin), false);
+  si.hStdOutput = handle ((in__stdout < 0 ? 1 : in__stdout), true);
   si.hStdError = handle (2, true);
 
   si.cb = sizeof (si);
 
   c_flags = GetPriorityClass (GetCurrentProcess ());
   sigproc_printf ("priority class %d", c_flags);
+
   c_flags |= CREATE_SEPARATE_WOW_VDM | CREATE_UNICODE_ENVIRONMENT;
+
+  /* We're adding the CREATE_BREAKAWAY_FROM_JOB flag here to workaround issues
+     with the "Program Compatibility Assistant (PCA) Service" observed on
+     Windows 7.  For some reason, when starting long running sessions from
+     mintty, the affected svchost.exe process takes more and more memory and
+     at one point takes over the CPU.  At this point the machine becomes
+     unresponsive.  The only way to get back to normal is to stop the entire
+     mintty session, or to stop the PCA service.  However, a process which
+     is controlled by PCA is part of a compatibility job, which allows child
+     processes to break away from the job.  This helps to avoid this issue. */
+  JOBOBJECT_BASIC_LIMIT_INFORMATION jobinfo;
+  if (QueryInformationJobObject (NULL, JobObjectBasicLimitInformation,
+				 &jobinfo, sizeof jobinfo, NULL)
+      && (jobinfo.LimitFlags & (JOB_OBJECT_LIMIT_BREAKAWAY_OK
+				| JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)))
+    {
+      debug_printf ("Add CREATE_BREAKAWAY_FROM_JOB");
+      c_flags |= CREATE_BREAKAWAY_FROM_JOB;
+    }
 
   if (mode == _P_DETACH)
     c_flags |= DETACHED_PROCESS;
@@ -478,42 +496,60 @@ spawn_guts (const char *prog_arg, const char *const *argv,
       /* Save a copy of a handle to the current process around the first time we
 	 exec so that the pid will not be reused.  Why did I stop cygwin from
 	 generating its own pids again? */
-      if (cygheap->pid_handle)
+      if (::cygheap->pid_handle)
 	/* already done previously */;
       else if (DuplicateHandle (GetCurrentProcess (), GetCurrentProcess (),
-				GetCurrentProcess (), &cygheap->pid_handle,
+				GetCurrentProcess (), &::cygheap->pid_handle,
 				PROCESS_QUERY_INFORMATION, TRUE, 0))
-	ProtectHandleINH (cygheap->pid_handle);
+	ProtectHandleINH (::cygheap->pid_handle);
       else
 	system_printf ("duplicate to pid_handle failed, %E");
     }
 
-  runpath = null_app_name ? NULL : real_path.get_wide_win32_path (runpath);
-  { /* If the executable path length is < MAX_PATH, make sure the long path
-       win32 prefix is removed from the path to make subsequent native Win32
-       child processes happy which are not long path aware. */
-    USHORT len = real_path.get_nt_native_path ()->Length;
-    if (len < (MAX_PATH + 4) * sizeof (WCHAR)
-    	|| (runpath[5] != L':'				/* UNC path */
-	    && len < (MAX_PATH + 6) * sizeof (WCHAR)))
-      {
-	PWCHAR r = runpath + 4;
-	if (r[1] != L':') /* UNC path */
-	  *(r += 2) = L'\\';
-	if (!RtlIsDosDeviceName_U (r))
-	  runpath = r;
-	else if (*r == L'\\')
-	  *r = L'C';
-      }
-  }
+  if (null_app_name)
+    runpath = NULL;
+  else
+    {
+      USHORT len = real_path.get_nt_native_path ()->Length / sizeof (WCHAR);
+      if (RtlEqualUnicodePathPrefix (real_path.get_nt_native_path (),
+				     &ro_u_natp, FALSE))
+	{
+	  runpath = real_path.get_wide_win32_path (runpath);
+	  /* If the executable path length is < MAX_PATH, make sure the long
+	     path win32 prefix is removed from the path to make subsequent
+	     not long path aware native Win32 child processes happy. */
+	  if (len < MAX_PATH + 4)
+	    {
+	      if (runpath[5] == ':')
+		runpath += 4;
+	      else if (len < MAX_PATH + 6)
+		*(runpath += 6) = L'\\';
+	    }
+	}
+      else if (len < NT_MAX_PATH - ro_u_globalroot.Length / sizeof (WCHAR))
+	{
+	  UNICODE_STRING rpath;
 
+	  RtlInitEmptyUnicodeString (&rpath, runpath,
+				     (NT_MAX_PATH - 1) * sizeof (WCHAR));
+	  RtlCopyUnicodeString (&rpath, &ro_u_globalroot);
+	  RtlAppendUnicodeStringToString (&rpath,
+					  real_path.get_nt_native_path ());
+	}
+      else
+	{
+	  set_errno (ENAMETOOLONG);
+	  res = -1;
+	  goto out;
+	}
+    }
   syscall_printf ("null_app_name %d (%W, %.9500W)", null_app_name,
 		  runpath, wone_line);
 
-  cygbench ("spawn-guts");
+  cygbench ("spawn-worker");
 
   if (!real_path.iscygexec())
-    cygheap->fdtab.set_file_pointers_for_exec ();
+    ::cygheap->fdtab.set_file_pointers_for_exec ();
 
   moreinfo->envp = build_env (envp, envblock, moreinfo->envc,
 			      real_path.iscygexec ());
@@ -523,36 +559,50 @@ spawn_guts (const char *prog_arg, const char *const *argv,
       res = -1;
       goto out;
     }
-  ch.set (chtype, real_path.iscygexec ());
-  ch.moreinfo = moreinfo;
-  ch.__stdin = __stdin;
-  ch.__stdout = __stdout;
+  set (chtype, real_path.iscygexec ());
+  __stdin = in__stdin;
+  __stdout = in__stdout;
+  record_children ();
 
-  si.lpReserved2 = (LPBYTE) &ch;
-  si.cbReserved2 = sizeof (ch);
+  si.lpReserved2 = (LPBYTE) this;
+  si.cbReserved2 = sizeof (*this);
 
-  /* Depends on ch.set call above.
+  /* Depends on set call above.
      Some file types might need extra effort in the parent after CreateProcess
      and before copying the datastructures to the child.  So we have to start
      the child in suspend state, unfortunately, to avoid a race condition. */
   if (!newargv.win16_exe
-      && (!ch.iscygwin () || mode != _P_OVERLAY
-	  || cygheap->fdtab.need_fixup_before ()))
+      && (!iscygwin () || mode != _P_OVERLAY
+	  || ::cygheap->fdtab.need_fixup_before ()))
     c_flags |= CREATE_SUSPENDED;
-
+  /* If a native application should be spawned, we test here if the spawning
+     process is running in a console and, if so, if it's a foreground or
+     background process.  If it's a background process, we start the native
+     process with the CREATE_NEW_PROCESS_GROUP flag set.  This lets the native
+     process ignore Ctrl-C by default.  If we don't do that, pressing Ctrl-C
+     in a console will break native processes running in the background,
+     because the Ctrl-C event is sent to all processes in the console, unless
+     they ignore it explicitely.  CREATE_NEW_PROCESS_GROUP does that for us. */
+  if (!iscygwin () && myself->ctty >= 0 && iscons_dev (myself->ctty)
+      && fhandler_console::tc_getpgid () != myself->pgid)
+    c_flags |= CREATE_NEW_PROCESS_GROUP;
+  refresh_cygheap ();
   /* When ruid != euid we create the new process under the current original
      account and impersonate in child, this way maintaining the different
      effective vs. real ids.
      FIXME: If ruid != euid and ruid != saved_uid we currently give
      up on ruid. The new process will have ruid == euid. */
 loop:
-  cygheap->user.deimpersonate ();
+  ::cygheap->user.deimpersonate ();
 
-  if (!cygheap->user.issetuid ()
-      || (cygheap->user.saved_uid == cygheap->user.real_uid
-	  && cygheap->user.saved_gid == cygheap->user.real_gid
-	  && !cygheap->user.groups.issetgroups ()
-	  && !cygheap->user.setuid_to_restricted))
+  if (!real_path.iscygexec () && mode == _P_OVERLAY)
+    myself->process_state |= PID_NOTCYGWIN;
+
+  if (!::cygheap->user.issetuid ()
+      || (::cygheap->user.saved_uid == ::cygheap->user.real_uid
+	  && ::cygheap->user.saved_gid == ::cygheap->user.real_gid
+	  && !::cygheap->user.groups.issetgroups ()
+	  && !::cygheap->user.setuid_to_restricted))
     {
       rc = CreateProcessW (runpath,	  /* image name - with full path */
 			   wone_line,	  /* what was passed to exec */
@@ -586,20 +636,20 @@ loop:
 	 risk, but we don't want to disable this behaviour for older
 	 OSes because it's still heavily used by some users.  They have
 	 been warned. */
-      if (!cygheap->user.setuid_to_restricted
+      if (!::cygheap->user.setuid_to_restricted
 	  && wcscasecmp (wstname, L"WinSta0") != 0)
 	{
 	  WCHAR sid[128];
 
 	  sa = sec_user ((PSECURITY_ATTRIBUTES) alloca (1024),
-			 cygheap->user.sid ());
+			 ::cygheap->user.sid ());
 	  /* We're creating a window station per user, not per logon session.
 	     First of all we might not have a valid logon session for
 	     the user (logon by create_token), and second, it doesn't
 	     make sense in terms of security to create a new window
 	     station for every logon of the same user.  It just fills up
 	     the system with window stations for no good reason. */
-	  hwst = CreateWindowStationW (cygheap->user.get_windows_id (sid), 0,
+	  hwst = CreateWindowStationW (::cygheap->user.get_windows_id (sid), 0,
 				       GENERIC_READ | GENERIC_WRITE, sa);
 	  if (!hwst)
 	    system_printf ("CreateWindowStation failed, %E");
@@ -616,7 +666,7 @@ loop:
 	    }
 	}
 
-      rc = CreateProcessAsUserW (cygheap->user.primary_token (),
+      rc = CreateProcessAsUserW (::cygheap->user.primary_token (),
 			   runpath,	  /* image name - with full path */
 			   wone_line,	  /* what was passed to exec */
 			   &sec_none_nih, /* process security attrs */
@@ -642,7 +692,7 @@ loop:
   /* Restore impersonation. In case of _P_OVERLAY this isn't
      allowed since it would overwrite child data. */
   if (mode != _P_OVERLAY || !rc)
-    cygheap->user.reimpersonate ();
+    ::cygheap->user.reimpersonate ();
 
   /* Set errno now so that debugging messages from it appear before our
      final debugging message [this is a general rule for debugging
@@ -657,17 +707,19 @@ loop:
 	  myself->sendsig = myself->exec_sendsig;
 	  myself->exec_sendsig = NULL;
 	}
+      myself->process_state &= ~PID_NOTCYGWIN;
       res = -1;
       goto out;
     }
 
-  if (!(c_flags & CREATE_SUSPENDED))
-    strace.write_childpid (ch, pi.dwProcessId);
+  /* The CREATE_SUSPENDED case is handled below */
+  if (iscygwin () && !(c_flags & CREATE_SUSPENDED))
+    strace.write_childpid (pi.dwProcessId);
 
   /* Fixup the parent data structures if needed and resume the child's
      main thread. */
-  if (cygheap->fdtab.need_fixup_before ())
-    cygheap->fdtab.fixup_before_exec (pi.dwProcessId);
+  if (::cygheap->fdtab.need_fixup_before ())
+    ::cygheap->fdtab.fixup_before_exec (pi.dwProcessId);
 
   if (mode != _P_OVERLAY)
     cygpid = cygwin_pid (pi.dwProcessId);
@@ -675,7 +727,7 @@ loop:
     cygpid = myself->pid;
 
   /* We print the original program name here so the user can see that too.  */
-  syscall_printf ("%d = spawn_guts (%s, %.9500s)",
+  syscall_printf ("%d = child_info_spawn::worker(%s, %.9500s)",
 		  rc ? cygpid : (unsigned int) -1, prog_arg, one_line.buf);
 
   /* Name the handle similarly to proc_subproc. */
@@ -685,12 +737,11 @@ loop:
   pid_t pid;
   if (mode == _P_OVERLAY)
     {
-      chExeced = &ch;	/* FIXME: there's a race here if a user sneaks in CTRL-C */
       myself->dwProcessId = pi.dwProcessId;
       strace.execing = 1;
       myself.hProcess = hExeced = pi.hProcess;
-      strcpy (myself->progname, real_path.get_win32 ()); // FIXME: race?
-      sigproc_printf ("new process name %s", myself->progname);
+      real_path.get_wide_win32_path (myself->progname); // FIXME: race?
+      sigproc_printf ("new process name %W", myself->progname);
       /* If wr_proc_pipe doesn't exist then this process was not started by a cygwin
 	 process.  So, we need to wait around until the process we've just "execed"
 	 dies.  Use our own wait facility to wait for our own pid to exit (there
@@ -711,14 +762,15 @@ loop:
 	  orig_wr_proc_pipe = myself->dup_proc_pipe (pi.hProcess);
 	}
       pid = myself->pid;
-      if (!ch.iscygwin ())
+      if (!iscygwin ())
 	close_all_files ();
     }
   else
     {
       myself->set_has_pgid_children ();
       ProtectHandle (pi.hThread);
-      pinfo child (cygpid, PID_IN_USE);
+      pinfo child (cygpid,
+		   PID_IN_USE | (real_path.iscygexec () ? 0 : PID_NOTCYGWIN));
       if (!child)
 	{
 	  syscall_printf ("pinfo failed");
@@ -730,7 +782,7 @@ loop:
       child->dwProcessId = pi.dwProcessId;
       child.hProcess = pi.hProcess;
 
-      strcpy (child->progname, real_path.get_win32 ());
+      real_path.get_wide_win32_path (child->progname);
       /* FIXME: This introduces an unreferenced, open handle into the child.
 	 The purpose is to keep the pid shared memory open so that all of
 	 the fields filled out by child.remember do not disappear and so there
@@ -755,16 +807,17 @@ loop:
   if (c_flags & CREATE_SUSPENDED)
     {
       ResumeThread (pi.hThread);
-      strace.write_childpid (ch, pi.dwProcessId);
+      if (iscygwin ())
+	strace.write_childpid (pi.dwProcessId);
     }
   ForceCloseHandle (pi.hThread);
 
   sigproc_printf ("spawned windows pid %d", pi.dwProcessId);
 
-  if ((mode == _P_DETACH || mode == _P_NOWAIT) && !ch.iscygwin ())
+  if ((mode == _P_DETACH || mode == _P_NOWAIT) && !iscygwin ())
     synced = false;
   else
-    synced = ch.sync (pi.dwProcessId, pi.hProcess, INFINITE);
+    synced = sync (pi.dwProcessId, pi.hProcess, INFINITE);
 
   switch (mode)
     {
@@ -777,7 +830,7 @@ loop:
 	      myself->wr_proc_pipe_owner = GetCurrentProcessId ();
 	      myself->wr_proc_pipe = orig_wr_proc_pipe;
 	    }
-	  if (!ch.proc_retry (pi.hProcess))
+	  if (!proc_retry (pi.hProcess))
 	    {
 	      looped++;
 	      goto loop;
@@ -793,9 +846,10 @@ loop:
 	      extern bool is_toplevel_proc;
 	      is_toplevel_proc = true;
 	      myself.remember (false);
-	      waitpid (myself->pid, &res, 0);
+	      wait_for_myself ();
 	    }
 	}
+      this->cleanup ();
       myself.exit (EXITCODE_NOSET);
       break;
     case _P_WAIT:
@@ -816,11 +870,11 @@ loop:
     }
 
 out:
+  this->cleanup ();
   if (envblock)
     free (envblock);
   pthread_cleanup_pop (1);
   return (int) res;
-#undef ch
 }
 
 extern "C" int
@@ -838,6 +892,8 @@ extern "C" int
 spawnve (int mode, const char *path, const char *const *argv,
        const char *const *envp)
 {
+  static char *const empty_env[] = { NULL };
+
   int ret;
 #ifdef NEWVFORK
   vfork_save *vf = vfork_storage.val ();
@@ -850,13 +906,14 @@ spawnve (int mode, const char *path, const char *const *argv,
 
   syscall_printf ("spawnve (%s, %s, %x)", path, argv[0], envp);
 
-  switch (mode)
+  if (!envp)
+    envp = empty_env;
+
+  switch (_P_MODE (mode))
     {
     case _P_OVERLAY:
-      /* We do not pass _P_SEARCH_PATH here. execve doesn't search PATH.*/
-      /* Just act as an exec if _P_OVERLAY set. */
-      spawn_guts (path, argv, envp, mode);
-      /* Errno should be set by spawn_guts.  */
+      ch_spawn.worker (path, argv, envp, mode);
+      /* Errno should be set by worker.  */
       ret = -1;
       break;
     case _P_VFORK:
@@ -865,7 +922,7 @@ spawnve (int mode, const char *path, const char *const *argv,
     case _P_WAIT:
     case _P_DETACH:
     case _P_SYSTEM:
-      ret = spawn_guts (path, argv, envp, mode);
+      ret = ch_spawn.worker (path, argv, envp, mode);
 #ifdef NEWVFORK
       if (vf)
 	{
@@ -933,11 +990,12 @@ spawnle (int mode, const char *path, const char *arg0, ...)
 }
 
 extern "C" int
-spawnlp (int mode, const char *path, const char *arg0, ...)
+spawnlp (int mode, const char *file, const char *arg0, ...)
 {
   int i;
   va_list args;
   const char *argv[256];
+  path_conv buf;
 
   va_start (args, arg0);
   argv[0] = arg0;
@@ -949,16 +1007,18 @@ spawnlp (int mode, const char *path, const char *arg0, ...)
 
   va_end (args);
 
-  return spawnvpe (mode, path, (char * const *) argv, cur_environ ());
+  return spawnve (mode | _P_PATH_TYPE_EXEC, find_exec (file, buf),
+		  (char * const *) argv, cur_environ ());
 }
 
 extern "C" int
-spawnlpe (int mode, const char *path, const char *arg0, ...)
+spawnlpe (int mode, const char *file, const char *arg0, ...)
 {
   int i;
   va_list args;
   const char * const *envp;
   const char *argv[256];
+  path_conv buf;
 
   va_start (args, arg0);
   argv[0] = arg0;
@@ -971,7 +1031,8 @@ spawnlpe (int mode, const char *path, const char *arg0, ...)
   envp = va_arg (args, const char * const *);
   va_end (args);
 
-  return spawnvpe (mode, path, (char * const *) argv, envp);
+  return spawnve (mode | _P_PATH_TYPE_EXEC, find_exec (file, buf),
+		  (char * const *) argv, envp);
 }
 
 extern "C" int
@@ -981,21 +1042,24 @@ spawnv (int mode, const char *path, const char * const *argv)
 }
 
 extern "C" int
-spawnvp (int mode, const char *path, const char * const *argv)
+spawnvp (int mode, const char *file, const char * const *argv)
 {
-  return spawnvpe (mode, path, argv, cur_environ ());
+  path_conv buf;
+  return spawnve (mode | _P_PATH_TYPE_EXEC, find_exec (file, buf), argv,
+		  cur_environ ());
 }
 
 extern "C" int
 spawnvpe (int mode, const char *file, const char * const *argv,
-					   const char * const *envp)
+	  const char * const *envp)
 {
   path_conv buf;
-  return spawnve (mode, find_exec (file, buf), argv, envp);
+  return spawnve (mode | _P_PATH_TYPE_EXEC, find_exec (file, buf), argv, envp);
 }
 
 int
-av::fixup (const char *prog_arg, path_conv& real_path, const char *ext)
+av::fixup (const char *prog_arg, path_conv& real_path, const char *ext,
+	   bool p_type_exec)
 {
   const char *p;
   bool exeext = ascii_strcasematch (ext, ".exe");
@@ -1014,17 +1078,18 @@ av::fixup (const char *prog_arg, path_conv& real_path, const char *ext)
       IO_STATUS_BLOCK io;
       HANDLE h;
       NTSTATUS status;
+      LARGE_INTEGER size;
 
       status = NtOpenFile (&h, SYNCHRONIZE | GENERIC_READ,
 			   real_path.get_object_attr (attr, sec_none_nih),
-			   &io, FILE_SHARE_READ | FILE_SHARE_WRITE,
+			   &io, FILE_SHARE_VALID_FLAGS,
 			   FILE_SYNCHRONOUS_IO_NONALERT
 			   | FILE_OPEN_FOR_BACKUP_INTENT
 			   | FILE_NON_DIRECTORY_FILE);
       if (!NT_SUCCESS (status))
 	{
 	  /* File is not readable?  Doesn't mean it's not executable.
-	     Test for executablility and if so, just assume the file is
+	     Test for executability and if so, just assume the file is
 	     a cygwin executable and go ahead. */
 	  if (status == STATUS_ACCESS_DENIED && real_path.has_acls ()
 	      && check_file_access (real_path, X_OK, true) == 0)
@@ -1034,8 +1099,16 @@ av::fixup (const char *prog_arg, path_conv& real_path, const char *ext)
 	    }
 	  goto err;
 	}
+      if (!GetFileSizeEx (h, &size))
+	{
+	  NtClose (h);
+	  goto err;
+	}
+      if (size.QuadPart > wincap.allocation_granularity ())
+	size.LowPart = wincap.allocation_granularity ();
 
-      HANDLE hm = CreateFileMapping (h, &sec_none_nih, PAGE_READONLY, 0, 0, NULL);
+      HANDLE hm = CreateFileMapping (h, &sec_none_nih, PAGE_READONLY,
+				     0, 0, NULL);
       NtClose (h);
       if (!hm)
 	{
@@ -1047,16 +1120,22 @@ av::fixup (const char *prog_arg, path_conv& real_path, const char *ext)
 	    }
 	  goto err;
 	}
-      buf = (char *) MapViewOfFile(hm, FILE_MAP_READ, 0, 0, 0);
-      CloseHandle (hm);
+      /* Try to map the first 64K of the image.  That's enough for the local
+	 tests, and it's enough for hook_or_detect_cygwin to compute the IAT
+	 address. */
+      buf = (char *) MapViewOfFile (hm, FILE_MAP_READ, 0, 0, size.LowPart);
       if (!buf)
-	goto err;
+	{
+	  CloseHandle (hm);
+	  goto err;
+	}
 
       {
 	myfault efault;
 	if (efault.faulted ())
 	  {
 	    UnmapViewOfFile (buf);
+	    CloseHandle (hm);
 	    real_path.set_cygexec (false);
 	    break;
 	  }
@@ -1066,13 +1145,16 @@ av::fixup (const char *prog_arg, path_conv& real_path, const char *ext)
 	    unsigned off = (unsigned char) buf[0x18] | (((unsigned char) buf[0x19]) << 8);
 	    win16_exe = off < sizeof (IMAGE_DOS_HEADER);
 	    if (!win16_exe)
-	      real_path.set_cygexec (!!hook_or_detect_cygwin (buf, NULL, subsys));
+	      real_path.set_cygexec (!!hook_or_detect_cygwin (buf, NULL,
+							      subsys, hm));
 	    else
 	      real_path.set_cygexec (false);
 	    UnmapViewOfFile (buf);
+	    CloseHandle (hm);
 	    break;
 	  }
       }
+      CloseHandle (hm);
 
       debug_printf ("%s is possibly a script", real_path.get_win32 ());
 
@@ -1089,10 +1171,11 @@ av::fixup (const char *prog_arg, path_conv& real_path, const char *ext)
 	      for (ptr = pgm = namebuf; *ptr; ptr++)
 		if (!arg1 && (*ptr == ' ' || *ptr == '\t'))
 		  {
-		    /* Null terminate the initial command and step over any additional white
-		       space.  If we've hit the end of the line, exit the loop.  Otherwise,
-		       we've found the first argument. Position the current pointer on the
-		       last known white space. */
+		    /* Null terminate the initial command and step over any
+		       additional white space.  If we've hit the end of the
+		       line, exit the loop.  Otherwise, we've found the first
+		       argument. Position the current pointer on the last known
+		       white space. */
 		    *ptr = '\0';
 		    char *newptr = ptr + 1;
 		    newptr += strspn (newptr, " \t");
@@ -1107,6 +1190,14 @@ av::fixup (const char *prog_arg, path_conv& real_path, const char *ext)
 just_shell:
       if (!pgm)
 	{
+	  if (!p_type_exec)
+	    {
+	      /* Not called from exec[lv]p.  Don't try to treat as script. */
+	      debug_printf ("%s is not a valid executable",
+			    real_path.get_win32 ());
+	      set_errno (ENOEXEC);
+	      return -1;
+	    }
 	  if (ascii_strcasematch (ext, ".com"))
 	    break;
 	  pgm = (char *) "/bin/sh";

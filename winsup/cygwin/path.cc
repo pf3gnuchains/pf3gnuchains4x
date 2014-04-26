@@ -1,7 +1,7 @@
 /* path.cc: path support.
 
      Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-     2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
+     2006, 2007, 2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
   This file is part of Cygwin.
 
@@ -55,6 +55,7 @@
 #include <wingdi.h>
 #include <winuser.h>
 #include <winnetwk.h>
+#include <winnls.h>
 #include <shlobj.h>
 #include <sys/cygwin.h>
 #include "cygerrno.h"
@@ -67,7 +68,6 @@
 #include "cygtls.h"
 #include "tls_pbuf.h"
 #include "environ.h"
-#include "nfs.h"
 #include <assert.h>
 #include <ntdll.h>
 #include <wchar.h>
@@ -96,13 +96,13 @@ struct symlink_info
   _major_t major;
   _minor_t minor;
   _mode_t mode;
-  int check (char *path, const suffix_info *suffixes, unsigned opt,
-	     fs_info &fs);
+  int check (char *path, const suffix_info *suffixes, fs_info &fs,
+	     path_conv_handle &conv_hdl);
   int set (char *path);
   bool parse_device (const char *);
   int check_sysfile (HANDLE h);
   int check_shortcut (HANDLE h);
-  int check_reparse_point (HANDLE h);
+  int check_reparse_point (HANDLE h, bool remote);
   int check_nfs_symlink (HANDLE h);
   int posixify (char *srcbuf);
   bool set_error (int);
@@ -377,7 +377,7 @@ path_conv::set_normalized_path (const char *path_copy)
   if (path_copy)
     {
       size_t n = strlen (path_copy) + 1;
-      char *p = (char *) cmalloc_abort (HEAP_STR, n);
+      char *p = (char *) crealloc_abort ((void *) normalized_path, n);
       normalized_path = (const char *) memcpy (p, path_copy, n);
     }
 }
@@ -393,7 +393,7 @@ str2uni_cat (UNICODE_STRING &tgt, const char *srcstr)
 }
 
 PUNICODE_STRING
-get_nt_native_path (const char *path, UNICODE_STRING& upath)
+get_nt_native_path (const char *path, UNICODE_STRING& upath, bool dos)
 {
   upath.Length = 0;
   if (path[0] == '/')		/* special path w/o NT path representation. */
@@ -425,33 +425,47 @@ get_nt_native_path (const char *path, UNICODE_STRING& upath)
       RtlAppendUnicodeStringToString (&upath, &ro_u_natp);
       str2uni_cat (upath, path + 4);
     }
+  if (dos)
+    {
+      /* Unfortunately we can't just use transform_chars with the tfx_rev_chars
+	 table since only leading and trailing spaces and dots are affected.
+	 So we step to every backslash and fix surrounding dots and spaces.
+	 That makes these broken filesystems a bit slower, but, hey. */
+      PWCHAR cp = upath.Buffer + 7;
+      PWCHAR cend = upath.Buffer + upath.Length / sizeof (WCHAR);
+      while (++cp < cend)
+	if (*cp == L'\\')
+	  {
+	    PWCHAR ccp = cp - 1;
+	    while (*ccp == L'.' || *ccp == L' ')
+	      *ccp-- |= 0xf000;
+	    while (cp[1] == L' ')
+	      *++cp |= 0xf000;
+	  }
+      while (*--cp == L'.' || *cp == L' ')
+	*cp |= 0xf000;
+    }
   return &upath;
 }
 
 PUNICODE_STRING
 path_conv::get_nt_native_path ()
 {
-  if (!wide_path)
+  PUNICODE_STRING res;
+  if (wide_path)
+    res = &uni_path;
+  else if (!path)
+    res = NULL;
+  else
     {
       uni_path.Length = 0;
       uni_path.MaximumLength = (strlen (path) + 10) * sizeof (WCHAR);
       wide_path = (PWCHAR) cmalloc_abort (HEAP_STR, uni_path.MaximumLength);
       uni_path.Buffer = wide_path;
-      ::get_nt_native_path (path, uni_path);
+      ::get_nt_native_path (path, uni_path, has_dos_filenames_only ());
+      res = &uni_path;
     }
-  return &uni_path;
-}
-
-POBJECT_ATTRIBUTES
-path_conv::get_object_attr (OBJECT_ATTRIBUTES &attr, SECURITY_ATTRIBUTES &sa)
-{
-  if (!get_nt_native_path ())
-    return NULL;
-  InitializeObjectAttributes (&attr, &uni_path,
-			      objcaseinsensitive ()
-			      | (sa.bInheritHandle ? OBJ_INHERIT : 0),
-			      NULL, sa.lpSecurityDescriptor);
-  return &attr;
+  return res;
 }
 
 PWCHAR
@@ -476,10 +490,10 @@ warn_msdos (const char *src)
   small_printf ("cygwin warning:\n");
   if (cygwin_conv_path (CCP_WIN_A_TO_POSIX | CCP_RELATIVE, src,
 			posix_path, NT_MAX_PATH))
-    small_printf ("  MS-DOS style path detected: %s\n  POSIX equivalent preferred.\n",
+    small_printf ("  MS-DOS style path detected: %ls\n  POSIX equivalent preferred.\n",
 		  src);
   else
-    small_printf ("  MS-DOS style path detected: %s\n  Preferred POSIX equivalent is: %s\n",
+    small_printf ("  MS-DOS style path detected: %ls\n  Preferred POSIX equivalent is: %ls\n",
 		  src, posix_path);
   small_printf ("  CYGWIN environment variable option \"nodosfilewarning\" turns off this warning.\n"
 		"  Consult the user's guide for more details about POSIX paths:\n"
@@ -501,7 +515,7 @@ getfileattr (const char *path, bool caseinsensitive) /* path has to be always ab
   InitializeObjectAttributes (&attr, &upath,
 			      caseinsensitive ? OBJ_CASE_INSENSITIVE : 0,
 			      NULL, NULL);
-  get_nt_native_path (path, upath);
+  get_nt_native_path (path, upath, false);
 
   status = NtQueryAttributesFile (&attr, &fbi);
   if (NT_SUCCESS (status))
@@ -514,7 +528,7 @@ getfileattr (const char *path, bool caseinsensitive) /* path has to be always ab
 	 directory query. */
       UNICODE_STRING dirname, basename;
       HANDLE dir;
-      FILE_DIRECTORY_INFORMATION fdi;
+      FILE_BOTH_DIRECTORY_INFORMATION fdi;
 
       RtlSplitUnicodePath (&upath, &dirname, &basename);
       InitializeObjectAttributes (&attr, &dirname,
@@ -529,7 +543,7 @@ getfileattr (const char *path, bool caseinsensitive) /* path has to be always ab
 	{
 	  status = NtQueryDirectoryFile (dir, NULL, NULL, 0, &io,
 					 &fdi, sizeof fdi,
-					 FileDirectoryInformation,
+					 FileBothDirectoryInformation,
 					 TRUE, &basename, TRUE);
 	  NtClose (dir);
 	  if (NT_SUCCESS (status) || status == STATUS_BUFFER_OVERFLOW)
@@ -619,6 +633,7 @@ path_conv::check (const char *src, unsigned opt,
       cfree (modifiable_path ());
       path = NULL;
     }
+  close_conv_handle ();
   memset (&dev, 0, sizeof (dev));
   fs.clear ();
   if (normalized_path)
@@ -675,7 +690,9 @@ path_conv::check (const char *src, unsigned opt,
 
       int symlen = 0;
 
-      for (unsigned pflags_or = opt & PC_NO_ACCESS_CHECK; ; pflags_or = 0)
+      for (unsigned pflags_or = opt & (PC_NO_ACCESS_CHECK | PC_KEEP_HANDLE);
+	   ;
+	   pflags_or = 0)
 	{
 	  const suffix_info *suff;
 	  char *full_path;
@@ -685,13 +702,11 @@ path_conv::check (const char *src, unsigned opt,
 	  if (component)
 	    {
 	      suff = NULL;
-	      sym.pflags = 0;
 	      full_path = pathbuf;
 	    }
 	  else
 	    {
 	      suff = suffixes;
-	      sym.pflags = path_flags;
 	      full_path = THIS_path;
 	    }
 
@@ -704,7 +719,7 @@ path_conv::check (const char *src, unsigned opt,
 
 	  sym.pflags |= pflags_or;
 
-	  if (dev.major == DEV_CYGDRIVE_MAJOR)
+	  if (dev.get_major () == DEV_CYGDRIVE_MAJOR)
 	    {
 	      if (!component)
 		fileattr = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_READONLY;
@@ -712,13 +727,13 @@ path_conv::check (const char *src, unsigned opt,
 		{
 		  fileattr = getfileattr (THIS_path,
 					  sym.pflags & MOUNT_NOPOSIX);
-		  dev.devn = FH_FS;
+		  dev = FH_FS;
 		}
 	      goto out;
 	    }
 	  else if (dev == FH_DEV)
 	    {
-	      dev.devn = FH_FS;
+	      dev = FH_FS;
 #if 0
 	      fileattr = getfileattr (THIS_path, sym.pflags & MOUNT_NOPOSIX);
 	      if (!component && fileattr == INVALID_FILE_ATTRIBUTES)
@@ -728,12 +743,12 @@ path_conv::check (const char *src, unsigned opt,
 		}
 #endif
 	    }
-	  else if (isvirtual_dev (dev.devn))
+	  else if (isvirtual_dev (dev))
 	    {
 	      /* FIXME: Calling build_fhandler here is not the right way to handle this. */
 	      fhandler_virtual *fh = (fhandler_virtual *) build_fh_dev (dev, path_copy);
-	      int file_type = fh->exists ();
-	      if (file_type == -2)
+	      virtual_ftype_t file_type = fh->exists ();
+	      if (file_type == virt_symlink)
 		{
 		  fh->fill_filebuf ();
 		  symlen = sym.set (fh->get_filebuf ());
@@ -741,42 +756,67 @@ path_conv::check (const char *src, unsigned opt,
 	      delete fh;
 	      switch (file_type)
 		{
-		  case 1:
-		  case 2:
+		  case virt_directory:
+		  case virt_rootdir:
 		    if (component == 0)
 		      fileattr = FILE_ATTRIBUTE_DIRECTORY;
 		    break;
-		  case -1:
+		  case virt_file:
 		    if (component == 0)
 		      fileattr = 0;
 		    break;
-		  case -2:	/* /proc/self or /proc/<pid>/symlinks */
+		  case virt_symlink:
 		    goto is_virtual_symlink;
-		  case -3:	/* /proc/<pid>/fd/pipe:[] */
+		  case virt_pipe:
 		    if (component == 0)
 		      {
 			fileattr = 0;
 			dev.parse (FH_PIPE);
 		      }
 		    break;
-		  case -4:	/* /proc/<pid>/fd/socket:[] */
+		  case virt_socket:
 		    if (component == 0)
 		      {
 			fileattr = 0;
 			dev.parse (FH_TCP);
 		      }
 		    break;
+		  case virt_fsdir:
+		  case virt_fsfile:
+		    /* Access to real file or directory via block device
+		       entry in /proc/sys.  Convert to real file and go with
+		       the flow. */
+		    dev.parse (FH_FS);
+		    goto is_fs_via_procsys;
+		  case virt_blk:
+		    /* Block special device.  If the trailing slash has been
+		       requested, the target is the root directory of the
+		       filesystem on this block device.  So we convert this to
+		       a real file and attach the backslash. */
+		    if (component == 0 && need_directory)
+		      {
+			dev.parse (FH_FS);
+			strcat (full_path, "\\");
+			fileattr = FILE_ATTRIBUTE_DIRECTORY
+				   | FILE_ATTRIBUTE_DEVICE;
+			goto out;
+		      }
+		    /*FALLTHRU*/
+		  case virt_chr:
+		    if (component == 0)
+		      fileattr = FILE_ATTRIBUTE_DEVICE;
+		    break;
 		  default:
 		    if (component == 0)
 		      fileattr = INVALID_FILE_ATTRIBUTES;
 		    goto virtual_component_retry;
 		}
-	      if (component == 0 || dev.devn != FH_NETDRIVE)
+	      if (component == 0 || dev != FH_NETDRIVE)
 		path_flags |= PATH_RO;
 	      goto out;
 	    }
 	  /* devn should not be a device.  If it is, then stop parsing now. */
-	  else if (dev.devn != FH_FS)
+	  else if (dev != FH_FS)
 	    {
 	      fileattr = 0;
 	      path_flags = sym.pflags;
@@ -798,12 +838,26 @@ path_conv::check (const char *src, unsigned opt,
 	      full_path[3] = '\0';
 	    }
 
-	  symlen = sym.check (full_path, suff, opt, fs);
+	  /* If the incoming path was given in DOS notation, always treat
+	     it as caseinsensitive,noacl path.  This must be set before
+	     calling sym.check, otherwise the path is potentially treated
+	     casesensitive. */
+	  if (is_msdos)
+	    sym.pflags |= PATH_NOPOSIX | PATH_NOACL;
+
+is_fs_via_procsys:
+
+	  symlen = sym.check (full_path, suff, fs, conv_handle);
 
 is_virtual_symlink:
 
 	  if (sym.isdevice)
 	    {
+	      if (component)
+		{
+		  error = ENOTDIR;
+		  return;
+		}
 	      dev.parse (sym.major, sym.minor);
 	      dev.setfs (1);
 	      dev.mode = sym.mode;
@@ -828,14 +882,6 @@ is_virtual_symlink:
 	    {
 	      fileattr = sym.fileattr;
 	      path_flags = sym.pflags;
-	      /* If the OS is caseinsensitive or the FS is caseinsensitive or
-	         the incoming path was given in DOS notation, don't handle
-		 path casesensitive. */
-	      if (cygwin_shared->obcaseinsensitive || fs.caseinsensitive ()
-		  || is_msdos)
-		path_flags |= PATH_NOPOSIX;
-	      caseinsensitive = (path_flags & PATH_NOPOSIX)
-				? OBJ_CASE_INSENSITIVE : 0;
 	    }
 
 	  /* If symlink.check found an existing non-symlink file, then
@@ -861,7 +907,9 @@ is_virtual_symlink:
 	  else if (symlen > 0)
 	    {
 	      saw_symlinks = 1;
-	      if (component == 0 && !need_directory && !(opt & PC_SYM_FOLLOW))
+	      if (component == 0 && !need_directory
+		  && (!(opt & PC_SYM_FOLLOW)
+		      || (is_rep_symlink () && (opt & PC_SYM_NOFOLLOW_REP))))
 		{
 		  set_symlink (symlen); // last component of path is a symlink.
 		  if (opt & PC_SYM_CONTENTS)
@@ -872,8 +920,13 @@ is_virtual_symlink:
 		  add_ext = true;
 		  goto out;
 		}
-	      else
-		break;
+	      /* Following a symlink we can't trust the collected filesystem
+		 information any longer. */
+	      fs.clear ();
+	      /* Close handle, if we have any.  Otherwise we're collecting
+		 handles while following symlinks. */
+	      conv_handle.close ();
+	      break;
 	    }
 	  else if (sym.error && sym.error != ENOENT)
 	    {
@@ -962,7 +1015,7 @@ out:
   set_path (THIS_path);
   if (add_ext)
     add_ext_from_sym (sym);
-  if (dev.devn == FH_NETDRIVE && component)
+  if (dev == FH_NETDRIVE && component)
     {
       /* This case indicates a non-existant resp. a non-retrievable
 	 share.  This happens for instance if the share is a printer.
@@ -971,8 +1024,15 @@ out:
 	 is used on it. */
       dev.parse (FH_FS);
     }
-  else if (isvirtual_dev (dev.devn) && fileattr == INVALID_FILE_ATTRIBUTES)
+  else if (isproc_dev (dev) && fileattr == INVALID_FILE_ATTRIBUTES)
     {
+      /* FIXME: Usually we don't set error to ENOENT if a file doesn't
+	 exist.  This is typically indicated by the fileattr content.
+	 So, why here?  The downside is that cygwin_conv_path just gets
+	 an error for these paths so it reports the error back to the
+	 application.  Unlike in all other cases of non-existant files,
+	 for which check doesn't set error, so cygwin_conv_path just
+	 returns the path, as intended. */
       error = ENOENT;
       return;
     }
@@ -1004,8 +1064,8 @@ out:
 	    }
 	}
 
-      /* FS has been checked already for existing files. */
-      if (exists () || fs.update (get_nt_native_path (), NULL))
+      /* If FS hasn't been checked already in symlink_info::check, do so now. */
+      if (fs.inited ()|| fs.update (get_nt_native_path (), NULL))
 	{
 	  /* Incoming DOS paths are treated like DOS paths in native
 	     Windows applications.  No ACLs, just default settings. */
@@ -1020,6 +1080,16 @@ out:
 			      but set it to not executable since it will be figured out
 			      later by anything which cares about this. */
 	}
+      /* If the FS has been found to have unrelibale inodes, note
+	 that in path_flags. */
+      if (!fs.hasgood_inode ())
+	path_flags |= PATH_IHASH;
+      /* If the OS is caseinsensitive or the FS is caseinsensitive,
+	 don't handle path casesensitive. */
+      if (cygwin_shared->obcaseinsensitive || fs.caseinsensitive ())
+	path_flags |= PATH_NOPOSIX;
+      caseinsensitive = (path_flags & PATH_NOPOSIX)
+			? OBJ_CASE_INSENSITIVE : 0;
       if (exec_state () != dont_know_if_executable)
 	/* ok */;
       else if (isdir ())
@@ -1054,6 +1124,12 @@ out:
 
   if (saw_symlinks)
     set_has_symlinks ();
+
+  if (opt & PC_OPEN)
+    path_flags |= PATH_OPEN;
+
+  if (opt & PC_CTTY)
+    path_flags |= PATH_CTTY;
 
   if ((opt & PC_POSIX))
     {
@@ -1090,6 +1166,7 @@ path_conv::~path_conv ()
       cfree (wide_path);
       wide_path = NULL;
     }
+  close_conv_handle ();
 }
 
 bool
@@ -1101,6 +1178,48 @@ path_conv::is_binary ()
 
   return GetBinaryTypeW (get_wide_win32_path (bintest), &bin)
 	 && (bin == SCS_32BIT_BINARY || bin == SCS_64BIT_BINARY);
+}
+
+/* Helper function to fill the fnoi datastructure for a file. */
+NTSTATUS
+file_get_fnoi (HANDLE h, bool skip_network_open_inf,
+	       PFILE_NETWORK_OPEN_INFORMATION pfnoi)
+{
+  NTSTATUS status;
+  IO_STATUS_BLOCK io;
+
+  /* Some FSes (Netapps) don't implement FileNetworkOpenInformation. */
+  status = skip_network_open_inf ? STATUS_INVALID_PARAMETER
+	   : NtQueryInformationFile (h, &io, pfnoi, sizeof *pfnoi,
+				     FileNetworkOpenInformation);
+  if (status == STATUS_INVALID_PARAMETER || status == STATUS_NOT_IMPLEMENTED)
+    {
+      /* Apart from accessing Netapps, this also occurs when accessing SMB
+	 share root dirs hosted on NT4 (STATUS_INVALID_PARAMETER), or when
+	 accessing SMB share root dirs from NT4 (STATUS_NOT_IMPLEMENTED). */
+      FILE_BASIC_INFORMATION fbi;
+      FILE_STANDARD_INFORMATION fsi;
+
+      status = NtQueryInformationFile (h, &io, &fbi, sizeof fbi,
+				       FileBasicInformation);
+      if (NT_SUCCESS (status))
+	{
+	  memcpy (pfnoi, &fbi, 4 * sizeof (LARGE_INTEGER));
+	  if (NT_SUCCESS (NtQueryInformationFile (h, &io, &fsi,
+					 sizeof fsi,
+					 FileStandardInformation)))
+	    {
+	      pfnoi->EndOfFile.QuadPart = fsi.EndOfFile.QuadPart;
+	      pfnoi->AllocationSize.QuadPart
+		= fsi.AllocationSize.QuadPart;
+	    }
+	  else
+	    pfnoi->EndOfFile.QuadPart
+	      = pfnoi->AllocationSize.QuadPart = 0;
+	  pfnoi->FileAttributes = fbi.FileAttributes;
+	}
+    }
+  return status;
 }
 
 /* Normalize a Win32 path.
@@ -1194,7 +1313,8 @@ normalize_win32_path (const char *src, char *dst, char *&tail)
 	      while (tail > dst + 1 && tail[-1] != '\\' && tail[-2] != ':')
 		tail--;
 	      src += 2;
-	      if (isdirsep (*src))
+	      /* Skip /'s to the next path component. */
+	      while (isdirsep (*src))
 		src++;
 	    }
 	}
@@ -1235,24 +1355,28 @@ nofinalslash (const char *src, char *dst)
 /* conv_path_list: Convert a list of path names to/from Win32/POSIX. */
 
 static int
-conv_path_list (const char *src, char *dst, size_t size, int to_posix)
+conv_path_list (const char *src, char *dst, size_t size,
+		cygwin_conv_path_t what)
 {
   tmp_pathbuf tp;
   char src_delim, dst_delim;
-  cygwin_conv_path_t conv_fn;
   size_t len;
+  bool env_cvt = false;
 
-  if (to_posix)
+  if (what == (cygwin_conv_path_t) ENV_CVT)
+    {
+      what = CCP_WIN_A_TO_POSIX | CCP_RELATIVE;
+      env_cvt = true;
+    }
+  if ((what & CCP_CONVTYPE_MASK) == CCP_WIN_A_TO_POSIX)
     {
       src_delim = ';';
       dst_delim = ':';
-      conv_fn = CCP_WIN_A_TO_POSIX | CCP_RELATIVE;
     }
   else
     {
       src_delim = ':';
       dst_delim = ';';
-      conv_fn = CCP_POSIX_TO_WIN_A | CCP_RELATIVE;
     }
 
   char *srcbuf;
@@ -1267,26 +1391,44 @@ conv_path_list (const char *src, char *dst, size_t size, int to_posix)
   bool saw_empty = false;
   do
     {
-      char *s = strccpy (srcbuf, &src, src_delim);
-      size_t len = s - srcbuf;
+      char *srcpath = srcbuf;
+      char *s = strccpy (srcpath, &src, src_delim);
+      size_t len = s - srcpath;
       if (len >= NT_MAX_PATH)
 	{
 	  err = ENAMETOOLONG;
 	  break;
 	}
+      /* Paths in Win32 path lists in the environment (%Path%), are often
+	 enclosed in quotes (usually paths with spaces).  Trailing backslashes
+	 are common, too.  Remove them. */
+      if (env_cvt && len)
+	{
+	  if (*srcpath == '"')
+	    {
+	      ++srcpath;
+	      *--s = '\0';
+	      len -= 2;
+	    }
+	  while (len && s[-1] == '\\')
+	    {
+	      *--s = '\0';
+	      --len;
+	    }
+	}
       if (len)
 	{
 	  ++d;
-	  err = cygwin_conv_path (conv_fn, srcbuf, d, size - (d - dst));
+	  err = cygwin_conv_path (what, srcpath, d, size - (d - dst));
 	}
-      else if (!to_posix)
+      else if ((what & CCP_CONVTYPE_MASK) == CCP_POSIX_TO_WIN_A)
 	{
 	  ++d;
-	  err = cygwin_conv_path (conv_fn, ".", d, size - (d - dst));
+	  err = cygwin_conv_path (what, ".", d, size - (d - dst));
 	}
       else
 	{
-	  if (to_posix == ENV_CVT)
+	  if (env_cvt)
 	    saw_empty = true;
 	  continue;
 	}
@@ -1333,6 +1475,7 @@ symlink_worker (const char *oldpath, const char *newpath, bool use_winsym,
   IO_STATUS_BLOCK io;
   NTSTATUS status;
   HANDLE fh;
+  ULONG access = DELETE | FILE_GENERIC_WRITE;
   tmp_pathbuf tp;
   unsigned check_opt;
   bool mk_winsym = use_winsym;
@@ -1589,8 +1732,18 @@ symlink_worker (const char *oldpath, const char *newpath, bool use_winsym,
 	  goto done;
 	}
     }
-  status = NtCreateFile (&fh, DELETE | FILE_GENERIC_WRITE,
-			 win32_newpath.get_object_attr (attr, sa),
+  else if (!isdevice && win32_newpath.has_acls () && !win32_newpath.isremote ())
+    /* If the filesystem supports ACLs, we will overwrite the DACL after the
+       call to NtCreateFile.  This requires a handle with READ_CONTROL and
+       WRITE_DAC access, otherwise get_file_sd and set_file_sd both have to
+       open the file again.
+       FIXME: On remote NTFS shares open sometimes fails because even the
+       creator of the file doesn't have the right to change the DACL.
+       I don't know what setting that is or how to recognize such a share,
+       so for now we don't request WRITE_DAC on remote drives. */
+    access |= READ_CONTROL | WRITE_DAC;
+
+  status = NtCreateFile (&fh, access, win32_newpath.get_object_attr (attr, sa),
 			 &io, NULL, FILE_ATTRIBUTE_NORMAL,
 			 FILE_SHARE_VALID_FLAGS,
 			 isdevice ? FILE_OVERWRITE_IF : FILE_CREATE,
@@ -1628,7 +1781,7 @@ symlink_worker (const char *oldpath, const char *newpath, bool use_winsym,
   NtClose (fh);
 
 done:
-  syscall_printf ("%d = symlink_worker (%s, %s, %d, %d)", res, oldpath,
+  syscall_printf ("%d = symlink_worker(%s, %s, %d, %d)", res, oldpath,
 		  newpath, mk_winsym, isdevice);
   if (has_trailing_dirsep)
     free ((void *) newpath);
@@ -1649,56 +1802,49 @@ cmp_shortcut_header (win_shortcut_hdr *file_header)
 }
 
 int
-symlink_info::check_shortcut (HANDLE in_h)
+symlink_info::check_shortcut (HANDLE h)
 {
   tmp_pathbuf tp;
   win_shortcut_hdr *file_header;
   char *buf, *cp;
   unsigned short len;
   int res = 0;
-  UNICODE_STRING same = { 0, 0, (PWCHAR) L"" };
-  OBJECT_ATTRIBUTES attr;
   NTSTATUS status;
-  HANDLE h;
   IO_STATUS_BLOCK io;
   FILE_STANDARD_INFORMATION fsi;
+  LARGE_INTEGER off = { QuadPart:0LL };
 
-  InitializeObjectAttributes (&attr, &same, 0, in_h, NULL);
-  status = NtOpenFile (&h, FILE_READ_DATA | SYNCHRONIZE,
-		       &attr, &io, FILE_SHARE_VALID_FLAGS,
-		       FILE_OPEN_FOR_BACKUP_INTENT
-		       | FILE_SYNCHRONOUS_IO_NONALERT);
-  if (!NT_SUCCESS (status))
-    return 0;
   status = NtQueryInformationFile (h, &io, &fsi, sizeof fsi,
 				   FileStandardInformation);
   if (!NT_SUCCESS (status))
     {
       set_error (EIO);
-      goto out;
+      return 0;
     }
   if (fsi.EndOfFile.QuadPart <= sizeof (win_shortcut_hdr)
       || fsi.EndOfFile.QuadPart > 4 * 65536)
-    goto out;
+    return 0;
   if (fsi.EndOfFile.LowPart < NT_MAX_PATH * sizeof (WCHAR))
     buf = (char *) tp.w_get ();
   else
     buf = (char *) alloca (fsi.EndOfFile.LowPart + 1);
-  if (!NT_SUCCESS (NtReadFile (h, NULL, NULL, NULL,
-			       &io, buf, fsi.EndOfFile.LowPart, NULL, NULL)))
+  status = NtReadFile (h, NULL, NULL, NULL, &io, buf, fsi.EndOfFile.LowPart,
+		       &off, NULL);
+  if (!NT_SUCCESS (status))
     {
-      set_error (EIO);
-      goto out;
+      if (status != STATUS_END_OF_FILE)
+	set_error (EIO);
+      return 0;
     }
   file_header = (win_shortcut_hdr *) buf;
   if (io.Information != fsi.EndOfFile.LowPart
       || !cmp_shortcut_header (file_header))
-    goto out;
+    return 0;
   cp = buf + sizeof (win_shortcut_hdr);
   if (file_header->flags & WSH_FLAG_IDLIST) /* Skip ITEMIDLIST */
     cp += *(unsigned short *) cp + 2;
   if (!(len = *(unsigned short *) cp))
-    goto out;
+    return 0;
   cp += 2;
   /* Check if this is a device file - these start with the sequence :\\ */
   if (strncmp (cp, ":\\", 2) == 0)
@@ -1718,11 +1864,11 @@ symlink_info::check_shortcut (HANDLE in_h)
 	  char *tmpbuf = tp.c_get ();
 	  if (sys_wcstombs (tmpbuf, NT_MAX_PATH, (PWCHAR) (cp + 2))
 	      > SYMLINK_MAX + 1)
-	    goto out;
+	    return 0;
 	  res = posixify (tmpbuf);
 	}
       else if (len > SYMLINK_MAX)
-	goto out;
+	return 0;
       else
 	{
 	  cp[len] = '\0';
@@ -1730,47 +1876,37 @@ symlink_info::check_shortcut (HANDLE in_h)
 	}
     }
   if (res) /* It's a symlink.  */
-    pflags = PATH_SYMLINK | PATH_LNK;
-
-out:
-  NtClose (h);
+    pflags |= PATH_SYMLINK | PATH_LNK;
   return res;
 }
 
 int
-symlink_info::check_sysfile (HANDLE in_h)
+symlink_info::check_sysfile (HANDLE h)
 {
   tmp_pathbuf tp;
   char cookie_buf[sizeof (SYMLINK_COOKIE) - 1];
   char *srcbuf = tp.c_get ();
   int res = 0;
-  UNICODE_STRING same = { 0, 0, (PWCHAR) L"" };
-  OBJECT_ATTRIBUTES attr;
   NTSTATUS status;
-  HANDLE h;
   IO_STATUS_BLOCK io;
   bool interix_symlink = false;
+  LARGE_INTEGER off = { QuadPart:0LL };
 
-  InitializeObjectAttributes (&attr, &same, 0, in_h, NULL);
-  status = NtOpenFile (&h, FILE_READ_DATA | SYNCHRONIZE,
-		       &attr, &io, FILE_SHARE_VALID_FLAGS,
-		       FILE_OPEN_FOR_BACKUP_INTENT
-		       | FILE_SYNCHRONOUS_IO_NONALERT);
+  status = NtReadFile (h, NULL, NULL, NULL, &io, cookie_buf,
+		       sizeof (cookie_buf), &off, NULL);
   if (!NT_SUCCESS (status))
-    ;
-  else if (!NT_SUCCESS (status = NtReadFile (h, NULL, NULL, NULL, &io,
-					     cookie_buf, sizeof (cookie_buf),
-					     NULL, NULL)))
     {
-      debug_printf ("ReadFile1 failed");
+      debug_printf ("ReadFile1 failed %p", status);
       if (status != STATUS_END_OF_FILE)
 	set_error (EIO);
+      return 0;
     }
-  else if (io.Information == sizeof (cookie_buf)
+  off.QuadPart = io.Information;
+  if (io.Information == sizeof (cookie_buf)
 	   && memcmp (cookie_buf, SYMLINK_COOKIE, sizeof (cookie_buf)) == 0)
     {
       /* It's a symlink.  */
-      pflags = PATH_SYMLINK;
+      pflags |= PATH_SYMLINK;
     }
   else if (io.Information == sizeof (cookie_buf)
 	   && memcmp (cookie_buf, SOCKET_COOKIE, sizeof (cookie_buf)) == 0)
@@ -1780,19 +1916,17 @@ symlink_info::check_sysfile (HANDLE in_h)
 		      sizeof (INTERIX_SYMLINK_COOKIE) - 1) == 0)
     {
       /* It's an Interix symlink.  */
-      pflags = PATH_SYMLINK;
+      pflags |= PATH_SYMLINK;
       interix_symlink = true;
       /* Interix symlink cookies are shorter than Cygwin symlink cookies, so
-         in case of an Interix symlink cooky we have read too far into the
+	 in case of an Interix symlink cooky we have read too far into the
 	 file.  Set file pointer back to the position right after the cookie. */
-      FILE_POSITION_INFORMATION fpi;
-      fpi.CurrentByteOffset.QuadPart = sizeof (INTERIX_SYMLINK_COOKIE) - 1;
-      NtSetInformationFile (h, &io, &fpi, sizeof fpi, FilePositionInformation);
+      off.QuadPart = sizeof (INTERIX_SYMLINK_COOKIE) - 1;
     }
-  if (pflags == PATH_SYMLINK)
+  if (pflags & PATH_SYMLINK)
     {
       status = NtReadFile (h, NULL, NULL, NULL, &io, srcbuf,
-			   NT_MAX_PATH, NULL, NULL);
+			   NT_MAX_PATH, &off, NULL);
       if (!NT_SUCCESS (status))
 	{
 	  debug_printf ("ReadFile2 failed");
@@ -1820,12 +1954,11 @@ symlink_info::check_sysfile (HANDLE in_h)
       else
 	res = posixify (srcbuf);
     }
-  NtClose (h);
   return res;
 }
 
 int
-symlink_info::check_reparse_point (HANDLE h)
+symlink_info::check_reparse_point (HANDLE h, bool remote)
 {
   tmp_pathbuf tp;
   NTSTATUS status;
@@ -1834,9 +1967,20 @@ symlink_info::check_reparse_point (HANDLE h)
   UNICODE_STRING subst;
   char srcbuf[SYMLINK_MAX + 7];
 
-  status = NtFsControlFile (h, NULL, NULL, NULL, &io, FSCTL_GET_REPARSE_POINT,
-			    NULL, 0, (LPVOID) rp,
+  /* On remote drives or under heavy load, NtFsControlFile can return with
+     STATUS_PENDING.  If so, instead of creating an event object, just set
+     io.Status to an invalid value and perform a minimal wait until io.Status
+     changed. */
+  memset (&io, 0xff, sizeof io);
+  status = NtFsControlFile (h, NULL, NULL, NULL, &io,
+			    FSCTL_GET_REPARSE_POINT, NULL, 0, (LPVOID) rp,
 			    MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
+  if (status == STATUS_PENDING)
+    {
+      while (io.Status == (NTSTATUS) 0xffffffff)
+      	Sleep (1L);
+      status = io.Status;
+    }
   if (!NT_SUCCESS (status))
     {
       debug_printf ("NtFsControlFile(FSCTL_GET_REPARSE_POINT) failed, %p",
@@ -1845,13 +1989,22 @@ symlink_info::check_reparse_point (HANDLE h)
       return 0;
     }
   if (rp->ReparseTag == IO_REPARSE_TAG_SYMLINK)
+    /* Windows evaluates native symlink literally.  If a remote symlink points
+       to, say, C:\foo, it will be handled as if the target is the local file
+       C:\foo.  That comes in handy since that's how symlinks are treated under
+       POSIX as well. */
     RtlInitCountedUnicodeString (&subst,
 		  (WCHAR *)((char *)rp->SymbolicLinkReparseBuffer.PathBuffer
 			+ rp->SymbolicLinkReparseBuffer.SubstituteNameOffset),
 		  rp->SymbolicLinkReparseBuffer.SubstituteNameLength);
-  else if (rp->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT)
+  else if (!remote && rp->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT)
     {
-      RtlInitCountedUnicodeString (&subst, 
+      /* Don't handle junctions on remote filesystems as symlinks.  This type
+	 of reparse point is handled transparently by the OS so that the
+	 target of the junction is the remote directory it is supposed to
+	 point to.  If we handle it as symlink, it will be mistreated as
+	 pointing to a dir on the local system. */
+      RtlInitCountedUnicodeString (&subst,
 		  (WCHAR *)((char *)rp->MountPointReparseBuffer.PathBuffer
 			  + rp->MountPointReparseBuffer.SubstituteNameOffset),
 		  rp->MountPointReparseBuffer.SubstituteNameLength);
@@ -1865,16 +2018,16 @@ symlink_info::check_reparse_point (HANDLE h)
     }
   else
     {
-      /* Maybe it's a reparse point, but it's certainly not one we
-	 recognize.  Drop the REPARSE file attribute so we don't even
-	 try to use the flag for some special handling.  It's just some
-	 arbitrary file or directory for us. */
+      /* Maybe it's a reparse point, but it's certainly not one we recognize.
+	 Drop REPARSE attribute so we don't try to use the flag accidentally.
+	 It's just some arbitrary file or directory for us. */
       fileattr &= ~FILE_ATTRIBUTE_REPARSE_POINT;
       return 0;
     }
   sys_wcstombs (srcbuf, SYMLINK_MAX + 7, subst.Buffer,
 		subst.Length / sizeof (WCHAR));
-  pflags = PATH_SYMLINK | PATH_REP;
+  pflags |= PATH_SYMLINK | PATH_REP;
+  /* A symlink is never a directory. */
   fileattr &= ~FILE_ATTRIBUTE_DIRECTORY;
   return posixify (srcbuf);
 }
@@ -1905,8 +2058,8 @@ symlink_info::check_nfs_symlink (HANDLE h)
       PWCHAR spath = (PWCHAR)
 		     (pffei->EaName + pffei->EaNameLength + 1);
       res = sys_wcstombs (contents, SYMLINK_MAX + 1,
-		      spath, pffei->EaValueLength);
-      pflags = PATH_SYMLINK;
+			  spath, pffei->EaValueLength) - 1;
+      pflags |= PATH_SYMLINK;
     }
   return res;
 }
@@ -1928,7 +2081,7 @@ symlink_info::posixify (char *srcbuf)
      A path starting with two slashes(!) or backslashes is converted into an
      NT UNC path.  Unfortunately, in contrast to POSIX rules, paths starting
      with three or more (back)slashes are also converted into UNC paths,
-     just incorrectly sticking to one redundant leading backslashe.  We go
+     just incorrectly sticking to one redundant leading backslash.  We go
      along with this behaviour to avoid scenarios in which native tools access
      other files than Cygwin.
      The above rules are used exactly the same way on Cygwin specific symlinks
@@ -2158,46 +2311,53 @@ symlink_info::parse_device (const char *contents)
    stored into BUF if PATH is a symlink.  */
 
 int
-symlink_info::check (char *path, const suffix_info *suffixes, unsigned opt,
-		     fs_info &fs)
+symlink_info::check (char *path, const suffix_info *suffixes, fs_info &fs,
+		     path_conv_handle &conv_hdl)
 {
-  HANDLE h = NULL;
-  int res = 0;
+  int res;
+  HANDLE h;
+  NTSTATUS status;
+  UNICODE_STRING upath;
+  OBJECT_ATTRIBUTES attr;
+  IO_STATUS_BLOCK io;
   suffix_scan suffix;
-  contents[0] = '\0';
 
+  const ULONG ci_flag = cygwin_shared->obcaseinsensitive
+			|| (pflags & PATH_NOPOSIX) ? OBJ_CASE_INSENSITIVE : 0;
+  /* TODO: Temporarily do all char->UNICODE conversion here.  This should
+     already be slightly faster than using Ascii functions. */
+  tmp_pathbuf tp;
+  tp.u_get (&upath);
+  InitializeObjectAttributes (&attr, &upath, ci_flag, NULL, NULL);
+
+  /* This label is used in case we encounter a FS which only handles
+     DOS paths.  See below. */
+  bool restarted = false;
+restart:
+
+  h = NULL;
+  res = 0;
+  contents[0] = '\0';
   issymlink = true;
   isdevice = false;
-  ext_here = suffix.has (path, suffixes);
-  extn = ext_here - path;
   major = 0;
   minor = 0;
   mode = 0;
   pflags &= ~(PATH_SYMLINK | PATH_LNK | PATH_REP);
-  ULONG ci_flag = cygwin_shared->obcaseinsensitive || (pflags & PATH_NOPOSIX)
-		  ? OBJ_CASE_INSENSITIVE : 0;
 
-  /* TODO: Temporarily do all char->UNICODE conversion here.  This should
-     already be slightly faster than using Ascii functions. */
-  tmp_pathbuf tp;
-  UNICODE_STRING upath;
-  OBJECT_ATTRIBUTES attr;
-  tp.u_get (&upath);
-  InitializeObjectAttributes (&attr, &upath, ci_flag, NULL, NULL);
+  ext_here = suffix.has (path, suffixes);
+  extn = ext_here - path;
 
   PVOID eabuf = &nfs_aol_ffei;
   ULONG easize = sizeof nfs_aol_ffei;
 
+  bool had_ext = !!*ext_here;
   while (suffix.next ())
     {
-      FILE_BASIC_INFORMATION fbi;
-      NTSTATUS status;
-      IO_STATUS_BLOCK io;
       bool no_ea = false;
-      bool fs_update_called = false;
 
       error = 0;
-      get_nt_native_path (suffix.path, upath);
+      get_nt_native_path (suffix.path, upath, pflags & PATH_DOS);
       if (h)
 	{
 	  NtClose (h);
@@ -2215,12 +2375,16 @@ symlink_info::check (char *path, const suffix_info *suffixes, unsigned opt,
 			     FILE_OPEN_REPARSE_POINT
 			     | FILE_OPEN_FOR_BACKUP_INTENT,
 			     eabuf, easize);
+      debug_printf ("%p = NtCreateFile (%S)", status, &upath);
       /* No right to access EAs or EAs not supported? */
-      if (status == STATUS_ACCESS_DENIED || status == STATUS_EAS_NOT_SUPPORTED
-	  || status == STATUS_NOT_SUPPORTED
-	  /* Or a bug in Samba 3.2.x (x <= 7) when accessing a share's root dir
-	     which has EAs enabled? */
-	  || status == STATUS_INVALID_PARAMETER)
+      if (!NT_SUCCESS (status)
+	  && (status == STATUS_ACCESS_DENIED
+	      || status == STATUS_EAS_NOT_SUPPORTED
+	      || status == STATUS_NOT_SUPPORTED
+	      || status == STATUS_INVALID_NETWORK_RESPONSE
+	      /* Or a bug in Samba 3.2.x (x <= 7) when accessing a share's
+		 root dir which has EAs enabled? */
+	      || status == STATUS_INVALID_PARAMETER))
 	{
 	  no_ea = true;
 	  /* If EAs are not supported, there's no sense to check them again
@@ -2235,47 +2399,98 @@ symlink_info::check (char *path, const suffix_info *suffixes, unsigned opt,
 			       &attr, &io, FILE_SHARE_VALID_FLAGS,
 			       FILE_OPEN_REPARSE_POINT
 			       | FILE_OPEN_FOR_BACKUP_INTENT);
+	  debug_printf ("%p = NtOpenFile (no-EAs %S)", status, &upath);
 	}
-      if (status == STATUS_OBJECT_NAME_NOT_FOUND && ci_flag == 0
-	  && wincap.has_broken_udf ())
-        {
-	  /* On NT 5.x UDF is broken (at least) in terms of case sensitivity.
-	     When trying to open a file case sensitive, the file appears to be
-	     non-existant.  Another bug is described in fs_info::update. */
-	  attr.Attributes = OBJ_CASE_INSENSITIVE;
-	  status = NtOpenFile (&h, READ_CONTROL | FILE_READ_ATTRIBUTES,
-			       &attr, &io, FILE_SHARE_VALID_FLAGS,
-			       FILE_OPEN_REPARSE_POINT
-			       | FILE_OPEN_FOR_BACKUP_INTENT);
-	  attr.Attributes = 0;
-	  if (NT_SUCCESS (status))
+      if (status == STATUS_OBJECT_NAME_NOT_FOUND)
+	{
+	  if (ci_flag == 0 && wincap.has_broken_udf ()
+	      && (!fs.inited () || fs.is_udf ()))
 	    {
-	      fs.update (&upath, h);
-	      if (fs.is_udf ())
-		fs_update_called = true;
-	      else
-	      	{
-		  NtClose (h);
-		  status = STATUS_OBJECT_NAME_NOT_FOUND;
+	      /* On NT 5.x UDF is broken (at least) in terms of case
+		 sensitivity.  When trying to open a file case sensitive,
+		 the file appears to be non-existant.  Another bug is
+		 described in fs_info::update. */
+	      attr.Attributes = OBJ_CASE_INSENSITIVE;
+	      status = NtOpenFile (&h, READ_CONTROL | FILE_READ_ATTRIBUTES,
+				   &attr, &io, FILE_SHARE_VALID_FLAGS,
+				   FILE_OPEN_REPARSE_POINT
+				   | FILE_OPEN_FOR_BACKUP_INTENT);
+	      debug_printf ("%p = NtOpenFile (broken-UDF, %S)", status, &upath);
+	      attr.Attributes = 0;
+	      if (NT_SUCCESS (status))
+		{
+		  if (!fs.inited ())
+		    fs.update (&upath, h);
+		  if (!fs.is_udf ())
+		    {
+		      NtClose (h);
+		      h = NULL;
+		      status = STATUS_OBJECT_NAME_NOT_FOUND;
+		    }
+		}
+	    }
+	  /* There are filesystems out in the wild (Netapp, NWFS, and others)
+	     which are uncapable of generating pathnames outside the Win32
+	     rules.  That means, filenames on these FSes must not have a
+	     leading space or trailing dots and spaces.  This code snippet
+	     manages them.  I really hope it's streamlined enough not to
+	     slow down normal operation.  This extra check only kicks in if
+	     we encountered a STATUS_OBJECT_NAME_NOT_FOUND *and* we didn't
+	     already attach a suffix *and* the above special case for UDF
+	     on XP didn't succeeed. */
+	  if (!restarted && !*ext_here && !(pflags & PATH_DOS) && !fs.inited ())
+	    {
+	      /* Check for trailing dot or space or leading space in
+		 last component. */
+	      char *p = ext_here - 1;
+	      if (*p != '.' && *p != ' ')
+		{
+		  while (*--p != '\\')
+		    ;
+		  if (*++p != ' ')
+		    p = NULL;
+		}
+	      if (p)
+		{
+		  /* If so, check if file resides on one of the known broken
+		     FSes only supporting filenames following DOS rules. */
+		  if (!fs.inited ())
+		    fs.update (&upath, NULL);
+		  if (fs.has_dos_filenames_only ())
+		    {
+		      /* If so, try again.  Since we now know the FS, the
+			 filenames will be tweaked to follow DOS rules via the
+			 third parameter in the call to get_nt_native_path. */
+		      pflags |= PATH_DOS;
+		      restarted = true;
+		      goto restart;
+		    }
 		}
 	    }
 	}
 
-      /* Check file system while we're having the file open anyway.
-	 This speeds up path_conv noticably (~10%). */
-      if (!fs_update_called)
-	fs.update (&upath, h);
-
       if (NT_SUCCESS (status)
-	  && NT_SUCCESS (status = fs.has_buggy_basic_info ()
-			 ? NtQueryAttributesFile (&attr, &fbi)
-			 : NtQueryInformationFile (h, &io, &fbi, sizeof fbi,
-						   FileBasicInformation)))
-	fileattr = fbi.FileAttributes;
-      else
+	  /* Check file system while we're having the file open anyway.
+	     This speeds up path_conv noticably (~10%). */
+	  && (fs.inited () || fs.update (&upath, h)))
+	{
+	  if (fs.is_nfs ())
+	    {
+	      status = nfs_fetch_fattr3 (h, conv_hdl.nfsattr ());
+	      if (NT_SUCCESS (status))
+		fileattr = ((conv_hdl.nfsattr ()->type & 7) == NF3DIR)
+			    ? FILE_ATTRIBUTE_DIRECTORY : 0;
+	    }
+	  else
+	    {
+	      status = file_get_fnoi (h, fs.is_netapp (), conv_hdl.fnoi ());
+	      if (NT_SUCCESS (status))
+		fileattr = conv_hdl.fnoi ()->FileAttributes;
+	    }
+	}
+      if (!NT_SUCCESS (status))
 	{
 	  debug_printf ("%p = NtQueryInformationFile (%S)", status, &upath);
-	  h = NULL;
 	  fileattr = INVALID_FILE_ATTRIBUTES;
 
 	  /* One of the inner path components is invalid, or the path contains
@@ -2290,6 +2505,8 @@ symlink_info::check (char *path, const suffix_info *suffixes, unsigned opt,
 	     not tested here unless proved necessary. */
 	  if (status == STATUS_OBJECT_PATH_NOT_FOUND
 	      || status == STATUS_OBJECT_NAME_INVALID
+	      || status == STATUS_BAD_NETWORK_PATH
+	      || status == STATUS_BAD_NETWORK_NAME
 	      || status == STATUS_NO_MEDIA_IN_DEVICE)
 	    {
 	      set_error (ENOENT);
@@ -2306,7 +2523,7 @@ symlink_info::check (char *path, const suffix_info *suffixes, unsigned opt,
 	      OBJECT_ATTRIBUTES dattr;
 	      HANDLE dir;
 	      struct {
-		FILE_DIRECTORY_INFORMATION fdi;
+		FILE_BOTH_DIRECTORY_INFORMATION fdi;
 		WCHAR dummy_buf[NAME_MAX + 1];
 	      } fdi_buf;
 
@@ -2332,11 +2549,11 @@ symlink_info::check (char *path, const suffix_info *suffixes, unsigned opt,
 		{
 		  status = NtQueryDirectoryFile (dir, NULL, NULL, NULL, &io,
 						 &fdi_buf, sizeof fdi_buf,
-						 FileDirectoryInformation,
+						 FileBothDirectoryInformation,
 						 TRUE, &basename, TRUE);
 		  /* Take the opportunity to check file system while we're
 		     having the handle to the parent dir. */
-		  fs.update (&upath, h);
+		  fs.update (&upath, dir);
 		  NtClose (dir);
 		  if (!NT_SUCCESS (status))
 		    {
@@ -2357,7 +2574,20 @@ symlink_info::check (char *path, const suffix_info *suffixes, unsigned opt,
 		      fileattr = 0;
 		    }
 		  else
-		    fileattr = fdi_buf.fdi.FileAttributes;
+		    {
+		      PFILE_NETWORK_OPEN_INFORMATION pfnoi = conv_hdl.fnoi ();
+
+		      fileattr = fdi_buf.fdi.FileAttributes;
+		      memcpy (pfnoi, &fdi_buf.fdi.CreationTime, sizeof *pfnoi);
+		      /* Amazing, but true:  The FILE_NETWORK_OPEN_INFORMATION
+			 structure has the AllocationSize and EndOfFile members
+			 interchanged relative to the directory information
+			 classes. */
+		      pfnoi->AllocationSize.QuadPart
+			= fdi_buf.fdi.AllocationSize.QuadPart;
+		      pfnoi->EndOfFile.QuadPart
+			= fdi_buf.fdi.EndOfFile.QuadPart;
+		    }
 		}
 	      ext_tacked_on = !!*ext_here;
 	      goto file_not_symlink;
@@ -2367,19 +2597,71 @@ symlink_info::check (char *path, const suffix_info *suffixes, unsigned opt,
 	}
 
       ext_tacked_on = !!*ext_here;
+      /* Don't allow to returns directories with appended suffix.  If we found
+	 a directory with a suffix which has been appended here, then this
+	 directory doesn't match the request.  So, just do as usual if file
+	 hasn't been found. */
+      if (ext_tacked_on && !had_ext && (fileattr & FILE_ATTRIBUTE_DIRECTORY))
+	{
+	  set_error (ENOENT);
+	  continue;
+	}
 
       res = -1;
 
+      /* Reparse points are potentially symlinks.  This check must be
+	 performed before checking the SYSTEM attribute for sysfile
+	 symlinks, since reparse points can have this flag set, too.
+	 For instance, Vista starts to create a couple of reparse points
+	 with SYSTEM and HIDDEN flags set. */
+      if ((fileattr & FILE_ATTRIBUTE_REPARSE_POINT))
+	{
+	  res = check_reparse_point (h, fs.is_remote_drive ());
+	  if (res == -1)
+	    {
+	      /* Volume mount point.  The filesystem information for the top
+		 level directory should be for the volume top level directory,
+		 rather than for the reparse point itself.  So we fetch the
+		 filesystem information again, but with a NULL handle.
+		 This does what we want because fs_info::update opens the
+		 handle without FILE_OPEN_REPARSE_POINT. */
+	      fs.update (&upath, NULL);
+	      /* Make sure the open handle is not used in later stat calls.
+		 The handle has been opened with the FILE_OPEN_REPARSE_POINT
+		 flag, so it's a handle to the reparse point, not a handle
+		 to the volumes root dir. */
+	      pflags &= ~PC_KEEP_HANDLE;
+	    }
+	  else if (res)
+	    {
+	      /* A symlink is never a directory. */
+	      conv_hdl.fnoi ()->FileAttributes &= ~FILE_ATTRIBUTE_DIRECTORY;
+	      break;
+	    }
+	}
+
       /* Windows shortcuts are potentially treated as symlinks.  Valid Cygwin
 	 & U/WIN shortcuts are R/O, but definitely not directories. */
-      if ((fileattr & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_DIRECTORY))
+      else if ((fileattr & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_DIRECTORY))
 	  == FILE_ATTRIBUTE_READONLY && suffix.lnk_match ())
 	{
-	  res = check_shortcut (h);
+	  HANDLE sym_h;
+
+	  status = NtOpenFile (&sym_h, SYNCHRONIZE | GENERIC_READ, &attr, &io,
+			       FILE_SHARE_VALID_FLAGS,
+			       FILE_OPEN_FOR_BACKUP_INTENT
+			       | FILE_SYNCHRONOUS_IO_NONALERT);
+	  if (!NT_SUCCESS (status))
+	    res = 0;
+	  else
+	    {
+	      res = check_shortcut (sym_h);
+	      NtClose (sym_h);
+	    }
 	  if (!res)
 	    {
-	      /* If searching for `foo' and then finding a `foo.lnk' which is
-		 no shortcut, return the same as if file not found. */
+	      /* If searching for `foo' and then finding a `foo.lnk' which
+		 is no shortcut, return the same as if file not found. */
 	      if (ext_tacked_on)
 		{
 		  fileattr = INVALID_FILE_ATTRIBUTES;
@@ -2395,32 +2677,10 @@ symlink_info::check (char *path, const suffix_info *suffixes, unsigned opt,
       /* If searching for `foo' and then finding a `foo.lnk' which is
 	 no shortcut, return the same as if file not found. */
       else if (suffix.lnk_match () && ext_tacked_on)
-        {
+	{
 	  fileattr = INVALID_FILE_ATTRIBUTES;
 	  set_error (ENOENT);
 	  continue;
-	}
-
-      /* Reparse points are potentially symlinks.  This check must be
-	 performed before checking the SYSTEM attribute for sysfile
-	 symlinks, since reparse points can have this flag set, too.
-	 For instance, Vista starts to create a couple of reparse points
-	 with SYSTEM and HIDDEN flags set. */
-      else if (fileattr & FILE_ATTRIBUTE_REPARSE_POINT)
-	{
-	  res = check_reparse_point (h);
-	  if (res == -1)
-	    {
-	      /* Volume mount point.  The filesystem information for the top
-		 level directory should be for the volume top level directory
-		 itself, rather than for the reparse point itself.  So we
-		 fetch the filesystem information again, but with a NULL
-		 handle.  This does what we want because fs_info::update opens
-		 the handle without FILE_OPEN_REPARSE_POINT. */
-	      fs.update (&upath, NULL);
-	    }
-	  else if (res)
-	    break;
 	}
 
       /* This is the old Cygwin method creating symlinks.  A symlink will
@@ -2429,15 +2689,28 @@ symlink_info::check (char *path, const suffix_info *suffixes, unsigned opt,
       else if ((fileattr & (FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_DIRECTORY))
 	       == FILE_ATTRIBUTE_SYSTEM)
 	{
-	  res = check_sysfile (h);
+	  HANDLE sym_h;
+
+	  status = NtOpenFile (&sym_h, SYNCHRONIZE | GENERIC_READ, &attr, &io,
+			       FILE_SHARE_VALID_FLAGS,
+			       FILE_OPEN_FOR_BACKUP_INTENT
+			       | FILE_SYNCHRONOUS_IO_NONALERT);
+
+	  if (!NT_SUCCESS (status))
+	    res = 0;
+	  else
+	    {
+	      res = check_sysfile (sym_h);
+	      NtClose (sym_h);
+	    }
 	  if (res)
 	    break;
 	}
 
-      /* If the file could be opened with FILE_READ_EA, and if it's on a
-	 NFS share, check if it's a symlink.  Only files can be symlinks
+      /* If the file is on an NFS share and could be opened with extended
+	 attributes, check if it's a symlink.  Only files can be symlinks
 	 (which can be symlinks to directories). */
-      else if (fs.is_nfs () && !no_ea && !(fileattr & FILE_ATTRIBUTE_DIRECTORY))
+      else if (fs.is_nfs () && (conv_hdl.nfsattr ()->type & 7) == NF3LNK)
 	{
 	  res = check_nfs_symlink (h);
 	  if (res)
@@ -2453,9 +2726,14 @@ symlink_info::check (char *path, const suffix_info *suffixes, unsigned opt,
     }
 
   if (h)
-    NtClose (h);
+    {
+      if (pflags & PC_KEEP_HANDLE)
+	conv_hdl.set (h);
+      else
+	NtClose (h);
+    }
 
-  syscall_printf ("%d = symlink.check (%s, %p) (%p)",
+  syscall_printf ("%d = symlink.check(%s, %p) (%p)",
 		  res, suffix.path, contents, pflags);
   return res;
 }
@@ -2577,6 +2855,26 @@ getwd (char *buf)
   return getcwd (buf, PATH_MAX + 1);  /*Per SuSv3!*/
 }
 
+extern "C" char *
+get_current_dir_name (void)
+{
+  const char *pwd = getenv ("PWD");
+  char *cwd = getcwd (NULL, 0);
+  struct __stat64 pwdbuf, cwdbuf;
+
+  if (pwd && strcmp (pwd, cwd) != 0
+      && stat64 (pwd, &pwdbuf) == 0
+      && stat64 (cwd, &cwdbuf) == 0
+      && pwdbuf.st_dev == cwdbuf.st_dev
+      && pwdbuf.st_ino == cwdbuf.st_ino)
+    {
+      cwd = (char *) realloc (cwd, strlen (pwd) + 1);
+      strcpy (cwd, pwd);
+    }
+
+  return cwd;
+}
+
 /* chdir: POSIX 5.2.1.1 */
 extern "C" int
 chdir (const char *in_dir)
@@ -2603,7 +2901,6 @@ chdir (const char *in_dir)
     }
 
   int res = -1;
-  bool doit = false;
   const char *posix_cwd = NULL;
   int devn = path.get_devn ();
   if (!path.exists ())
@@ -2620,7 +2917,6 @@ chdir (const char *in_dir)
       if (!isdrive(path.normalized_path))
 	posix_cwd = path.normalized_path;
       res = 0;
-      doit = true;
     }
   else
    {
@@ -2629,11 +2925,11 @@ chdir (const char *in_dir)
    }
 
   if (!res)
-    res = cygheap->cwd.set (path.get_nt_native_path (), posix_cwd, doit);
+    res = cygheap->cwd.set (&path, posix_cwd);
 
   /* Note that we're accessing cwd.posix without a lock here.  I didn't think
      it was worth locking just for strace. */
-  syscall_printf ("%d = chdir() cygheap->cwd.posix '%s' native '%S'", res,
+  syscall_printf ("%R = chdir() cygheap->cwd.posix '%s' native '%S'", res,
 		  cygheap->cwd.get_posix (), path.get_nt_native_path ());
   MALLOC_CHECK;
   return res;
@@ -2649,7 +2945,7 @@ fchdir (int fd)
   else
     res = -1;
 
-  syscall_printf ("%d = fchdir (%d)", res, fd);
+  syscall_printf ("%R = fchdir(%d)", res, fd);
   return res;
 }
 
@@ -2679,22 +2975,24 @@ cygwin_conv_path (cygwin_conv_path_t what, const void *from, void *to,
   path_conv p;
   size_t lsiz = 0;
   char *buf = NULL;
+  PWCHAR path = NULL;
   int error = 0;
   bool relative = !!(what & CCP_RELATIVE);
-  what &= ~CCP_RELATIVE;
+  what &= CCP_CONVTYPE_MASK;
 
   switch (what)
     {
     case CCP_POSIX_TO_WIN_A:
       {
 	p.check ((const char *) from,
-		 PC_POSIX | PC_SYM_FOLLOW | PC_NO_ACCESS_CHECK | PC_NOWARN
-		 | (relative ? PC_NOFULL : 0));
+		 PC_POSIX | PC_SYM_FOLLOW | PC_SYM_NOFOLLOW_REP
+		 | PC_NO_ACCESS_CHECK | PC_NOWARN | (relative ? PC_NOFULL : 0));
 	if (p.error)
 	  return_with_errno (p.error);
 	PUNICODE_STRING up = p.get_nt_native_path ();
 	buf = tp.c_get ();
-	sys_wcstombs (buf, NT_MAX_PATH, up->Buffer, up->Length / sizeof (WCHAR));
+	sys_wcstombs (buf, NT_MAX_PATH,
+		      up->Buffer, up->Length / sizeof (WCHAR));
 	/* Convert native path to standard DOS path. */
 	if (!strncmp (buf, "\\??\\", 4))
 	  {
@@ -2702,23 +3000,34 @@ cygwin_conv_path (cygwin_conv_path_t what, const void *from, void *to,
 	    if (buf[1] != ':') /* native UNC path */
 	      *(buf += 2) = '\\';
 	  }
+	else if (*buf == '\\')
+	  {
+	    /* Device name points to somewhere else in the NT namespace.
+	       Use GLOBALROOT prefix to convert to Win32 path. */
+	    char *p = buf + sys_wcstombs (buf, NT_MAX_PATH,
+					  ro_u_globalroot.Buffer,
+					  ro_u_globalroot.Length
+					  / sizeof (WCHAR));
+	    sys_wcstombs (p, NT_MAX_PATH - (p - buf),
+			  up->Buffer, up->Length / sizeof (WCHAR));
+	  }
 	lsiz = strlen (buf) + 1;
 	/* TODO: Incoming "." is a special case which leads to a trailing
 	   backslash ".\\" in the Win32 path.  That's a result of the
 	   conversion in normalize_posix_path.  This should not occur
 	   so the below code is just a band-aid. */
-	if (!strcmp ((const char *) from, ".") && relative
+	if (relative && !strcmp ((const char *) from, ".")
 	    && !strcmp (buf, ".\\"))
 	  {
-	    --lsiz;
-	    buf[lsiz - 1] = '\0';
+	    lsiz = 2;
+	    buf[1] = '\0';
 	  }
       }
       break;
     case CCP_POSIX_TO_WIN_W:
-      p.check ((const char *) from, PC_POSIX | PC_SYM_FOLLOW
-				    | PC_NO_ACCESS_CHECK | PC_NOWARN
-				    | (relative ? PC_NOFULL : 0));
+      p.check ((const char *) from,
+	       PC_POSIX | PC_SYM_FOLLOW | PC_SYM_NOFOLLOW_REP
+	       | PC_NO_ACCESS_CHECK | PC_NOWARN | (relative ? PC_NOFULL : 0));
       if (p.error)
 	return_with_errno (p.error);
       /* Relative Windows paths are always restricted to MAX_PATH chars. */
@@ -2732,13 +3041,42 @@ cygwin_conv_path (cygwin_conv_path_t what, const void *from, void *to,
 	    return_with_errno (p.error);
 	}
       lsiz = p.get_wide_win32_path_len () + 1;
+      path = p.get_nt_native_path ()->Buffer;
+
+      /* Convert native path to standard DOS path. */
+      if (!wcsncmp (path, L"\\??\\", 4))
+	{
+	  path[1] = L'\\';
+
+	  /* Drop long path prefix for short pathnames.  Unfortunately there's
+	     quite a bunch of Win32 functions, especially in user32.dll,
+	     apparently, which don't grok long path names at all, not even
+	     in the UNICODE API. */
+	  if ((path[5] == L':' && lsiz <= MAX_PATH + 4)
+	      || (!wcsncmp (path + 4, L"UNC\\", 4) && lsiz <= MAX_PATH + 6))
+	    {
+	      path += 4;
+	      lsiz -= 4;
+	      if (path[1] != L':')
+		{
+		  *(path += 2) = '\\';
+		  lsiz -= 2;
+		}
+	    }
+	}
+      else if (*path == L'\\')
+	{
+	  /* Device name points to somewhere else in the NT namespace.
+	     Use GLOBALROOT prefix to convert to Win32 path. */
+	  to = (void *) wcpcpy ((wchar_t *) to, ro_u_globalroot.Buffer);
+	  lsiz += ro_u_globalroot.Length / sizeof (WCHAR);
+	}
       /* TODO: Same ".\\" band-aid as in CCP_POSIX_TO_WIN_A case. */
-      if (!strcmp ((const char *) from, ".") && relative
-	  && !wcscmp (p.get_nt_native_path ()->Buffer, L".\\"))
-      	{
-	  --lsiz;
-	  p.get_nt_native_path ()->Length -= sizeof (WCHAR);
-	  p.get_nt_native_path ()->Buffer[lsiz - 1] = L'\0';
+      if (relative && !strcmp ((const char *) from, ".")
+	  && !wcscmp (path, L".\\"))
+	{
+	  lsiz = 2;
+	  path[1] = L'\0';
 	}
       lsiz *= sizeof (WCHAR);
       break;
@@ -2774,10 +3112,10 @@ cygwin_conv_path (cygwin_conv_path_t what, const void *from, void *to,
     case CCP_POSIX_TO_WIN_A:
     case CCP_WIN_A_TO_POSIX:
     case CCP_WIN_W_TO_POSIX:
-      strcpy ((char *) to, buf);
+      stpcpy ((char *) to, buf);
       break;
     case CCP_POSIX_TO_WIN_W:
-      p.get_wide_win32_path ((PWCHAR) to);
+      wcpcpy ((PWCHAR) to, path);
       break;
     }
   return 0;
@@ -2789,11 +3127,14 @@ cygwin_create_path (cygwin_conv_path_t what, const void *from)
   void *to;
   ssize_t size = cygwin_conv_path (what, from, NULL, 0);
   if (size <= 0)
-    return NULL;
-  if (!(to = malloc (size)))
-    return NULL;
+    to = NULL;
+  else if (!(to = malloc (size)))
+    to = NULL;
   if (cygwin_conv_path (what, from, to, size) == -1)
-    return NULL;
+    {
+      free (to);
+      to = NULL;
+    }
   return to;
 }
 
@@ -2984,35 +3325,63 @@ env_PATH_to_posix (const void *win32, void *posix, size_t size)
 extern "C" int
 cygwin_win32_to_posix_path_list (const char *win32, char *posix)
 {
-  return_with_errno (conv_path_list (win32, posix, MAX_PATH, 1));
+  return_with_errno (conv_path_list (win32, posix, MAX_PATH,
+		     CCP_WIN_A_TO_POSIX | CCP_RELATIVE));
 }
 
 extern "C" int
 cygwin_posix_to_win32_path_list (const char *posix, char *win32)
 {
-  return_with_errno (conv_path_list (posix, win32, MAX_PATH, 0));
+  return_with_errno (conv_path_list (posix, win32, MAX_PATH,
+		     CCP_POSIX_TO_WIN_A | CCP_RELATIVE));
 }
 
 extern "C" ssize_t
 cygwin_conv_path_list (cygwin_conv_path_t what, const void *from, void *to,
 		       size_t size)
 {
-  /* FIXME: Path lists are (so far) always retaining relative paths. */
-  what &= ~CCP_RELATIVE;
-  switch (what)
+  int ret;
+  char *winp = NULL;
+  void *orig_to = NULL;
+  size_t orig_size = (size_t) -1;
+  tmp_pathbuf tp;
+
+  switch (what & CCP_CONVTYPE_MASK)
     {
     case CCP_WIN_W_TO_POSIX:
-    case CCP_POSIX_TO_WIN_W:
-      /*FIXME*/
-      api_fatal ("wide char path lists not yet supported");
+      if (!sys_wcstombs_alloc (&winp, HEAP_NOTHEAP, (const wchar_t *) from,
+			       (size_t) -1))
+	return -1;
+      what = (what & ~CCP_CONVTYPE_MASK) | CCP_WIN_A_TO_POSIX;
+      from = (const void *) winp;
       break;
+    case CCP_POSIX_TO_WIN_W:
+      if (size == 0)
+	return conv_path_list_buf_size ((const char *) from, 0)
+	       * sizeof (WCHAR);
+      what = (what & ~CCP_CONVTYPE_MASK) | CCP_POSIX_TO_WIN_A;
+      orig_to = to;
+      orig_size = size;
+      to = (void *) tp.w_get ();
+      size = 65536;
+      break;
+    }
+  switch (what & CCP_CONVTYPE_MASK)
+    {
     case CCP_WIN_A_TO_POSIX:
     case CCP_POSIX_TO_WIN_A:
       if (size == 0)
 	return conv_path_list_buf_size ((const char *) from,
 					what == CCP_WIN_A_TO_POSIX);
-      return_with_errno (conv_path_list ((const char *) from, (char *) to,
-					 size, what == CCP_WIN_A_TO_POSIX));
+      ret = conv_path_list ((const char *) from, (char *) to, size, what);
+      /* Free winp buffer in case of CCP_WIN_W_TO_POSIX. */
+      if (winp)
+      	free (winp);
+      /* Convert to WCHAR in case of CCP_POSIX_TO_WIN_W. */
+      if (orig_to)
+	sys_mbstowcs ((wchar_t *) orig_to, size / sizeof (WCHAR),
+		      (const char *) to, (size_t) -1);
+      return_with_errno (ret);
       break;
     default:
       break;
@@ -3102,12 +3471,477 @@ cygwin_split_path (const char *path, char *dir, char *file)
   file[end - last_slash - 1] = 0;
 }
 
+static inline void
+copy_cwd_str (PUNICODE_STRING tgt, PUNICODE_STRING src)
+{
+  RtlCopyUnicodeString (tgt, src);
+  if (tgt->Buffer[tgt->Length / sizeof (WCHAR) - 1] != L'\\')
+    {
+      tgt->Buffer[tgt->Length / sizeof (WCHAR)] = L'\\';
+      tgt->Length += sizeof (WCHAR);
+    }
+}
+
 /*****************************************************************************/
 
-static inline PRTL_USER_PROCESS_PARAMETERS
-get_user_proc_parms ()
+/* The find_fast_cwd_pointer function and parts of the
+   cwdstuff::override_win32_cwd method are based on code using the
+   following license:
+
+   Copyright 2010 John Carey. All rights reserved.
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+
+      1. Redistributions of source code must retain the above
+      copyright notice, this list of conditions and the following
+      disclaimer.
+
+      2. Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+
+   THIS SOFTWARE IS PROVIDED BY JOHN CAREY ``AS IS'' AND ANY EXPRESS
+   OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+   WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   ARE DISCLAIMED. IN NO EVENT SHALL JOHN CAREY OR CONTRIBUTORS BE
+   LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+   CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT
+   OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+   BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+   USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+   DAMAGE. */
+
+/* This class is used to store the CWD starting with Windows Vista.
+   The CWD storage in the RTL_USER_PROCESS_PARAMETERS block is only
+   an afterthought now.  The actual CWD storage is a FAST_CWD structure
+   which is allocated on the process heap.  The new method only requires
+   minimal locking and it's much more multi-thread friendly.  Presumably
+   it minimizes contention when accessing the CWD.
+   The class fcwd_access_t is supposed to encapsulate the gory implementation
+   details depending on OS version from the calling functions. */
+class fcwd_access_t {
+  /* This is the layout used in Windows 8 developer preview. */
+  struct FAST_CWD_8 {
+    LONG           ReferenceCount;	/* Only release when this is 0. */
+    HANDLE         DirectoryHandle;
+    ULONG          OldDismountCount;	/* Reflects the system DismountCount
+					   at the time the CWD has been set. */
+    UNICODE_STRING Path;		/* Path's Buffer member always refers
+					   to the following Buffer array. */
+    LONG           FSCharacteristics;	/* Taken from FileFsDeviceInformation */
+    WCHAR          Buffer[MAX_PATH];
+  };
+  /* This is the layout used in Windows 7 and Vista. */
+  struct FAST_CWD_7 {
+    UNICODE_STRING Path;		/* Path's Buffer member always refers
+					   to the following Buffer array. */
+    HANDLE         DirectoryHandle;
+    LONG           FSCharacteristics;	/* Taken from FileFsDeviceInformation */
+    LONG           ReferenceCount;	/* Only release when this is 0. */
+    ULONG          OldDismountCount;	/* Reflects the system DismountCount
+					   at the time the CWD has been set. */
+    WCHAR          Buffer[MAX_PATH];
+  };
+  /* This is the old FAST_CWD structure up to the patch from KB 2393802,
+     release in February 2011. */
+  struct FAST_CWD_OLD {
+    LONG           ReferenceCount;	/* Only release when this is 0. */
+    HANDLE         DirectoryHandle;
+    ULONG          OldDismountCount;	/* Reflects the system DismountCount
+					   at the time the CWD has been set. */
+    UNICODE_STRING Path;		/* Path's Buffer member always refers
+					   to the following Buffer array. */
+    WCHAR          Buffer[MAX_PATH];
+  };
+  union {
+    FAST_CWD_OLD fold;
+    FAST_CWD_7   f7;
+    FAST_CWD_8   f8;
+  };
+
+  /* Type of FAST_CWD used on this system.  Keeping this information available
+     in shared memory avoids to test for the version every time around.
+     Default to new version. */
+  enum fcwd_version_t {
+    FCWD_OLD,
+    FCWD_W7,
+    FCWD_W8
+  };
+  static fcwd_version_t fast_cwd_version;
+
+#define IMPLEMENT(type, name) \
+  type name () { \
+    switch (fast_cwd_version) { \
+      case FCWD_OLD: \
+      default: \
+	return fold.name; \
+      case FCWD_W7: \
+	return f7.name; \
+      case FCWD_W8: \
+	return f8.name; \
+    } \
+  }
+  IMPLEMENT (LONG &, ReferenceCount)
+  IMPLEMENT (HANDLE &, DirectoryHandle)
+  IMPLEMENT (ULONG &, OldDismountCount)
+  IMPLEMENT (UNICODE_STRING &, Path)
+  IMPLEMENT (WCHAR *, Buffer)
+  /* Special case FSCharacteristics.  Didn't exist originally. */
+  void SetFSCharacteristics (LONG val)
+    {
+      switch (fast_cwd_version)
+	{
+	case FCWD_OLD:
+	  break;
+	case FCWD_W7:
+	  f7.FSCharacteristics = val;
+	  break;
+	case FCWD_W8:
+	  f8.FSCharacteristics = val;
+	  break;
+	}
+    }
+public:
+  void CopyPath (UNICODE_STRING &target)
+    {
+      /* Copy the Path contents over into the UNICODE_STRING referenced by
+	 target.  This is used to set the CurrentDirectoryName in the
+	 user parameter block. */
+      target = Path ();
+    }
+  void Free (PVOID heap)
+    {
+      /* Decrement the reference count.  If it's down to 0, free
+	 structure from heap. */
+      if (this && InterlockedDecrement (&ReferenceCount ()) == 0)
+	{
+	  /* In contrast to pre-Vista, the handle on init is always a
+	     fresh one and not the handle inherited from the parent
+	     process.  So we always have to close it here.  However, the
+	     handle could be NULL, if we cd'ed into a virtual dir. */
+	  HANDLE h = DirectoryHandle ();
+	  if (h)
+	    NtClose (h);
+	  RtlFreeHeap (heap, 0, this);
+	}
+    }
+  void FillIn (HANDLE dir, PUNICODE_STRING name, ULONG old_dismount_count)
+    {
+      /* Fill in all values into this FAST_CWD structure. */
+      DirectoryHandle () = dir;
+      ReferenceCount () = 1;
+      OldDismountCount () = old_dismount_count;
+      /* The new structure stores the device characteristics of the
+	 volume holding the dir.  RtlGetCurrentDirectory_U checks
+	 if the FILE_REMOVABLE_MEDIA flag is set and, if so, checks if
+	 the volume is still the same as the one used when opening
+	 the directory handle.
+	 We don't call NtQueryVolumeInformationFile for the \\?\PIPE,
+	 though.  It just returns STATUS_INVALID_HANDLE anyway. */
+      if (fast_cwd_version != FCWD_OLD)
+	{
+	  SetFSCharacteristics (0);
+	  if (name != &ro_u_pipedir)
+	    {
+	      IO_STATUS_BLOCK io;
+	      FILE_FS_DEVICE_INFORMATION ffdi;
+	      if (NT_SUCCESS (NtQueryVolumeInformationFile (dir, &io, &ffdi,
+			      sizeof ffdi, FileFsDeviceInformation)))
+		SetFSCharacteristics (ffdi.Characteristics);
+	    }
+	}
+      RtlInitEmptyUnicodeString (&Path (), Buffer (),
+				 MAX_PATH * sizeof (WCHAR));
+      copy_cwd_str (&Path (), name);
+    }
+
+  static void SetDirHandleFromBufferPointer (PWCHAR buf_p, HANDLE dir)
+    {
+      /* Input: The buffer pointer as it's stored in the user parameter block
+	 and a directory handle.
+	 This function computes the address to the FAST_CWD structure based
+	 on the version and overwrites the directory handle.  It is only
+	 used if we couldn't figure out the address of fast_cwd_ptr. */
+      fcwd_access_t *f_cwd;
+      switch (fast_cwd_version)
+	{
+	case FCWD_OLD:
+	default:
+	  f_cwd = (fcwd_access_t *)
+	    ((PBYTE) buf_p - __builtin_offsetof (FAST_CWD_OLD, Buffer));
+	case FCWD_W7:
+	  f_cwd = (fcwd_access_t *)
+	    ((PBYTE) buf_p - __builtin_offsetof (FAST_CWD_7, Buffer));
+	case FCWD_W8:
+	  f_cwd = (fcwd_access_t *)
+	    ((PBYTE) buf_p - __builtin_offsetof (FAST_CWD_8, Buffer));
+	}
+      f_cwd->DirectoryHandle () = dir;
+    }
+  static void SetVersionFromPointer (PBYTE buf_p, bool is_buffer)
+    {
+      /* Given a pointer to the FAST_CWD structure (is_buffer == false) or a
+	 pointer to the Buffer within (is_buffer == true), this function
+	 computes the FAST_CWD version by checking that Path.MaximumLength
+	 equals MAX_PATH, and that Path.Buffer == Buffer. */
+      if (is_buffer)
+	buf_p -= __builtin_offsetof (FAST_CWD_8, Buffer);
+      fcwd_access_t *f_cwd = (fcwd_access_t *) buf_p;
+      if (f_cwd->f8.Path.MaximumLength == MAX_PATH * sizeof (WCHAR)
+	  && f_cwd->f8.Path.Buffer == f_cwd->f8.Buffer)
+	fast_cwd_version = FCWD_W8;
+      else if (f_cwd->f7.Path.MaximumLength == MAX_PATH * sizeof (WCHAR)
+	       && f_cwd->f7.Path.Buffer == f_cwd->f7.Buffer)
+	fast_cwd_version = FCWD_W7;
+      else
+	fast_cwd_version = FCWD_OLD;
+    }
+};
+fcwd_access_t::fcwd_version_t fcwd_access_t::fast_cwd_version
+  __attribute__((section (".cygwin_dll_common"), shared))
+  = fcwd_access_t::FCWD_W7;
+/* fast_cwd_ptr is a pointer to the global RtlpCurDirRef pointer in
+   ntdll.dll pointing to the FAST_CWD structure which constitutes the CWD.
+   Unfortunately RtlpCurDirRef is not exported from ntdll.dll.
+   We put the pointer into the common shared DLL segment.  This allows to
+   restrict the call to find_fast_cwd_pointer() to once per Cygwin session
+   per user session.  This works, because ASLR randomizes the load address
+   of DLLs only once at boot time. */
+static fcwd_access_t **fast_cwd_ptr
+  __attribute__((section (".cygwin_dll_common"), shared))
+  = (fcwd_access_t **) -1;
+
+#define peek32(x)	(*(uint32_t *)(x))
+
+/* This function scans the code in ntdll.dll to find the address of the
+   global variable used to access the CWD starting with Vista.  While the
+   pointer is global, it's not exported from the DLL, unfortunately.
+   Therefore we have to use some knowledge to figure out the address.
+
+   This code has been tested on Vista 32/64 bit, Server 2008 32/64 bit,
+   Windows 7 32/64 bit, and Server 2008 R2 (which is only 64 bit anyway).
+   There's some hope that this will still work for Windows 8... */
+static fcwd_access_t **
+find_fast_cwd_pointer ()
 {
-  return NtCurrentTeb ()->Peb->ProcessParameters;
+  /* Fetch entry points of relevant functions in ntdll.dll. */
+  HMODULE ntdll = GetModuleHandle ("ntdll.dll");
+  if (!ntdll)
+    return NULL;
+  const uint8_t *get_dir = (const uint8_t *)
+			   GetProcAddress (ntdll, "RtlGetCurrentDirectory_U");
+  const uint8_t *ent_crit = (const uint8_t *)
+			    GetProcAddress (ntdll, "RtlEnterCriticalSection");
+  if (!get_dir || !ent_crit)
+    return NULL;
+  /* Search first relative call instruction in RtlGetCurrentDirectory_U. */
+  const uint8_t *rcall = (const uint8_t *) memchr (get_dir, 0xe8, 32);
+  if (!rcall)
+    return NULL;
+  /* Fetch offset from instruction and compute address of called function.
+     This function actually fetches the current FAST_CWD instance and
+     performs some other actions, not important to us. */
+  ptrdiff_t offset = (ptrdiff_t) peek32 (rcall + 1);
+  const uint8_t *use_cwd = rcall + 5 + offset;
+  /* Find first "push edi" instruction. */
+  const uint8_t *pushedi = (const uint8_t *) memchr (use_cwd, 0x57, 32);
+  /* ...which should be followed by "mov edi, crit-sect-addr" then
+     "push edi", or by just a single "push crit-sect-addr". */
+  const uint8_t *movedi = pushedi + 1;
+  if (movedi[0] == 0xbf && movedi[5] == 0x57)
+    rcall = movedi + 6;
+  else if (movedi[0] == 0x68)
+    rcall = movedi + 5;
+  else
+    return NULL;
+  /* Compare the address used for the critical section with the known
+     PEB lock as stored in the PEB. */
+  if ((PRTL_CRITICAL_SECTION) peek32 (movedi + 1)
+      != NtCurrentTeb ()->Peb->FastPebLock)
+    return NULL;
+  /* To check we are seeing the right code, we check our expectation that
+     the next instruction is a relative call into RtlEnterCriticalSection. */
+  if (rcall[0] != 0xe8)
+    return NULL;
+  /* Check that this is a relative call to RtlEnterCriticalSection. */
+  offset = (ptrdiff_t) peek32 (rcall + 1);
+  if (rcall + 5 + offset != ent_crit)
+    return NULL;
+  /* After locking the critical section, the code should read the global
+     PFAST_CWD * pointer that is guarded by that critical section. */
+  const uint8_t *movesi = rcall + 5;
+  if (movesi[0] != 0x8b)
+    return NULL;
+  return (fcwd_access_t **) peek32 (movesi + 2);
+}
+
+static fcwd_access_t **
+find_fast_cwd ()
+{
+  /* Fetch the pointer but don't set the global fast_cwd_ptr yet.  First
+     we have to make sure we know the version of the FAST_CWD structure
+     used on the system. */
+  fcwd_access_t **f_cwd_ptr = find_fast_cwd_pointer ();
+  if (!f_cwd_ptr)
+    system_printf ("WARNING: Couldn't compute FAST_CWD pointer.  "
+		   "Please report this problem to\nthe public mailing "
+		   "list cygwin@cygwin.com");
+  if (f_cwd_ptr && *f_cwd_ptr)
+    {
+      /* Just evaluate structure version. */
+      fcwd_access_t::SetVersionFromPointer ((PBYTE) *f_cwd_ptr, false);
+    }
+  else
+    {
+      /* If we couldn't fetch fast_cwd_ptr, or if fast_cwd_ptr is NULL(*)
+	 we have to figure out the version from the Buffer pointer in the
+	 ProcessParameters.
+
+	 (*) This is very unlikely to happen when starting the first
+	 Cygwin process, since it only happens when starting the
+	 process in a directory which can't be used as CWD by Win32, or
+	 if the directory doesn't exist.  But *if* it happens, we have
+	 no valid FAST_CWD structure, even though upp_cwd_str.Buffer is
+	 not NULL in that case.  So we let the OS create a valid
+	 FAST_CWD structure temporarily to have something to work with.
+	 We know the pipe FS works. */
+      PEB &peb = *NtCurrentTeb ()->Peb;
+
+      if (f_cwd_ptr	/* so *f_cwd_ptr == NULL */
+	  && !NT_SUCCESS (RtlSetCurrentDirectory_U (&ro_u_pipedir)))
+	api_fatal ("Couldn't set directory to %S temporarily.\n"
+		   "Cannot continue.", &ro_u_pipedir);
+      RtlEnterCriticalSection (peb.FastPebLock);
+      fcwd_access_t::SetVersionFromPointer
+	((PBYTE) peb.ProcessParameters->CurrentDirectoryName.Buffer, true);
+      RtlLeaveCriticalSection (peb.FastPebLock);
+    }
+  /* Eventually, after we set the version as well, set fast_cwd_ptr. */
+  return f_cwd_ptr;
+}
+
+void
+cwdstuff::override_win32_cwd (bool init, ULONG old_dismount_count)
+{
+  HANDLE h = NULL;
+
+  PEB &peb = *NtCurrentTeb ()->Peb;
+  UNICODE_STRING &upp_cwd_str = peb.ProcessParameters->CurrentDirectoryName;
+  HANDLE &upp_cwd_hdl = peb.ProcessParameters->CurrentDirectoryHandle;
+
+  if (wincap.has_fast_cwd ())
+    {
+      if (fast_cwd_ptr == (fcwd_access_t **) -1)
+	fast_cwd_ptr = find_fast_cwd ();
+      if (fast_cwd_ptr)
+	{
+	  /* Default method starting with Vista.  If we got a valid value for
+	     fast_cwd_ptr, we can simply replace the RtlSetCurrentDirectory_U
+	     function entirely, just as on pre-Vista. */
+	  PVOID heap = peb.ProcessHeap;
+	  /* First allocate a new fcwd_access_t structure on the heap.
+	     The new fcwd_access_t structure is 4 byte bigger than the old one,
+	     but we simply don't care, so we allocate always room for the
+	     new one. */
+	  fcwd_access_t *f_cwd = (fcwd_access_t *)
+			    RtlAllocateHeap (heap, 0, sizeof (fcwd_access_t));
+	  if (!f_cwd)
+	    {
+	      debug_printf ("RtlAllocateHeap failed");
+	      return;
+	    }
+	  /* Fill in the values. */
+	  f_cwd->FillIn (dir, error ? &ro_u_pipedir : &win32,
+			 old_dismount_count);
+	  /* Use PEB lock when switching fast_cwd_ptr to the new FAST_CWD
+	     structure and writing the CWD to the user process parameter
+	     block.  This is equivalent to calling RtlAcquirePebLock/
+	     RtlReleasePebLock, but without having to go through the FS
+	     selector again. */
+	  RtlEnterCriticalSection (peb.FastPebLock);
+	  fcwd_access_t *old_cwd = *fast_cwd_ptr;
+	  *fast_cwd_ptr = f_cwd;
+	  f_cwd->CopyPath (upp_cwd_str);
+	  upp_cwd_hdl = dir;
+	  RtlLeaveCriticalSection (peb.FastPebLock);
+	  old_cwd->Free (heap);
+	}
+      else
+	{
+	  /* This is more a hack, and it's only used on Vista and later if we
+	     failed to find the fast_cwd_ptr value.  What we do here is to call
+	     RtlSetCurrentDirectory_U and let it set up a new FAST_CWD
+	     structure.  Afterwards, compute the address of that structure
+	     utilizing the fact that the buffer address in the user process
+	     parameter block is actually pointing to the buffer in that
+	     FAST_CWD structure.  Then replace the directory handle in that
+	     structure with our own handle and close the original one.
+
+	     Note that the call to RtlSetCurrentDirectory_U also closes our
+	     old dir handle, so there won't be any handle left open.
+
+	     This method is prone to two race conditions:
+
+	     - Due to the way RtlSetCurrentDirectory_U opens the directory
+	       handle, the directory is locked against deletion or renaming
+	       between the RtlSetCurrentDirectory_U and the subsequent NtClose
+	       call.
+
+	     - When another thread calls SetCurrentDirectory at exactly the
+	       same time, a crash might occur, or worse, unrelated data could
+	       be overwritten or NtClose could be called on an unrelated handle.
+
+	     Therefore, use this *only* as a fallback. */
+	  if (!init)
+	    {
+	      NTSTATUS status =
+		RtlSetCurrentDirectory_U (error ? &ro_u_pipedir : &win32);
+	      if (!NT_SUCCESS (status))
+		{
+		  debug_printf ("RtlSetCurrentDirectory_U(%S) failed, %p",
+				error ? &ro_u_pipedir : &win32, status);
+		  return;
+		}
+	    }
+	  else if (upp_cwd_hdl == NULL)
+	    return;
+	  RtlEnterCriticalSection (peb.FastPebLock);
+	  fcwd_access_t::SetDirHandleFromBufferPointer(upp_cwd_str.Buffer, dir);
+	  h = upp_cwd_hdl;
+	  upp_cwd_hdl = dir;
+	  RtlLeaveCriticalSection (peb.FastPebLock);
+	  /* In contrast to pre-Vista, the handle on init is always a fresh one
+	     and not the handle inherited from the parent process.  So we always
+	     have to close it here. */
+	  NtClose (h);
+	}
+    }
+  else
+    {
+      /* This method is used for all pre-Vista OSes.  We simply set the values
+	 for the CWD in the user process parameter block entirely by ourselves
+	 under PEB lock condition.  This is how RtlSetCurrentDirectory_U worked
+	 in these older OSes, so we're safe.
+
+	 Note that we can't just RtlEnterCriticalSection (peb.FastPebLock)
+	 on pre-Vista.  RtlAcquirePebLock was way more complicated back then. */
+      RtlAcquirePebLock ();
+      if (!init)
+	copy_cwd_str (&upp_cwd_str, error ? &ro_u_pipedir : &win32);
+      h = upp_cwd_hdl;
+      upp_cwd_hdl = dir;
+      RtlReleasePebLock ();
+      /* Only on init, the handle is potentially a native handle.  However,
+	 if it's identical to dir, it's the inherited handle from a Cygwin
+	 parent process and must not be closed. */
+      if (h && h != dir)
+	NtClose (h);
+    }
 }
 
 /* Initialize cygcwd 'muto' for serializing access to cwd info. */
@@ -3115,179 +3949,213 @@ void
 cwdstuff::init ()
 {
   cwd_lock.init ("cwd_lock");
-  /* Initially re-open the cwd to allow POSIX semantics. */
-  set (NULL, NULL, true);
+
+  /* Cygwin processes inherit the cwd from their parent.  If the win32 path
+     buffer is not NULL, the cwd struct is already set up, and we only
+     have to override the Win32 CWD with ours. */
+  if (win32.Buffer)
+    override_win32_cwd (true, SharedUserData.DismountCount);
+  else
+    /* Initially re-open the cwd to allow POSIX semantics. */
+    set (NULL, NULL);
 }
 
 /* Chdir and fill out the elements of a cwdstuff struct. */
 int
-cwdstuff::set (PUNICODE_STRING nat_cwd, const char *posix_cwd, bool doit)
+cwdstuff::set (path_conv *nat_cwd, const char *posix_cwd)
 {
-  int res = 0;
+  NTSTATUS status;
   UNICODE_STRING upath;
-  size_t len = 0;
+  PEB &peb = *NtCurrentTeb ()->Peb;
+  bool virtual_path = false;
+  bool unc_path = false;
+  bool inaccessible_path = false;
+
+  /* Here are the problems with using SetCurrentDirectory.  Just skip this
+     comment if you don't like whining.
+
+     - SetCurrentDirectory only supports paths of up to MAX_PATH - 1 chars,
+       including a trailing backslash.  That's an absolute restriction, even
+       in the UNICODE API.
+
+     - SetCurrentDirectory fails for directories with strict permissions even
+       for processes with the SE_BACKUP_NAME privilege enabled.  The reason
+       is apparently that SetCurrentDirectory calls NtOpenFile without the
+       FILE_OPEN_FOR_BACKUP_INTENT flag set.
+
+     - SetCurrentDirectory does not support case-sensitivity.
+
+     - Unlinking a cwd fails because SetCurrentDirectory seems to open
+       directories so that deleting the directory is disallowed.
+
+     - SetCurrentDirectory can naturally not work on virtual Cygwin paths
+       like /proc or /cygdrive.
+
+     Unfortunately, even though we have access to the Win32 process parameter
+     block, we can't just replace the directory handle.  Starting with Vista,
+     the handle is used elsewhere, and just replacing the handle in the process
+     parameter block shows quite surprising results.
+     FIXME: If we ever find a *safe* way to replace the directory handle in
+     the process parameter block, we're back in business.
+
+     Nevertheless, doing entirely without SetCurrentDirectory is not really
+     feasible, because it breaks too many mixed applications using the Win32
+     API.
+
+     Therefore we handle the CWD all by ourselves and just keep the Win32
+     CWD in sync.  However, to avoid surprising behaviour in the Win32 API
+     when we are in a CWD which is inaccessible as Win32 CWD, we set the
+     Win32 CWD to a "weird" directory in which all relative filesystem-related
+     calls fail. */
 
   cwd_lock.acquire ();
 
   if (nat_cwd)
     {
-      upath = *nat_cwd;
-      if (upath.Buffer[0] == L'/') /* Virtual path.  Never use in PEB. */
-	doit = false;
-      else
-	{
-	  len = upath.Length / sizeof (WCHAR) - 4;
-	  if (RtlEqualUnicodePathPrefix (&upath, &ro_u_uncp, TRUE))
-	    len -= 2;
-	}
+      upath = *nat_cwd->get_nt_native_path ();
+      if (nat_cwd->isspecial ())
+	virtual_path = true;
     }
 
-  if (doit)
+  /* Memorize old DismountCount before opening the dir.  This value is
+     stored in the FAST_CWD structure on Vista and later.  It would be
+     simpler to fetch the old DismountCount in override_win32_cwd, but
+     Windows also fetches it before opening the directory handle.  It's
+     not quite clear if that's really required, but since we don't know
+     the side effects of this action, we better follow Windows' lead. */
+  ULONG old_dismount_count = SharedUserData.DismountCount;
+  /* Open a directory handle with FILE_OPEN_FOR_BACKUP_INTENT and with all
+     sharing flags set.  The handle is right now used in exceptions.cc only,
+     but that might change in future. */
+  HANDLE h = NULL;
+  if (!virtual_path)
     {
-      /* We utilize the user parameter block.  The directory is
-	 stored manually there.  Why the hassle?
-
-	 - SetCurrentDirectory fails for directories with strict
-	   permissions even for processes with the SE_BACKUP_NAME
-	   privilege enabled.  The reason is apparently that
-	   SetCurrentDirectory calls NtOpenFile without the
-	   FILE_OPEN_FOR_BACKUP_INTENT flag set.
-
-	 - Unlinking a cwd fails because SetCurrentDirectory seems to
-	   open directories so that deleting the directory is disallowed.
-	   The below code opens with *all* sharing flags set. */
-      HANDLE h;
-      NTSTATUS status;
       IO_STATUS_BLOCK io;
       OBJECT_ATTRIBUTES attr;
-      PHANDLE phdl;
 
-      RtlAcquirePebLock ();
-      phdl = &get_user_proc_parms ()->CurrentDirectoryHandle;
-      if (!nat_cwd) /* On init, just reopen CWD with desired access flags. */
-	RtlInitUnicodeString (&upath, L"");
-      /* This is for Win32 apps only.  No case sensitivity here... */
-      InitializeObjectAttributes (&attr, &upath,
-				  OBJ_CASE_INSENSITIVE | OBJ_INHERIT,
-				  nat_cwd ? NULL : *phdl, NULL);
+      if (!nat_cwd)
+	{
+	  /* On init, just reopen Win32 CWD with desired access flags.
+	     We can access the PEB without lock, because no other thread
+	     can change the CWD. */
+	  RtlInitUnicodeString (&upath, L"");
+	  InitializeObjectAttributes (&attr, &upath,
+			OBJ_CASE_INSENSITIVE | OBJ_INHERIT,
+			peb.ProcessParameters->CurrentDirectoryHandle, NULL);
+	}
+      else
+	InitializeObjectAttributes (&attr, &upath,
+			nat_cwd->objcaseinsensitive () | OBJ_INHERIT,
+			NULL, NULL);
+      /* First try without FILE_OPEN_FOR_BACKUP_INTENT, to find out if the
+	 directory is valid for Win32 apps.  And, no, we can't just call
+	 SetCurrentDirectory here, since that would potentially break
+	 case-sensitivity. */
       status = NtOpenFile (&h, SYNCHRONIZE | FILE_TRAVERSE, &attr, &io,
 			   FILE_SHARE_VALID_FLAGS,
 			   FILE_DIRECTORY_FILE
-			   | FILE_SYNCHRONOUS_IO_NONALERT
-			   | FILE_OPEN_FOR_BACKUP_INTENT);
+			   | FILE_SYNCHRONOUS_IO_NONALERT);
+      if (status == STATUS_ACCESS_DENIED)
+	{
+	  status = NtOpenFile (&h, SYNCHRONIZE | FILE_TRAVERSE, &attr, &io,
+			       FILE_SHARE_VALID_FLAGS,
+			       FILE_DIRECTORY_FILE
+			       | FILE_SYNCHRONOUS_IO_NONALERT
+			       | FILE_OPEN_FOR_BACKUP_INTENT);
+	  inaccessible_path = true;
+	}
       if (!NT_SUCCESS (status))
 	{
-	  RtlReleasePebLock ();
+	  cwd_lock.release ();
 	  __seterrno_from_nt_status (status);
-	  res = -1;
-	  goto out;
+	  return -1;
 	}
-      /* Workaround a problem in Vista/Longhorn which fails in subsequent
-	 calls to CreateFile with ERROR_INVALID_HANDLE if the handle in
-	 CurrentDirectoryHandle changes without calling SetCurrentDirectory,
-	 and the filename given to CreateFile is a relative path.  It looks
-	 like Vista stores a copy of the CWD handle in some other undocumented
-	 place.  The NtClose/DuplicateHandle reuses the original handle for
-	 the copy of the new handle and the next CreateFile works.
-	 Note that this is not thread-safe (yet?) */
-      NtClose (*phdl);
-      if (DuplicateHandle (GetCurrentProcess (), h, GetCurrentProcess (), phdl,
-			   0, TRUE, DUPLICATE_SAME_ACCESS))
-	NtClose (h);
-      else
-	*phdl = h;
-      dir = *phdl;
-
-      /* No need to set path on init. */
-      if (nat_cwd
-	  /* TODO:
-	     Check the length of the new CWD.  Windows can only handle
-	     CWDs of up to MAX_PATH length, including a trailing backslash.
-	     If the path is longer, it's not an error condition for Cygwin,
-	     so we don't fail.  Windows on the other hand has a problem now.
-	     For now, we just don't store the path in the PEB and proceed as
-	     usual. */
-	  && len <= MAX_PATH - (nat_cwd->Buffer[len - 1] == L'\\' ? 1 : 2))
-	{
-	  /* Convert to a Win32 path. */
-	  upath.Buffer += upath.Length / sizeof (WCHAR) - len;
-	  if (upath.Buffer[1] == L'\\') /* UNC path */
-	    upath.Buffer[0] = L'\\';
-	  upath.Length = len * sizeof (WCHAR);
-	  /* Append backslash if necessary. */
-	  if (upath.Buffer[len - 1] != L'\\')
-	    {
-	      upath.Buffer[len] = L'\\';
-	      upath.Length += sizeof (WCHAR);
-	    }
-	  RtlCopyUnicodeString (&get_user_proc_parms ()->CurrentDirectoryName,
-				&upath);
-	}
-
-      RtlReleasePebLock ();
     }
+  /* Set new handle.  Note that we simply overwrite the old handle here
+     without closing it.  The handle is also used as Win32 CWD handle in
+     the user parameter block, and it will be closed in override_win32_cwd,
+     if required. */
+  dir = h;
 
-  if (nat_cwd || !win32.Buffer)
+  if (!nat_cwd)
     {
-      /* If there is no win32 path */
-      if (!nat_cwd)
+      /* On init, just fetch the Win32 dir from the PEB.  We can access
+	 the PEB without lock, because no other thread can change the CWD
+	 at that time. */
+      PUNICODE_STRING pdir = &peb.ProcessParameters->CurrentDirectoryName;
+      RtlInitEmptyUnicodeString (&win32,
+				 (PWCHAR) crealloc_abort (win32.Buffer,
+							  pdir->Length
+							  + sizeof (WCHAR)),
+				 pdir->Length + sizeof (WCHAR));
+      RtlCopyUnicodeString (&win32, pdir);
+
+      PWSTR eoBuffer = win32.Buffer + (win32.Length / sizeof (WCHAR));
+      /* Remove trailing slash if one exists. */
+      if ((eoBuffer - win32.Buffer) > 3 && eoBuffer[-1] == L'\\')
+	win32.Length -= sizeof (WCHAR);
+      if (eoBuffer[0] == L'\\')
+	unc_path = true;
+
+      posix_cwd = NULL;
+    }
+  else
+    {
+      if (!virtual_path) /* don't mangle virtual path. */
 	{
-	  PUNICODE_STRING pdir;
-
-	  RtlAcquirePebLock ();
-	  pdir = &get_user_proc_parms ()->CurrentDirectoryName;
-	  RtlInitEmptyUnicodeString (&win32,
-				     (PWCHAR) crealloc_abort (win32.Buffer,
-							      pdir->Length + 2),
-				     pdir->Length + 2);
-	  RtlCopyUnicodeString (&win32, pdir);
-	  RtlReleasePebLock ();
-
-	  PWSTR eoBuffer = win32.Buffer + (win32.Length / sizeof (WCHAR));
-	  /* Remove trailing slash if one exists.  FIXME: Is there a better way to
-	     do this? */
-	  if ((eoBuffer - win32.Buffer) > 3 && eoBuffer[-1] == L'\\')
-	    win32.Length -= sizeof (WCHAR);
-
-	  posix_cwd = NULL;
-	}
-      else
-	{
-	  bool unc = false;
-
-	  if (upath.Buffer[0] == L'/') /* Virtual path, don't mangle. */
-	    ;
-	  else if (!doit)
+	  /* Convert into Win32 path and compute length. */
+	  if (upath.Buffer[1] == L'?')
 	    {
-	      /* Convert to a Win32 path. */
-	      upath.Buffer += upath.Length / sizeof (WCHAR) - len;
-	      if (upath.Buffer[1] == L'\\') /* UNC path */
-		unc = true;
-	      upath.Length = len * sizeof (WCHAR);
+	      upath.Buffer += 4;
+	      upath.Length -= 4 * sizeof (WCHAR);
+	      if (upath.Buffer[1] != L':')
+		{
+		  /* UNC path */
+		  upath.Buffer += 2;
+		  upath.Length -= 2 * sizeof (WCHAR);
+		  unc_path = true;
+		}
 	    }
 	  else
 	    {
-	      PWSTR eoBuffer = upath.Buffer + (upath.Length / sizeof (WCHAR));
-	      /* Remove trailing slash if one exists.  FIXME: Is there a better way to
-		 do this? */
-	      if ((eoBuffer - upath.Buffer) > 3 && eoBuffer[-1] == L'\\')
-		upath.Length -= sizeof (WCHAR);
+	      /* Path via native NT namespace.  Prepend GLOBALROOT prefix
+		 to create a valid Win32 path. */
+	      PWCHAR buf = (PWCHAR) alloca (upath.Length
+					    + ro_u_globalroot.Length
+					    + sizeof (WCHAR));
+	      wcpcpy (wcpcpy (buf, ro_u_globalroot.Buffer), upath.Buffer);
+	      upath.Buffer = buf;
+	      upath.Length += ro_u_globalroot.Length;
 	    }
-	  RtlInitEmptyUnicodeString (&win32,
-				     (PWCHAR) crealloc_abort (win32.Buffer,
-							      upath.Length + 2),
-				     upath.Length + 2);
-	  RtlCopyUnicodeString (&win32, &upath);
-	  if (unc)
-	    win32.Buffer[0] = L'\\';
+	  PWSTR eoBuffer = upath.Buffer + (upath.Length / sizeof (WCHAR));
+	  /* Remove trailing slash if one exists. */
+	  if ((eoBuffer - upath.Buffer) > 3 && eoBuffer[-1] == L'\\')
+	    upath.Length -= sizeof (WCHAR);
 	}
-      /* Make sure it's NUL-terminated. */
-      win32.Buffer[win32.Length / sizeof (WCHAR)] = L'\0';
-      if (!doit)			 /* Virtual path */
-	drive_length = 0;
-      else if (win32.Buffer[1] == L':')	 /* X: */
+      RtlInitEmptyUnicodeString (&win32,
+				 (PWCHAR) crealloc_abort (win32.Buffer,
+							  upath.Length
+							  + sizeof (WCHAR)),
+				 upath.Length + sizeof (WCHAR));
+      RtlCopyUnicodeString (&win32, &upath);
+      if (unc_path)
+	win32.Buffer[0] = L'\\';
+    }
+  /* Make sure it's NUL-terminated. */
+  win32.Buffer[win32.Length / sizeof (WCHAR)] = L'\0';
+
+  /* Set drive_length, used in path conversion, and error code, used in
+     spawn_guts to decide whether a native Win32 app can be started or not. */
+  if (virtual_path)
+    {
+      drive_length = 0;
+      error = ENOTDIR;
+    }
+  else
+    {
+      if (!unc_path)
 	drive_length = 2;
-      else if (win32.Buffer[1] == L'\\') /* UNC path */
+      else
 	{
 	  PWCHAR ptr = wcschr (win32.Buffer + 2, L'\\');
 	  if (ptr)
@@ -3297,22 +4165,51 @@ cwdstuff::set (PUNICODE_STRING nat_cwd, const char *posix_cwd, bool doit)
 	  else
 	    drive_length = win32.Length / sizeof (WCHAR);
 	}
-      else				 /* Shouldn't happen */
-	drive_length = 0;
-
-      tmp_pathbuf tp;
-      if (!posix_cwd)
-	{
-	  posix_cwd = (const char *) tp.c_get ();
-	  mount_table->conv_to_posix_path (win32.Buffer, (char *) posix_cwd, 0);
-	}
-      posix = (char *) crealloc_abort (posix, strlen (posix_cwd) + 1);
-      stpcpy (posix, posix_cwd);
+      if (inaccessible_path)
+	error = EACCES;
+      else if (win32.Length > (MAX_PATH - 2) * sizeof (WCHAR))
+	error = ENAMETOOLONG;
+      else
+	error = 0;
     }
+  /* Keep the Win32 CWD in sync.  Don't check for error, other than for
+     strace output.  Try to keep overhead low. */
+  override_win32_cwd (!nat_cwd, old_dismount_count);
 
-out:
+  /* Eventually, create POSIX path if it's not set on entry. */
+  tmp_pathbuf tp;
+  if (!posix_cwd)
+    {
+      posix_cwd = (const char *) tp.c_get ();
+      mount_table->conv_to_posix_path (win32.Buffer, (char *) posix_cwd, 0);
+    }
+  posix = (char *) crealloc_abort (posix, strlen (posix_cwd) + 1);
+  stpcpy (posix, posix_cwd);
+
   cwd_lock.release ();
-  return res;
+  return 0;
+}
+
+const char *
+cwdstuff::get_error_desc () const
+{
+  switch (cygheap->cwd.get_error ())
+    {
+    case EACCES:
+      return "has restricted permissions which render it\n"
+	     "inaccessible as Win32 working directory";
+    case ENOTDIR:
+      return "is a virtual Cygwin directory which does\n"
+	     "not exist for a native Windows application";
+    case ENAMETOOLONG:
+      return "has a path longer than allowed for a\n"
+	     "Win32 working directory";
+    default:
+      break;
+    }
+  /* That shouldn't occur, unless we defined a new error code
+     in cwdstuff::set. */
+  return "is not accessible for some unknown reason";
 }
 
 /* Store incoming wchar_t path as current posix cwd.  This is called from

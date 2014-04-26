@@ -1,7 +1,6 @@
 /* fhandler_random.cc: code to access /dev/random and /dev/urandom
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2007, 2009
-   Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2007, 2009, 2011 Red Hat, Inc.
 
    Written by Corinna Vinschen (vinschen@cygnus.com)
 
@@ -16,6 +15,10 @@ details. */
 #include "cygerrno.h"
 #include "path.h"
 #include "fhandler.h"
+#include "sync.h"
+#include "dtable.h"
+#include "cygheap.h"
+#include "child_info.h"
 
 #define RANDOM   8
 #define URANDOM  9
@@ -42,11 +45,11 @@ bool
 fhandler_dev_random::crypt_gen_random (void *ptr, size_t len)
 {
   if (!crypt_prov
-      && !CryptAcquireContext (&crypt_prov, NULL, MS_DEF_PROV, PROV_RSA_FULL,
-			       CRYPT_VERIFYCONTEXT | CRYPT_MACHINE_KEYSET)
-      && !CryptAcquireContext (&crypt_prov, NULL, MS_DEF_PROV, PROV_RSA_FULL,
-			       CRYPT_VERIFYCONTEXT | CRYPT_MACHINE_KEYSET
-			       | CRYPT_NEWKEYSET))
+      && !CryptAcquireContextW (&crypt_prov, NULL, MS_DEF_PROV_W, PROV_RSA_FULL,
+				CRYPT_VERIFYCONTEXT | CRYPT_MACHINE_KEYSET)
+      && !CryptAcquireContextW (&crypt_prov, NULL, MS_DEF_PROV_W, PROV_RSA_FULL,
+				CRYPT_VERIFYCONTEXT | CRYPT_MACHINE_KEYSET
+				| CRYPT_NEWKEYSET))
     {
       debug_printf ("%E = CryptAquireContext()");
       return false;
@@ -171,7 +174,7 @@ fhandler_dev_random::lseek (_off64_t off, int whence)
 int
 fhandler_dev_random::close ()
 {
-  if (!hExeced && crypt_prov)
+  if (!have_execed && crypt_prov)
     while (!CryptReleaseContext (crypt_prov, 0)
 	   && GetLastError () == ERROR_BUSY)
       Sleep (10);
@@ -179,7 +182,7 @@ fhandler_dev_random::close ()
 }
 
 int
-fhandler_dev_random::dup (fhandler_base *child)
+fhandler_dev_random::dup (fhandler_base *child, int)
 {
   fhandler_dev_random *fhr = (fhandler_dev_random *) child;
   fhr->crypt_prov = (HCRYPTPROV)NULL;

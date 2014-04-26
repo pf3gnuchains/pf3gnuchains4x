@@ -1,6 +1,6 @@
 /* fhandler_raw.cc.  See fhandler.h for a description of the fhandler classes.
 
-   Copyright 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2007, 2008, 2009
+   Copyright 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2007, 2008, 2009, 2011
    Red Hat, Inc.
 
    This file is part of Cygwin.
@@ -81,15 +81,14 @@ fhandler_dev_raw::open (int flags, mode_t)
 }
 
 int
-fhandler_dev_raw::dup (fhandler_base *child)
+fhandler_dev_raw::dup (fhandler_base *child, int flags)
 {
-  int ret = fhandler_base::dup (child);
+  int ret = fhandler_base::dup (child, flags);
 
   if (!ret)
     {
       fhandler_dev_raw *fhc = (fhandler_dev_raw *) child;
 
-      fhc->devbufsiz = devbufsiz;
       if (devbufsiz > 1L)
 	fhc->devbuf = new char [devbufsiz];
       fhc->devbufstart = 0;
@@ -148,7 +147,7 @@ fhandler_dev_raw::ioctl (unsigned int cmd, void *buf)
 		     || (op->rd_parm > 1 && (op->rd_parm % 512))
 		     || (get_flags () & O_DIRECT))
 	      /* The conditions for a *valid* parameter are these:
-	         - If there's still data in the current buffer, it must
+		 - If there's still data in the current buffer, it must
 		   fit in the new buffer.
 		 - The new size is either 0 or 1, both indicating unbufferd
 		   I/O, or the new buffersize must be a multiple of 512.

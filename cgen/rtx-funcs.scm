@@ -1,5 +1,5 @@
 ; Standard RTL functions.
-; Copyright (C) 2000, 2009 Red Hat, Inc.
+; Copyright (C) 2000, 2009, 2010 Red Hat, Inc.
 ; This file is part of CGEN.
 ; See file COPYING.CGEN for details.
 
@@ -504,7 +504,7 @@
 
 (drn (c-code &options &mode text)
      #f
-     (OPTIONS ANYEXPRMODE STRING) (NA NA NA)
+     (OPTIONS ANYCEXPRMODE STRING) (NA NA NA)
      UNSPEC
      #f
 )
@@ -521,7 +521,7 @@
 
 (drn (c-call &options &mode name . args)
      #f
-     (OPTIONS ANYEXPRMODE STRING . RTX) (NA NA NA . ANY)
+     (OPTIONS ANYCEXPRMODE STRING . RTX) (NA NA NA . ANY)
      UNSPEC
      #f
 )
@@ -530,7 +530,7 @@
 
 (drn (c-raw-call &options &mode name . args)
      #f
-     (OPTIONS ANYEXPRMODE STRING . RTX) (NA NA NA . ANY)
+     (OPTIONS ANYCEXPRMODE STRING . RTX) (NA NA NA . ANY)
      UNSPEC
      #f
 )
@@ -809,6 +809,25 @@
      #f
 )
 
+(drn (nan &options &mode s1)
+     BI
+     (OPTIONS ANYFLOATMODE RTX) (NA NA MATCHEXPR)
+     UNARY
+     #f
+)
+(drn (qnan &options &mode s1)
+     BI
+     (OPTIONS ANYFLOATMODE RTX) (NA NA MATCHEXPR)
+     UNARY
+     #f
+)
+(drn (snan &options &mode s1)
+     BI
+     (OPTIONS ANYFLOATMODE RTX) (NA NA MATCHEXPR)
+     UNARY
+     #f
+)
+
 ; min/max
 
 (drn (min &options &mode s1 s2)
@@ -922,7 +941,7 @@
 ;     ...
 ;)
 
-; Conversions.
+;; Integer conversions.
 
 (drn (ext &options &mode s1)
      #f
@@ -942,39 +961,42 @@
      UNARY
      #f
 )
-(drn (fext &options &mode s1)
+
+;; Conversions involving floating point values.
+
+(drn (fext &options &mode how s1)
      #f
-     (OPTIONS ANYFLOATMODE RTX) (NA NA ANY)
+     (OPTIONS ANYFLOATMODE RTX RTX) (NA NA INT ANY)
      UNARY
      #f
 )
-(drn (ftrunc &options &mode s1)
+(drn (ftrunc &options &mode how s1)
      #f
-     (OPTIONS ANYFLOATMODE RTX) (NA NA ANY)
+     (OPTIONS ANYFLOATMODE RTX RTX) (NA NA INT ANY)
      UNARY
      #f
 )
-(drn (float &options &mode s1)
+(drn (float &options &mode how s1)
      #f
-     (OPTIONS ANYFLOATMODE RTX) (NA NA ANY)
+     (OPTIONS ANYFLOATMODE RTX RTX) (NA NA INT ANY)
      UNARY
      #f
 )
-(drn (ufloat &options &mode s1)
+(drn (ufloat &options &mode how s1)
      #f
-     (OPTIONS ANYFLOATMODE RTX) (NA NA ANY)
+     (OPTIONS ANYFLOATMODE RTX RTX) (NA NA INT ANY)
      UNARY
      #f
 )
-(drn (fix &options &mode s1)
+(drn (fix &options &mode how s1)
      #f
-     (OPTIONS ANYINTMODE RTX) (NA NA ANY)
+     (OPTIONS ANYINTMODE RTX RTX) (NA NA INT ANY)
      UNARY
      #f
 )
-(drn (ufix &options &mode s1)
+(drn (ufix &options &mode how s1)
      #f
-     (OPTIONS ANYINTMODE RTX) (NA NA ANY)
+     (OPTIONS ANYINTMODE RTX RTX) (NA NA INT ANY)
      UNARY
      #f
 )
@@ -1083,7 +1105,7 @@
 (drn (if &options &mode cond then . else)
      #f
      ;; ??? It would be cleaner if TESTRTX had to have BI mode.
-     (OPTIONS VOIDORNUMMODE TESTRTX RTX . RTX) (NA NA ANYINT MATCHEXPR . MATCH3)
+     (OPTIONS ANYEXPRMODE TESTRTX RTX . RTX) (NA NA ANYINT MATCHEXPR . MATCH3)
      IF
      (apply e-if (append! (list *estate* mode cond then) else))
 )
@@ -1095,7 +1117,7 @@
 ; the same mode as the result.
 (drsn (cond &options &mode . cond-code-list)
      #f
-      (OPTIONS VOIDORNUMMODE . CONDRTX) (NA NA . MATCHEXPR)
+      (OPTIONS ANYEXPRMODE . CONDRTX) (NA NA . MATCHEXPR)
       COND
       #f
 )
@@ -1105,7 +1127,7 @@
 ; the same mode as the result.
 (drn (case &options &mode test . case-list)
      #f
-     (OPTIONS VOIDORNUMMODE RTX . CASERTX) (NA NA ANY . MATCHEXPR)
+     (OPTIONS ANYEXPRMODE RTX . CASERTX) (NA NA ANY . MATCHEXPR)
      COND
      #f
 )

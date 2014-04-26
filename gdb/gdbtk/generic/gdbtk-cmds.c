@@ -1,5 +1,6 @@
 /* Tcl/Tk command definitions for Insight.
-   Copyright (C) 1994, 1995, 1996, 1997, 1998, 1999, 2001, 2002, 2003, 2004, 2007, 2008, 2010
+   Copyright (C) 1994, 1995, 1996, 1997, 1998, 1999, 2001, 2002, 2003, 2004,
+   2007, 2008, 2010, 2011
    Free Software Foundation, Inc.
 
    Written by Stu Grossman <grossman@cygnus.com> of Cygnus Support.
@@ -46,6 +47,7 @@
 #include "valprint.h"
 #include "regcache.h"
 #include "arch-utils.h"
+#include "psymtab.h"
 
 /* tcl header files includes varargs.h unless HAS_STDARG is defined,
    but gdb uses stdarg.h, so make sure HAS_STDARG is defined.  */
@@ -73,6 +75,20 @@
 
 #ifdef __CYGWIN__
 #include <sys/cygwin.h>		/* for cygwin_conv_to_full_win32_path */
+#include <cygwin/version.h>
+# if CYGWIN_VERSION_DLL_MAKE_COMBINED(CYGWIN_VERSION_API_MAJOR,CYGWIN_VERSION_API_MINOR) >= 181
+#   define __USEWIDE
+# else
+#   define CCP_POSIX_TO_WIN_A 0 
+#   define CCP_POSIX_TO_WIN_W 1
+#   define CCP_WIN_A_TO_POSIX 2 
+#   define CCP_WIN_W_TO_POSIX 3
+#   define cygwin_conv_path(op, from, to, size)  \
+         (op == CCP_WIN_A_TO_POSIX) ? \
+         cygwin_conv_to_full_posix_path (from, to) : \
+         cygwin_conv_to_win32_path (from, to)
+#   define CW_SET_DOS_FILE_WARNING -1	/* no-op this for older Cygwin */
+# endif
 #endif
 
 #ifdef HAVE_CTYPE_H
@@ -208,7 +224,6 @@ static int gdb_disassemble_driver (CORE_ADDR low, CORE_ADDR high,
 							      struct
 							      disassemble_info
 							      *));
-char *get_prompt (void);
 static int perror_with_name_wrapper (PTR args);
 static int wrapped_call (PTR opaque_args);
 static int hex2bin (const char *hex, char *bin, int count);
@@ -637,9 +652,7 @@ gdb_eval (ClientData clientData, Tcl_Interp *interp,
   /* "Print" the result of the expression evaluation. */
   stb = mem_fileopen ();
   make_cleanup_ui_file_delete (stb);
-  val_print (value_type (val), value_contents (val),
-	     value_embedded_offset (val), value_address (val),
-	     stb, 0, &opts, current_language);
+  common_val_print (val, stb, 0, &opts, current_language);
   result = ui_file_xstrdup (stb, &dummy);
   Tcl_SetObjResult (interp, Tcl_NewStringObj (result, -1));
   xfree (result);
@@ -859,13 +872,7 @@ gdb_set_inferior_args (ClientData clientData, Tcl_Interp *interp,
     }
 
   args = Tcl_GetStringFromObj (objv[1], NULL);
-
-  /* The xstrdup/xfree stuff is so that we maintain a coherent picture
-     for gdb.  I would expect the accessors to do this, but they
-     don't.  */
-  args = xstrdup (args);
-  args = set_inferior_args (args);
-  xfree (args);
+  set_inferior_args (args);
 
   return TCL_OK;
 }
@@ -944,7 +951,7 @@ gdb_get_line_command (ClientData clientData, Tcl_Interp *interp,
 		      int objc, Tcl_Obj *CONST objv[])
 {
   struct symtabs_and_lines sals;
-  char *args, **canonical;
+  char *args;
 
   if (objc != 2)
     {
@@ -953,7 +960,7 @@ gdb_get_line_command (ClientData clientData, Tcl_Interp *interp,
     }
 
   args = Tcl_GetStringFromObj (objv[1], NULL);
-  sals = decode_line_1 (&args, 1, NULL, 0, &canonical, NULL);
+  sals = decode_line_1 (&args, DECODE_LINE_FUNFIRSTLINE, NULL, 0);
   if (sals.nelts == 1)
     {
       Tcl_SetIntObj (result_ptr->obj_ptr, sals.sals[0].line);
@@ -980,7 +987,7 @@ gdb_get_file_command (ClientData clientData, Tcl_Interp *interp,
 		      int objc, Tcl_Obj *CONST objv[])
 {
   struct symtabs_and_lines sals;
-  char *args, **canonical;
+  char *args;
 
   if (objc != 2)
     {
@@ -989,7 +996,7 @@ gdb_get_file_command (ClientData clientData, Tcl_Interp *interp,
     }
 
   args = Tcl_GetStringFromObj (objv[1], NULL);
-  sals = decode_line_1 (&args, 1, NULL, 0, &canonical, NULL);
+  sals = decode_line_1 (&args, DECODE_LINE_FUNFIRSTLINE, NULL, 0);
   if (sals.nelts == 1)
     {
       Tcl_SetStringObj (result_ptr->obj_ptr,
@@ -1016,7 +1023,7 @@ gdb_get_function_command (ClientData clientData, Tcl_Interp *interp,
 {
   char *function;
   struct symtabs_and_lines sals;
-  char *args, **canonical;
+  char *args;
 
   if (objc != 2)
     {
@@ -1025,7 +1032,7 @@ gdb_get_function_command (ClientData clientData, Tcl_Interp *interp,
     }
 
   args = Tcl_GetStringFromObj (objv[1], NULL);
-  sals = decode_line_1 (&args, 1, NULL, 0, &canonical, NULL);
+  sals = decode_line_1 (&args, DECODE_LINE_FUNFIRSTLINE, NULL, 0);
   if (sals.nelts == 1)
     {
       resolve_sal_pc (&sals.sals[0]);
@@ -1109,6 +1116,42 @@ gdb_find_file_command (ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/* An object of this type is passed to do_listfiles.  */
+
+struct listfiles_info
+{
+  int *numfilesp;
+  int *files_sizep;
+  const char ***filesp;
+  int len;
+  const char *pathname;
+};
+
+/* This is a helper function for gdb_listfiles that is used via
+   map_partial_symbol_filenames.  */
+
+static void
+do_listfiles (const char *filename, const char *fullname, void *data)
+{
+  struct listfiles_info *info = data;
+
+  if (*info->numfilesp == *info->files_sizep)
+    {
+      *info->files_sizep *= 2;
+      *info->filesp = xrealloc (*info->filesp,
+				*info->files_sizep * sizeof (char *));
+    }
+
+  if (filename)
+    {
+      if (!info->len || !strncmp (info->pathname, filename, info->len)
+	  || !strcmp (filename, lbasename (filename)))
+	{
+	  (*info->filesp)[(*info->numfilesp)++] = lbasename (filename);
+	}
+    }
+}
+
 /* This implements the tcl command "gdb_listfiles"
 
 * This lists all the files in the current executible.
@@ -1139,6 +1182,7 @@ gdb_listfiles (ClientData clientData, Tcl_Interp *interp,
   const char **files;
   int files_size;
   int i, numfiles = 0, len = 0;
+  struct listfiles_info info;
 
   files_size = 1000;
   files = (const char **) xmalloc (sizeof (char *) * files_size);
@@ -1151,22 +1195,12 @@ gdb_listfiles (ClientData clientData, Tcl_Interp *interp,
   else if (objc == 2)
     pathname = Tcl_GetStringFromObj (objv[1], &len);
 
-  ALL_PSYMTABS (objfile, psymtab)
-    {
-      if (numfiles == files_size)
-	{
-	  files_size = files_size * 2;
-	  files = (const char **) xrealloc (files, sizeof (char *) * files_size);
-	}
-      if (psymtab->filename)
-	{
-	  if (!len || !strncmp (pathname, psymtab->filename, len)
-	      || !strcmp (psymtab->filename, lbasename (psymtab->filename)))
-	    {
-	      files[numfiles++] = lbasename (psymtab->filename);
-	    }
-	}
-    }
+  info.numfilesp = &numfiles;
+  info.files_sizep = &files_size;
+  info.filesp = &files;
+  info.len = len;
+  info.pathname = pathname;
+  map_partial_symbol_filenames (do_listfiles, &info, 0);
 
   ALL_SYMTABS (objfile, symtab)
     {
@@ -2852,8 +2886,8 @@ gdb_path_conv (ClientData clientData, Tcl_Interp *interp,
   {
     char pathname[256], *ptr;
 
-    cygwin_conv_to_full_win32_path (Tcl_GetStringFromObj (objv[1], NULL),
-				      pathname);
+    cygwin_conv_path (CCP_POSIX_TO_WIN_A, Tcl_GetStringFromObj (objv[1], NULL),
+		      pathname, 256);
     for (ptr = pathname; *ptr; ptr++)
       {
 	if (*ptr == '\\')

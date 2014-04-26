@@ -1,6 +1,7 @@
 /* timer.cc
 
-   Copyright 2004, 2005 Red Hat, Inc.
+   Copyright 2004, 2005, 2006, 2008, 2010, 2011
+   Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -162,7 +163,7 @@ timer_thread (VOID *x)
 	    si.si_signo = tt->evp.sigev_signo;
 	    si.si_sigval.sival_ptr = tt->evp.sigev_value.sival_ptr;
 	    si.si_code = SI_TIMER;
-	    debug_printf ("%p sending sig %d", x, tt->evp.sigev_signo);
+	    debug_printf ("%p sending signal %d", x, tt->evp.sigev_signo);
 	    sig_send (myself_nowait, si);
 	    break;
 	  }
@@ -253,7 +254,7 @@ timer_tracker::settime (int in_flags, const itimerspec *value, itimerspec *ovalu
 	syncthread = CreateEvent (&sec_none_nih, TRUE, FALSE, NULL);
       else
 	ResetEvent (syncthread);
-      new cygthread (timer_thread, 0, this, "itimer", syncthread);
+      new cygthread (timer_thread, this, "itimer", syncthread);
     }
 
   return 0;
@@ -300,6 +301,13 @@ timer_create (clockid_t clock_id, struct sigevent *evp, timer_t *timerid)
   myfault efault;
   if (efault.faulted (EFAULT))
     return -1;
+
+  if (CLOCKID_IS_PROCESS (clock_id) || CLOCKID_IS_THREAD (clock_id))
+    {
+      set_errno (ENOTSUP);
+      return -1;
+    }
+
   if (clock_id != CLOCK_REALTIME)
     {
       set_errno (EINVAL);
@@ -369,26 +377,31 @@ fixup_timers_after_fork ()
 extern "C" int
 setitimer (int which, const struct itimerval *value, struct itimerval *ovalue)
 {
+  int ret;
   if (which != ITIMER_REAL)
     {
       set_errno (EINVAL);
-      return -1;
+      ret = -1;
     }
-  struct itimerspec spec_value, spec_ovalue;
-  int ret;
-  spec_value.it_interval.tv_sec = value->it_interval.tv_sec;
-  spec_value.it_interval.tv_nsec = value->it_interval.tv_usec * 1000;
-  spec_value.it_value.tv_sec = value->it_value.tv_sec;
-  spec_value.it_value.tv_nsec = value->it_value.tv_usec * 1000;
-  ret = timer_settime ((timer_t) &ttstart, 0, &spec_value, &spec_ovalue);
-  if (!ret && ovalue)
+  else
     {
-      ovalue->it_interval.tv_sec = spec_ovalue.it_interval.tv_sec;
-      ovalue->it_interval.tv_usec = spec_ovalue.it_interval.tv_nsec / 1000;
-      ovalue->it_value.tv_sec = spec_ovalue.it_value.tv_sec;
-      ovalue->it_value.tv_usec = spec_ovalue.it_value.tv_nsec / 1000;
+      struct itimerspec spec_value, spec_ovalue;
+      spec_value.it_interval.tv_sec = value->it_interval.tv_sec;
+      spec_value.it_interval.tv_nsec = value->it_interval.tv_usec * 1000;
+      spec_value.it_value.tv_sec = value->it_value.tv_sec;
+      spec_value.it_value.tv_nsec = value->it_value.tv_usec * 1000;
+      ret = timer_settime ((timer_t) &ttstart, 0, &spec_value, &spec_ovalue);
+      if (ret)
+	ret = -1;
+      else if (ovalue)
+	{
+	  ovalue->it_interval.tv_sec = spec_ovalue.it_interval.tv_sec;
+	  ovalue->it_interval.tv_usec = spec_ovalue.it_interval.tv_nsec / 1000;
+	  ovalue->it_value.tv_sec = spec_ovalue.it_value.tv_sec;
+	  ovalue->it_value.tv_usec = spec_ovalue.it_value.tv_nsec / 1000;
+	}
     }
-  syscall_printf ("%d = setitimer ()", ret);
+  syscall_printf ("%R = setitimer()", ret);
   return ret;
 }
 
@@ -396,24 +409,33 @@ setitimer (int which, const struct itimerval *value, struct itimerval *ovalue)
 extern "C" int
 getitimer (int which, struct itimerval *ovalue)
 {
+  int ret;
   if (which != ITIMER_REAL)
     {
       set_errno (EINVAL);
-      return -1;
+      ret = -1;
     }
-  myfault efault;
-  if (efault.faulted (EFAULT))
-    return -1;
-  struct itimerspec spec_ovalue;
-  int ret = timer_gettime ((timer_t) &ttstart, &spec_ovalue);
-  if (!ret)
+  else
     {
-      ovalue->it_interval.tv_sec = spec_ovalue.it_interval.tv_sec;
-      ovalue->it_interval.tv_usec = spec_ovalue.it_interval.tv_nsec / 1000;
-      ovalue->it_value.tv_sec = spec_ovalue.it_value.tv_sec;
-      ovalue->it_value.tv_usec = spec_ovalue.it_value.tv_nsec / 1000;
+      myfault efault;
+      if (efault.faulted (EFAULT))
+	ret = -1;
+      else
+	{
+	  struct itimerspec spec_ovalue;
+	  int ret = timer_gettime ((timer_t) &ttstart, &spec_ovalue);
+	  if (ret)
+	    ret = -1;
+	  else
+	    {
+	      ovalue->it_interval.tv_sec = spec_ovalue.it_interval.tv_sec;
+	      ovalue->it_interval.tv_usec = spec_ovalue.it_interval.tv_nsec / 1000;
+	      ovalue->it_value.tv_sec = spec_ovalue.it_value.tv_sec;
+	      ovalue->it_value.tv_usec = spec_ovalue.it_value.tv_nsec / 1000;
+	    }
+	}
     }
-  syscall_printf ("%d = getitimer ()", ret);
+  syscall_printf ("%R = getitimer()", ret);
   return ret;
 }
 
@@ -429,7 +451,7 @@ alarm (unsigned int seconds)
  newt.it_value.tv_sec = seconds;
  timer_settime ((timer_t) &ttstart, 0, &newt, &oldt);
  int ret = oldt.it_value.tv_sec + (oldt.it_value.tv_nsec > 0);
- syscall_printf ("%d = alarm (%d)", ret, seconds);
+ syscall_printf ("%d = alarm(%d)", ret, seconds);
  return ret;
 }
 
@@ -451,6 +473,6 @@ ualarm (useconds_t value, useconds_t interval)
    }
  timer_settime ((timer_t) &ttstart, 0, &timer, &otimer);
  useconds_t ret = otimer.it_value.tv_sec * 1000000 + (otimer.it_value.tv_nsec + 999) / 1000;
- syscall_printf ("%d = ualarm (%d , %d)", ret, value, interval);
+ syscall_printf ("%d = ualarm(%d , %d)", ret, value, interval);
  return ret;
 }

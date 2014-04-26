@@ -1,6 +1,6 @@
 /* Simulator for Motorola's MCore processor
-   Copyright (C) 1999, 2000, 2002, 2003, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 1999-2000, 2002-2003, 2007-2012 Free Software
+   Foundation, Inc.
    Contributed by Cygnus Solutions.
 
 This file is part of GDB, the GNU debugger.
@@ -1718,7 +1718,7 @@ int
 sim_write (sd, addr, buffer, size)
      SIM_DESC sd;
      SIM_ADDR addr;
-     unsigned char * buffer;
+     const unsigned char * buffer;
      int size;
 {
   int i;

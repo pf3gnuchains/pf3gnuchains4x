@@ -1,5 +1,5 @@
 ; Operands
-; Copyright (C) 2000, 2001, 2005, 2009 Red Hat, Inc.
+; Copyright (C) 2000, 2001, 2005, 2009, 2010 Red Hat, Inc.
 ; This file is part of CGEN.
 ; See file COPYING.CGEN for details.
 
@@ -248,11 +248,11 @@
 ; Create a copy of operand OP in mode NEW-MODE-NAME.
 ; NOTE: Even if the mode isn't changing this creates a copy.
 ; If OP has been subclassed the result must contain the complete class
-; (e.g. the behaviour of `object-copy-top').
+; (e.g. the behaviour of `object-copy').
 ; NEW-MODE-NAME must be a valid numeric mode.
 
 (define (op:new-mode op new-mode-name)
-  (let ((result (object-copy-top op)))
+  (let ((result (object-copy op)))
     ; (logit 1 "op:new-mode op=" (op:sem-name op) 
     ;   " class=" (object-class-name op)
     ;   " hw-name=" (op:hw-name op)
@@ -1233,7 +1233,7 @@
 (define (/anyof-merge-encoding container encoding value-names values)
   (assert (derived-ifield? encoding))
   (let ((subfields (derived-ifield-subfields encoding))
-	(result (object-copy-top encoding)))
+	(result (object-copy encoding)))
     ; Delete all the elements that are being replaced with ifields from
     ; {values} and add the new ifields.
     (derived-ifield-set-subfields! result
@@ -1253,7 +1253,6 @@
 ; ((add a b)-object), then return (mem QI (add a b)).
 
 (define (/anyof-merge-getter getter value-names values)
-  ;(debug-repl-env getter value-names values)
   ; ??? This implementation is a quick hack, intended to evolve or be replaced.
   (cond ((not getter)
 	 #f)
@@ -1282,7 +1281,6 @@
 ; ??? `newval' in this context is a reserved word.
 
 (define (/anyof-merge-setter setter value-names values)
-  ;(debug-repl-env setter value-names values)
   ; ??? This implementation is a quick hack, intended to evolve or be replaced.
   (cond ((not setter)
 	 #f)
@@ -1313,7 +1311,6 @@
 ; ((add a b)-object), then return (mem QI (add a b)).
 
 (define (anyof-merge-semantics semantics value-names values)
-  ;(debug-repl-env semantics value-names values)
   ; ??? This implementation is a quick hack, intended to evolve or be replaced.
   (let ((result
 	 (cond ((not semantics)
@@ -1454,7 +1451,7 @@
 ; choice of {anyof-operand}.
 
 (define (/anyof-instance-from-derived anyof-operand derop)
-  (let* ((encoding (object-copy-top (derived-encoding derop)))
+  (let* ((encoding (object-copy (derived-encoding derop)))
 	 (result
 	  (make <anyof-instance>
 		(obj:name derop)

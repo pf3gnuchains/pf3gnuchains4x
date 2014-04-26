@@ -1,6 +1,6 @@
 /* cygtls.cc
 
-   Copyright 2003, 2004, 2005, 2006, 2007, 2008, 2009 Red Hat, Inc.
+   Copyright 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
@@ -10,11 +10,13 @@ details. */
 #define USE_SYS_TYPES_FD_SET
 #include "cygtls.h"
 #include <syslog.h>
+#include <stdlib.h>
 #include "path.h"
 #include "fhandler.h"
 #include "dtable.h"
 #include "cygheap.h"
 #include "sigproc.h"
+#include "exception.h"
 
 class sentry
 {
@@ -54,6 +56,9 @@ void
 _cygtls::call (DWORD (*func) (void *, void *), void *arg)
 {
   char buf[CYGTLS_PADSIZE];
+  /* Initialize this thread's ability to respond to things like
+     SIGSEGV or SIGFPE. */
+  exception protect;
   _my_tls.call2 (func, arg, buf);
 }
 
@@ -76,6 +81,7 @@ _cygtls::init_thread (void *x, DWORD (*func) (void *, void *))
   if (x)
     {
       memset (this, 0, sizeof (*this));
+      _REENT_INIT_PTR (&local_clib);
       stackptr = stack;
       if (_GLOBAL_REENT)
 	{
@@ -87,16 +93,12 @@ _cygtls::init_thread (void *x, DWORD (*func) (void *, void *))
 	  local_clib.__sglue._niobs = 3;
 	  local_clib.__sglue._iobs = &_GLOBAL_REENT->__sf[0];
 	}
-      local_clib._current_locale = "C";
-      locals.process_logmask = LOG_UPTO (LOG_DEBUG);
-      /* Initialize this thread's ability to respond to things like
-	 SIGSEGV or SIGFPE. */
-      init_exception_handler (handle_exceptions);
     }
 
   thread_id = GetCurrentThreadId ();
   initialized = CYGTLS_INITIALIZED;
   errno_addr = &(local_clib._errno);
+  locals.cw_timer = NULL;
 
   if ((void *) func == (void *) cygthread::stub
       || (void *) func == (void *) cygthread::simplestub)
@@ -126,6 +128,7 @@ _cygtls::fixup_after_fork ()
     }
   stacklock = spinning = 0;
   locals.select.sockevt = NULL;
+  locals.cw_timer = NULL;
   wq.thread_ev = NULL;
 }
 
@@ -144,24 +147,23 @@ _cygtls::remove (DWORD wait)
     return;
 
   debug_printf ("wait %p", wait);
-  if (wait)
-    {
-      /* FIXME: Need some sort of atthreadexit function to allow things like
-	 select to control this themselves. */
-      if (locals.select.sockevt)
-	{
-	  CloseHandle (locals.select.sockevt);
-	  locals.select.sockevt = NULL;
-	  free_local (select.ser_num);
-	  free_local (select.w4);
-	}
-      free_local (process_ident);
-      free_local (ntoa_buf);
-      free_local (protoent_buf);
-      free_local (servent_buf);
-      free_local (hostent_buf);
-    }
 
+  /* FIXME: Need some sort of atthreadexit function to allow things like
+     select to control this themselves. */
+
+  /* Close handle and free memory used by select. */
+  if (locals.select.sockevt)
+    {
+      CloseHandle (locals.select.sockevt);
+      locals.select.sockevt = NULL;
+      free_local (select.ser_num);
+      free_local (select.w4);
+    }
+  /* Free memory used by network functions. */
+  free_local (ntoa_buf);
+  free_local (protoent_buf);
+  free_local (servent_buf);
+  free_local (hostent_buf);
   /* Free temporary TLS path buffers. */
   locals.pathbufs.destroy ();
 
@@ -195,7 +197,7 @@ _cygtls::find_tls (int sig)
 {
   static int NO_COPY threadlist_ix;
 
-  debug_printf ("sig %d\n", sig);
+  debug_printf ("signal %d\n", sig);
   sentry here (INFINITE);
 
   _cygtls *res = NULL;
@@ -218,47 +220,4 @@ void
 _cygtls::set_siginfo (sigpacket *pack)
 {
   infodata = pack->si;
-}
-
-/* Set up the exception handler for the current thread.  The x86 uses segment
-   register fs, offset 0 to point to the current exception handler. */
-
-extern exception_list *_except_list asm ("%fs:0");
-
-void
-_cygtls::init_exception_handler (exception_handler *eh)
-{
-  /* Here in the distant past of 17-Jul-2009, we had an issue where Windows
-     2008 became YA perplexed because the cygwin exception handler was added
-     at the start of the SEH while still being in the list further on.  This
-     was because we added a loop by setting el.prev to _except_list here.
-     Since el is reused in this thread, and this function can be called
-     more than once when a dll is loaded, this is not a good thing.
-
-     So, for now, until the next required tweak, we will just avoid adding the
-     cygwin exception handler if it is already on this list.  This could present
-     a problem if some previous exception handler tries to do things that are
-     better left to Cygwin.  I await the cygwin mailing list notification of
-     this event with bated breath.
-
-     (cgf 2009-07-17) */
-  for (exception_list *e = _except_list;
-       e != NULL && e != (exception_list *) -1;
-       e = e->prev)
-    if (e == &el)
-      return;
-  el.handler = eh;
-  /* Apparently Windows stores some information about an exception and tries
-     to figure out if the SEH which returned 0 last time actually solved the
-     problem, or if the problem still persists (e.g. same exception at same
-     address).  In this case Windows seems to decide that it can't trust
-     that SEH and calls the next handler in the chain instead.
-
-     At one point this was a loop (el.prev = &el;).  This outsmarted the
-     above behaviour.  Unfortunately this trick doesn't work anymore with
-     Windows 2008, which irremediably gets into an endless loop, taking 100%
-     CPU.  That's why we reverted to a normal SEH chain and changed the way
-     the exception handler returns to the application. */
-  el.prev = _except_list;
-  _except_list = &el;
 }

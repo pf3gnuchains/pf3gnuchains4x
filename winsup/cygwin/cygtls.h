@@ -1,6 +1,6 @@
 /* cygtls.h
 
-   Copyright 2003, 2004, 2005, 2008, 2009 Red Hat, Inc.
+   Copyright 2003, 2004, 2005, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
@@ -17,7 +17,6 @@ details. */
 #include <mntent.h>
 #undef _NOMNTENT_FUNCS
 #include <setjmp.h>
-#include <exceptions.h>
 
 #define CYGTLS_INITIALIZED 0xc763173f
 
@@ -53,6 +52,7 @@ public:
   void destroy ();
   friend class tmp_pathbuf;
   friend class _cygtls;
+  friend class san;
 };
 
 class unionent
@@ -82,9 +82,6 @@ struct _local_storage
   char *namearray[2];
   int grp_pos;
 
-  /* console.cc */
-  unsigned rarg;
-
   /* dlfcn.cc */
   int dl_error;
   char dl_buffer[256];
@@ -111,26 +108,18 @@ struct _local_storage
     HANDLE *w4;				// note: malloced
   } select;
 
-  /* strerror */
-  char strerror_buf[sizeof ("Unknown error 4294967295")];
-
-  /* sysloc.cc */
-  char *process_ident;			// note: malloced
-  int process_logopt;
-  int process_facility;
-  int process_logmask;
+  /* strerror errno.cc */
+  char strerror_buf[sizeof ("Unknown error -2147483648")];
+  char strerror_r_buf[sizeof ("Unknown error -2147483648")];
 
   /* times.cc */
   char timezone_buf[20];
-  struct tm _localtime_buf;
 
-  /* uinfo.cc */
-  char username[UNLEN + 1];
+  /* strsig.cc */
+  char signamebuf[sizeof ("Unknown signal 4294967295   ")];
 
   /* net.cc */
   char *ntoa_buf;			// note: malloced
-  char signamebuf[sizeof ("Unknown signal 4294967295   ")];
-
   unionent *hostent_buf;		// note: malloced
   unionent *protoent_buf;		// note: malloced
   unionent *servent_buf;		// note: malloced
@@ -142,8 +131,12 @@ struct _local_storage
   int setmode_file;
   int setmode_mode;
 
+  /* thread.cc */
+  HANDLE cw_timer;
+
   /* All functions requiring temporary path buffers. */
   tls_pathbuf pathbufs;
+  char ttybuf[32];
 };
 
 typedef struct struct_waitq
@@ -156,14 +149,6 @@ typedef struct struct_waitq
   struct struct_waitq *next;
   HANDLE thread_ev;
 } waitq;
-
-typedef struct
-{
-  void *_myfault;
-  int _myfault_errno;
-  int _myfault_c_cnt;
-  int _myfault_w_cnt;
-} san;
 
 /* Changes to the below structure may require acompanying changes to the very
    simple parser in the perl script 'gentls_offsets' (<<-- start parsing here).
@@ -180,10 +165,11 @@ extern "C" int __ljfault (jmp_buf, int);
 /*gentls_offsets*/
 
 typedef __uint32_t __stack_t;
-struct _cygtls
+
+class _cygtls
 {
+public:
   void (*func) /*gentls_offsets*/(int)/*gentls_offsets*/;
-  exception_list el;
   int saved_errno;
   int sa_flags;
   sigset_t oldmask;
@@ -205,9 +191,8 @@ struct _cygtls
   };
   struct _local_storage locals;
   class cygthread *_ctinfo;
-  san andreas;
+  class san *andreas;
   waitq wq;
-  struct _cygtls *prev, *next;
   int sig;
   unsigned incyg;
   unsigned spinning;
@@ -221,7 +206,6 @@ struct _cygtls
   static void init ();
   void init_thread (void *, DWORD (*) (void *, void *));
   static void call (DWORD (*) (void *, void *), void *);
-  void call2 (DWORD (*) (void *, void *), void *, void *) __attribute__ ((regparm (3)));
   static struct _cygtls *find_tls (int sig);
   void remove (DWORD);
   void push (__stack_t) __attribute__ ((regparm (2)));
@@ -237,10 +221,7 @@ struct _cygtls
 				  struct sigaction& siga)
     __attribute__((regparm(3)));
 
-  /* exception handling */
-  static int handle_exceptions (EXCEPTION_RECORD *, exception_list *, CONTEXT *, void *);
   bool inside_kernel (CONTEXT *);
-  void init_exception_handler (int (*) (EXCEPTION_RECORD *, exception_list *, CONTEXT *, void*));
   void signal_exit (int) __attribute__ ((noreturn, regparm(2)));
   void copy_context (CONTEXT *) __attribute__ ((regparm(2)));
   void signal_debugger (int) __attribute__ ((regparm(2)));
@@ -257,34 +238,8 @@ struct _cygtls
   void lock () __attribute__ ((regparm (1)));
   void unlock () __attribute__ ((regparm (1)));
   bool locked () __attribute__ ((regparm (1)));
-  void*& fault_guarded () {return andreas._myfault;}
-  void return_from_fault ()
-  {
-    if (andreas._myfault_errno)
-      set_errno (andreas._myfault_errno);
-    /* Restore tls_pathbuf counters in case of error. */
-    locals.pathbufs.c_cnt = andreas._myfault_c_cnt;
-    locals.pathbufs.w_cnt = andreas._myfault_w_cnt;
-    __ljfault ((int *) andreas._myfault, 1);
-  }
-  int setup_fault (jmp_buf j, san& old_j, int myerrno) __attribute__ ((always_inline))
-  {
-    old_j._myfault = andreas._myfault;
-    old_j._myfault_errno = andreas._myfault_errno;
-    old_j._myfault_c_cnt = andreas._myfault_c_cnt;
-    old_j._myfault_w_cnt = andreas._myfault_w_cnt;
-    andreas._myfault = (void *) j;
-    andreas._myfault_errno = myerrno;
-    /* Save tls_pathbuf counters. */
-    andreas._myfault_c_cnt = locals.pathbufs.c_cnt;
-    andreas._myfault_w_cnt = locals.pathbufs.w_cnt;
-    return __sjfault (j);
-  }
-  void reset_fault (san& old_j) __attribute__ ((always_inline))
-  {
-    andreas._myfault = old_j._myfault;
-    andreas._myfault_errno = old_j._myfault_errno;
-  }
+private:
+  void call2 (DWORD (*) (void *, void *), void *, void *) __attribute__ ((regparm (3)));
   /*gentls_offsets*/
 };
 #pragma pack(pop)
@@ -299,15 +254,54 @@ extern char *_tlstop __asm__ ("%fs:8");
 extern _cygtls *_main_tls;
 extern _cygtls *_sig_tls;
 
+class san
+{
+  san *_clemente;
+  jmp_buf _context;
+  int _errno;
+  int _c_cnt;
+  int _w_cnt;
+public:
+  int setup (int myerrno = 0) __attribute__ ((always_inline))
+  {
+    _clemente = _my_tls.andreas;
+    _my_tls.andreas = this;
+    _errno = myerrno;
+    _c_cnt = _my_tls.locals.pathbufs.c_cnt;
+    _w_cnt = _my_tls.locals.pathbufs.w_cnt;
+    return __sjfault (_context);
+  }
+  void leave () __attribute__ ((always_inline))
+  {
+    if (_errno)
+      set_errno (_errno);
+    /* Restore tls_pathbuf counters in case of error. */
+    _my_tls.locals.pathbufs.c_cnt = _c_cnt;
+    _my_tls.locals.pathbufs.w_cnt = _w_cnt;
+    __ljfault (_context, 1);
+  }
+  void reset () __attribute__ ((always_inline))
+  {
+    _my_tls.andreas = _clemente;
+  }
+};
+
 class myfault
 {
-  jmp_buf buf;
   san sebastian;
 public:
-  ~myfault () __attribute__ ((always_inline)) { _my_tls.reset_fault (sebastian); }
-  inline int faulted (int myerrno = 0) __attribute__ ((always_inline))
+  ~myfault () __attribute__ ((always_inline)) { sebastian.reset (); }
+  inline int faulted () __attribute__ ((always_inline))
   {
-    return _my_tls.setup_fault (buf, sebastian, myerrno);
+    return sebastian.setup (0);
+  }
+  inline int faulted (void const *obj, int myerrno = 0) __attribute__ ((always_inline))
+  {
+    return !obj || !(*(const char **) obj) || sebastian.setup (myerrno);
+  }
+  inline int faulted (int myerrno) __attribute__ ((always_inline))
+  {
+    return sebastian.setup (myerrno);
   }
 };
 

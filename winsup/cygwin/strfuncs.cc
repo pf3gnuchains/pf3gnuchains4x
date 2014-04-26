@@ -1,7 +1,7 @@
 /* strfuncs.cc: misc funcs that don't belong anywhere else
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -23,10 +23,9 @@ details. */
    use area in the U+f0XX range.  The affected characters are all control
    chars 1 <= c <= 31, as well as the characters " * : < > ? |.  The backslash
    is affected as well, but we can't transform it as long as we accept Win32
-   paths as input.
-   The reverse functionality is in function sys_cp_wcstombs. */
+   paths as input. */
 static const WCHAR tfx_chars[] = {
-            0, 0xf000 |   1, 0xf000 |   2, 0xf000 |   3,
+	    0, 0xf000 |   1, 0xf000 |   2, 0xf000 |   3,
  0xf000 |   4, 0xf000 |   5, 0xf000 |   6, 0xf000 |   7,
  0xf000 |   8, 0xf000 |   9, 0xf000 |  10, 0xf000 |  11,
  0xf000 |  12, 0xf000 |  13, 0xf000 |  14, 0xf000 |  15,
@@ -34,29 +33,68 @@ static const WCHAR tfx_chars[] = {
  0xf000 |  20, 0xf000 |  21, 0xf000 |  22, 0xf000 |  23,
  0xf000 |  24, 0xf000 |  25, 0xf000 |  26, 0xf000 |  27,
  0xf000 |  28, 0xf000 |  29, 0xf000 |  30, 0xf000 |  31,
-          ' ',          '!', 0xf000 | '"',          '#',
-          '$',          '%',          '&',           39,
-          '(',          ')', 0xf000 | '*',          '+',
-          ',',          '-',          '.',          '\\',
-          '0',          '1',          '2',          '3',
-          '4',          '5',          '6',          '7',
-          '8',          '9', 0xf000 | ':',          ';',
+	  ' ',          '!', 0xf000 | '"',          '#',
+	  '$',          '%',          '&',           39,
+	  '(',          ')', 0xf000 | '*',          '+',
+	  ',',          '-',          '.',          '\\',
+	  '0',          '1',          '2',          '3',
+	  '4',          '5',          '6',          '7',
+	  '8',          '9', 0xf000 | ':',          ';',
  0xf000 | '<',          '=', 0xf000 | '>', 0xf000 | '?',
-          '@',          'A',          'B',          'C',
-          'D',          'E',          'F',          'G',
-          'H',          'I',          'J',          'K',
-          'L',          'M',          'N',          'O',
-          'P',          'Q',          'R',          'S',
-          'T',          'U',          'V',          'W',
-          'X',          'Y',          'Z',          '[',
-          '\\',          ']',          '^',          '_',
-          '`',          'a',          'b',          'c',
-          'd',          'e',          'f',          'g',
-          'h',          'i',          'j',          'k',
-          'l',          'm',          'n',          'o',
-          'p',          'q',          'r',          's',
-          't',          'u',          'v',          'w',
-          'x',          'y',          'z',          '{',
+	  '@',          'A',          'B',          'C',
+	  'D',          'E',          'F',          'G',
+	  'H',          'I',          'J',          'K',
+	  'L',          'M',          'N',          'O',
+	  'P',          'Q',          'R',          'S',
+	  'T',          'U',          'V',          'W',
+	  'X',          'Y',          'Z',          '[',
+	  '\\',          ']',          '^',          '_',
+	  '`',          'a',          'b',          'c',
+	  'd',          'e',          'f',          'g',
+	  'h',          'i',          'j',          'k',
+	  'l',          'm',          'n',          'o',
+	  'p',          'q',          'r',          's',
+	  't',          'u',          'v',          'w',
+	  'x',          'y',          'z',          '{',
+ 0xf000 | '|',          '}',          '~',          127
+};
+
+/* This is the table for the reverse functionality in sys_cp_wcstombs.
+   It differs deliberately in two code places (space and dot) to allow
+   converting back space and dot on filesystems only supporting DOS
+   filenames. */
+static const WCHAR tfx_rev_chars[] = {
+	    0, 0xf000 |   1, 0xf000 |   2, 0xf000 |   3,
+ 0xf000 |   4, 0xf000 |   5, 0xf000 |   6, 0xf000 |   7,
+ 0xf000 |   8, 0xf000 |   9, 0xf000 |  10, 0xf000 |  11,
+ 0xf000 |  12, 0xf000 |  13, 0xf000 |  14, 0xf000 |  15,
+ 0xf000 |  16, 0xf000 |  17, 0xf000 |  18, 0xf000 |  19,
+ 0xf000 |  20, 0xf000 |  21, 0xf000 |  22, 0xf000 |  23,
+ 0xf000 |  24, 0xf000 |  25, 0xf000 |  26, 0xf000 |  27,
+ 0xf000 |  28, 0xf000 |  29, 0xf000 |  30, 0xf000 |  31,
+ 0xf000 | ' ',          '!', 0xf000 | '"',          '#',
+	  '$',          '%',          '&',           39,
+	  '(',          ')', 0xf000 | '*',          '+',
+	  ',',          '-', 0xf000 | '.',          '\\',
+	  '0',          '1',          '2',          '3',
+	  '4',          '5',          '6',          '7',
+	  '8',          '9', 0xf000 | ':',          ';',
+ 0xf000 | '<',          '=', 0xf000 | '>', 0xf000 | '?',
+	  '@',          'A',          'B',          'C',
+	  'D',          'E',          'F',          'G',
+	  'H',          'I',          'J',          'K',
+	  'L',          'M',          'N',          'O',
+	  'P',          'Q',          'R',          'S',
+	  'T',          'U',          'V',          'W',
+	  'X',          'Y',          'Z',          '[',
+	  '\\',          ']',          '^',          '_',
+	  '`',          'a',          'b',          'c',
+	  'd',          'e',          'f',          'g',
+	  'h',          'i',          'j',          'k',
+	  'l',          'm',          'n',          'o',
+	  'p',          'q',          'r',          's',
+	  't',          'u',          'v',          'w',
+	  'x',          'y',          'z',          '{',
  0xf000 | '|',          '}',          '~',          127
 };
 
@@ -109,14 +147,6 @@ __sjis_wctomb (struct _reent *r, char *s, wchar_t wchar, const char *charset,
 	       mbstate_t *state)
 {
   return __db_wctomb (r,s, wchar, 932);
-}
-
-extern "C" int
-__jis_wctomb (struct _reent *r, char *s, wchar_t wchar, const char *charset,
-	       mbstate_t *state)
-{
-  /* FIXME: See comment at start of file. */
-  return __ascii_wctomb (r, s, wchar, charset, state);
 }
 
 extern "C" int
@@ -247,14 +277,6 @@ __sjis_mbtowc (struct _reent *r, wchar_t *pwc, const char *s, size_t n,
 }
 
 extern "C" int
-__jis_mbtowc (struct _reent *r, wchar_t *pwc, const char *s, size_t n,
-	       const char *charset, mbstate_t *state)
-{
-  /* FIXME: See comment at start of file. */
-  return __ascii_mbtowc (r, pwc, s, n, charset, state);
-}
-
-extern "C" int
 __eucjp_mbtowc (struct _reent *r, wchar_t *pwc, const char *s, size_t n,
 		const char *charset, mbstate_t *state)
 {
@@ -352,87 +374,6 @@ __big5_mbtowc (struct _reent *r, wchar_t *pwc, const char *s, size_t n,
   return __db_mbtowc (r, pwc, s, n, 950, state);
 }
 
-/* Convert Windows codepage to a setlocale compatible character set code.
-   Called from newlib's setlocale() with codepage set to 0, if the
-   charset isn't given explicitely in the POSIX compatible locale specifier.
-   The function also returns a pointer to the corresponding _mbtowc_r
-   function. */
-extern "C" mbtowc_p
-__set_charset_from_codepage (UINT cp, char *charset)
-{
-  if (cp == 0)
-    cp = GetACP ();
-  switch (cp)
-    {
-    case 437:
-    case 720:
-    case 737:
-    case 775:
-    case 850:
-    case 852:
-    case 855:
-    case 857:
-    case 858:
-    case 862:
-    case 866:
-    case 874:
-    case 1125:
-    case 1250:
-    case 1251:
-    case 1252:
-    case 1253:
-    case 1254:
-    case 1255:
-    case 1256:
-    case 1257:
-    case 1258:
-    case 20866:
-    case 21866:
-      __small_sprintf (charset, "CP%u", cp);
-      return __cp_mbtowc;
-    case 28591:
-    case 28592:
-    case 28593:
-    case 28594:
-    case 28595:
-    case 28596:
-    case 28597:
-    case 28598:
-    case 28599:
-    case 28603:
-    case 28605:
-      __small_sprintf (charset, "ISO-8859-%u", cp - 28590);
-      return __iso_mbtowc;
-    case 932:
-      strcpy (charset, "SJIS");
-      return __sjis_mbtowc;
-    case 936:
-      strcpy (charset, "GBK");
-      return __gbk_mbtowc;
-    case 949:
-    case 51949:
-      strcpy (charset, "EUCKR");
-      return __kr_mbtowc;
-    case 950:
-      strcpy (charset, "BIG5");
-      return __big5_mbtowc;
-    case 50220:
-      strcpy (charset, "JIS");
-      return __jis_mbtowc;
-    case 20932:
-    case 51932:
-      strcpy (charset, "EUCJP");
-      return __eucjp_mbtowc;
-    case 65001:
-      strcpy (charset, "UTF-8");
-      return __utf8_mbtowc;
-    default:
-      break;
-    }
-  strcpy (charset, "ASCII");
-  return __ascii_mbtowc;
-}
-
 /* Our own sys_wcstombs/sys_mbstowcs functions differ from the
    wcstombs/mbstowcs API in three ways:
 
@@ -475,11 +416,11 @@ sys_cp_wcstombs (wctomb_p f_wctomb, const char *charset, char *dst, size_t len,
       unsigned char cwc;
 
       /* Convert UNICODE private use area.  Reverse functionality for the
-         ASCII area <= 0x7f (only for path names) is transform_chars above.
+	 ASCII area <= 0x7f (only for path names) is transform_chars above.
 	 Reverse functionality for invalid bytes in a multibyte sequence is
 	 in sys_cp_mbstowcs below. */
       if ((pw & 0xff00) == 0xf000
-	  && (((cwc = (pw & 0xff)) <= 0x7f && tfx_chars[cwc] >= 0xf000)
+	  && (((cwc = (pw & 0xff)) <= 0x7f && tfx_rev_chars[cwc] >= 0xf000)
 	      || (cwc >= 0x80 && MB_CUR_MAX > 1)))
 	{
 	  buf[0] = (char) cwc;
@@ -659,7 +600,7 @@ sys_cp_mbstowcs (mbtowc_p f_mbtowc, const char *charset, wchar_t *dst,
 
 	     Invalid bytes in a multibyte secuence are converted to
 	     the private use area which is already used to store ASCII
-	     chars invalid in Windows filenames.  This technque allows 
+	     chars invalid in Windows filenames.  This technque allows
 	     to store them in a symmetric way. */
 	  bytes = 1;
 	  if (dst)
@@ -720,6 +661,20 @@ sys_mbstowcs_alloc (wchar_t **dst_p, int type, const char *src, size_t nms)
       ret = sys_mbstowcs (*dst_p, dlen, src, nms);
     }
   return ret;
+}
+
+/* Copy string, until c or <nul> is encountered.
+   NUL-terminate the destination string (s1).
+   Return pointer to terminating byte in dst string.  */
+char * __stdcall
+strccpy (char *s1, const char **s2, char c)
+{
+  while (**s2 && **s2 != c)
+    *s1++ = *((*s2)++);
+  *s1 = 0;
+
+  MALLOC_CHECK;
+  return s1;
 }
 
 static WCHAR hex_wchars[] = L"0123456789abcdef";

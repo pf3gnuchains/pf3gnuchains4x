@@ -1,6 +1,6 @@
 /* Target-dependent code for Moxie.
 
-   Copyright (C) 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2009-2012 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -174,6 +174,8 @@ moxie_analyze_prologue (CORE_ADDR start_addr, CORE_ADDR end_addr,
 	  cache->saved_regs[regnum] = cache->framesize;
 	  next_addr += 2;
 	}
+      else
+	break;
     }
 
   inst = read_memory_unsigned_integer (next_addr, 2, byte_order);
@@ -243,7 +245,7 @@ moxie_skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc)
 	  /* Found a function.  */
 	  sym = lookup_symbol (func_name, NULL, VAR_DOMAIN, NULL);
 	  /* Don't use line number debug info for assembly source
-	     files. */
+	     files.  */
 	  if (sym && SYMBOL_LANGUAGE (sym) != language_asm)
 	    {
 	      sal = find_pc_line (func_addr, 0);
@@ -459,6 +461,7 @@ moxie_frame_prev_register (struct frame_info *this_frame,
 
 static const struct frame_unwind moxie_frame_unwind = {
   NORMAL_FRAME,
+  default_frame_unwind_stop_reason,
   moxie_frame_this_id,
   moxie_frame_prev_register,
   NULL,
@@ -511,7 +514,7 @@ moxie_process_readu (CORE_ADDR addr, char *buf,
 
 /* Parse the current instruction and record the values of the registers and
    memory that will be changed in current instruction to "record_arch_list".
-   Return -1 if something wrong. */
+   Return -1 if something wrong.  */
 
 int
 moxie_process_record (struct gdbarch *gdbarch, struct regcache *regcache,
@@ -846,7 +849,7 @@ moxie_process_record (struct gdbarch *gdbarch, struct regcache *regcache,
 		  ptr = extract_unsigned_integer ((gdb_byte *) & ptr, 
 						  4, byte_order);
 
-		  /* String length is at 0x12($fp) */
+		  /* String length is at 0x12($fp).  */
 		  regcache_raw_read (regcache, 
 				     MOXIE_FP_REGNUM, (gdb_byte *) & tmpu32);
 		  tmpu32 = extract_unsigned_integer ((gdb_byte *) & tmpu32, 

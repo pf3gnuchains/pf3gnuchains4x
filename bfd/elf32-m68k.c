@@ -1,6 +1,7 @@
 /* Motorola 68k series support for 32-bit ELF
    Copyright 1993, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003,
-   2004, 2005, 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
+   2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011
+   Free Software Foundation, Inc.
 
    This file is part of BFD, the Binary File Descriptor library.
 
@@ -469,6 +470,7 @@ reloc_name_lookup (bfd *abfd ATTRIBUTE_UNUSED, const char *r_name)
 #define bfd_elf32_bfd_reloc_type_lookup reloc_type_lookup
 #define bfd_elf32_bfd_reloc_name_lookup reloc_name_lookup
 #define ELF_ARCH bfd_arch_m68k
+#define ELF_TARGET_ID M68K_ELF_DATA
 
 /* Functions for the m68k ELF linker.  */
 
@@ -937,7 +939,8 @@ struct elf_m68k_link_hash_table
 /* Get the m68k ELF linker hash table from a link_info structure.  */
 
 #define elf_m68k_hash_table(p) \
-  ((struct elf_m68k_link_hash_table *) (p)->hash)
+  (elf_hash_table_id ((struct elf_link_hash_table *) ((p)->hash)) \
+  == M68K_ELF_DATA ? ((struct elf_m68k_link_hash_table *) ((p)->hash)) : NULL)
 
 /* Shortcut to multi-GOT data.  */
 #define elf_m68k_multi_got(INFO) (&elf_m68k_hash_table (INFO)->multi_got_)
@@ -945,10 +948,9 @@ struct elf_m68k_link_hash_table
 /* Create an entry in an m68k ELF linker hash table.  */
 
 static struct bfd_hash_entry *
-elf_m68k_link_hash_newfunc (entry, table, string)
-     struct bfd_hash_entry *entry;
-     struct bfd_hash_table *table;
-     const char *string;
+elf_m68k_link_hash_newfunc (struct bfd_hash_entry *entry,
+			    struct bfd_hash_table *table,
+			    const char *string)
 {
   struct bfd_hash_entry *ret = entry;
 
@@ -975,8 +977,7 @@ elf_m68k_link_hash_newfunc (entry, table, string)
 /* Create an m68k ELF linker hash table.  */
 
 static struct bfd_link_hash_table *
-elf_m68k_link_hash_table_create (abfd)
-     bfd *abfd;
+elf_m68k_link_hash_table_create (bfd *abfd)
 {
   struct elf_m68k_link_hash_table *ret;
   bfd_size_type amt = sizeof (struct elf_m68k_link_hash_table);
@@ -987,7 +988,8 @@ elf_m68k_link_hash_table_create (abfd)
 
   if (!_bfd_elf_link_hash_table_init (&ret->root, abfd,
 				      elf_m68k_link_hash_newfunc,
-				      sizeof (struct elf_m68k_link_hash_entry)))
+				      sizeof (struct elf_m68k_link_hash_entry),
+				      M68K_ELF_DATA))
     {
       free (ret);
       return NULL;
@@ -1292,6 +1294,9 @@ elf32_m68k_print_private_bfd_data (bfd *abfd, void * ptr)
 	      break;
 	    case EF_M68K_CF_EMAC:
 	      mac = "emac";
+	      break;
+	    case EF_M68K_CF_EMAC_B:
+	      mac = "emac_b";
 	      break;
 	    }
 	  if (mac)
@@ -2811,6 +2816,11 @@ elf_m68k_check_relocs (abfd, info, sec, relocs)
 	case R_68K_8:
 	case R_68K_16:
 	case R_68K_32:
+	  /* We don't need to handle relocs into sections not going into
+	     the "real" output.  */
+	  if ((sec->flags & SEC_ALLOC) == 0)
+	      break;
+
 	  if (h != NULL)
 	    {
 	      /* Make sure a plt entry is created for this symbol if it
@@ -2824,8 +2834,7 @@ elf_m68k_check_relocs (abfd, info, sec, relocs)
 
 	  /* If we are creating a shared library, we need to copy the
 	     reloc into the shared library.  */
-	  if (info->shared
-	      && (sec->flags & SEC_ALLOC) != 0)
+	  if (info->shared)
 	    {
 	      /* When creating a shared object, we must copy these
 		 reloc types into the output file.  We create a reloc
@@ -2968,8 +2977,6 @@ elf_m68k_gc_sweep_hook (bfd *abfd,
   struct elf_link_hash_entry **sym_hashes;
   const Elf_Internal_Rela *rel, *relend;
   bfd *dynobj;
-  asection *sgot;
-  asection *srelgot;
   struct elf_m68k_got *got;
 
   if (info->relocatable)
@@ -2981,9 +2988,6 @@ elf_m68k_gc_sweep_hook (bfd *abfd,
 
   symtab_hdr = &elf_tdata (abfd)->symtab_hdr;
   sym_hashes = elf_sym_hashes (abfd);
-
-  sgot = bfd_get_section_by_name (dynobj, ".got");
-  srelgot = bfd_get_section_by_name (dynobj, ".rela.got");
   got = NULL;
 
   relend = relocs + sec->reloc_count;
@@ -3467,9 +3471,6 @@ elf_m68k_discard_copies (h, inf)
   struct bfd_link_info *info = (struct bfd_link_info *) inf;
   struct elf_m68k_pcrel_relocs_copied *s;
 
-  if (h->root.type == bfd_link_hash_warning)
-    h = (struct elf_link_hash_entry *) h->root.u.i.link;
-
   if (!SYMBOL_CALLS_LOCAL (info, h))
     {
       if ((info->flags & DF_TEXTREL) == 0)
@@ -3717,15 +3718,8 @@ elf_m68k_relocate_section (output_bfd, info, input_bfd, input_section,
 	}
 
       if (sec != NULL && elf_discarded_section (sec))
-	{
-	  /* For relocs against symbols from removed linkonce sections,
-	     or sections discarded by a linker script, we just want the
-	     section contents zeroed.  Avoid any special processing.  */
-	  _bfd_clear_contents (howto, input_bfd, contents + rel->r_offset);
-	  rel->r_info = 0;
-	  rel->r_addend = 0;
-	  continue;
-	}
+	RELOC_AGAINST_DISCARDED_SECTION (info, input_bfd, input_section,
+					 rel, relend, howto, contents);
 
       if (info->relocatable)
 	continue;
@@ -4035,7 +4029,7 @@ elf_m68k_relocate_section (output_bfd, info, input_bfd, input_section,
 	case R_68K_PC16:
 	case R_68K_PC32:
 	  if (info->shared
-	      && r_symndx != 0
+	      && r_symndx != STN_UNDEF
 	      && (input_section->flags & SEC_ALLOC) != 0
 	      && (h == NULL
 		  || ELF_ST_VISIBILITY (h->other) == STV_DEFAULT
@@ -4158,7 +4152,9 @@ elf_m68k_relocate_section (output_bfd, info, input_bfd, input_section,
 	 not process them.  */
       if (unresolved_reloc
 	  && !((input_section->flags & SEC_DEBUGGING) != 0
-	       && h->def_dynamic))
+	       && h->def_dynamic)
+	  && _bfd_elf_section_offset (output_bfd, info, input_section,
+				      rel->r_offset) != (bfd_vma) -1)
 	{
 	  (*_bfd_error_handler)
 	    (_("%B(%A+0x%lx): unresolvable %s relocation against symbol `%s'"),
@@ -4170,7 +4166,7 @@ elf_m68k_relocate_section (output_bfd, info, input_bfd, input_section,
 	  return FALSE;
 	}
 
-      if (r_symndx != 0
+      if (r_symndx != STN_UNDEF
 	  && r_type != R_68K_NONE
 	  && (h == NULL
 	      || h->root.type == bfd_link_hash_defined
@@ -4398,6 +4394,11 @@ elf_m68k_finish_dynamic_symbol (output_bfd, info, h, sym)
 		  break;
 
 		case R_68K_TLS_GD32:
+		  /* The value for this relocation is actually put in
+		     the second GOT slot.  */
+		  relocation = bfd_get_signed_32 (output_bfd,
+						  (sgot->contents
+						   + got_entry_offset + 4));
 		  relocation += dtpoff_base (info);
 		  break;
 
@@ -4747,34 +4748,44 @@ void
 bfd_elf_m68k_set_target_options (struct bfd_link_info *info, int got_handling)
 {
   struct elf_m68k_link_hash_table *htab;
-
-  htab = elf_m68k_hash_table (info);
+  bfd_boolean use_neg_got_offsets_p;
+  bfd_boolean allow_multigot_p;
+  bfd_boolean local_gp_p;
 
   switch (got_handling)
     {
     case 0:
       /* --got=single.  */
-      htab->local_gp_p = FALSE;
-      htab->use_neg_got_offsets_p = FALSE;
-      htab->allow_multigot_p = FALSE;
+      local_gp_p = FALSE;
+      use_neg_got_offsets_p = FALSE;
+      allow_multigot_p = FALSE;
       break;
 
     case 1:
       /* --got=negative.  */
-      htab->local_gp_p = TRUE;
-      htab->use_neg_got_offsets_p = TRUE;
-      htab->allow_multigot_p = FALSE;
+      local_gp_p = TRUE;
+      use_neg_got_offsets_p = TRUE;
+      allow_multigot_p = FALSE;
       break;
 
     case 2:
       /* --got=multigot.  */
-      htab->local_gp_p = TRUE;
-      htab->use_neg_got_offsets_p = TRUE;
-      htab->allow_multigot_p = TRUE;
+      local_gp_p = TRUE;
+      use_neg_got_offsets_p = TRUE;
+      allow_multigot_p = TRUE;
       break;
 
     default:
       BFD_ASSERT (FALSE);
+      return;
+    }
+
+  htab = elf_m68k_hash_table (info);
+  if (htab != NULL)
+    {
+      htab->local_gp_p = local_gp_p;
+      htab->use_neg_got_offsets_p = use_neg_got_offsets_p;
+      htab->allow_multigot_p = allow_multigot_p;
     }
 }
 

@@ -1,6 +1,5 @@
 /* Prologue value handling for GDB.
-   Copyright 2003, 2004, 2005, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright 2003-2005, 2007-2012 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -15,7 +14,7 @@
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "defs.h"
 #include "gdb_string.h"
@@ -203,7 +202,7 @@ pv_is_identical (pv_t a, pv_t b)
     case pvk_register:
       return (a.reg == b.reg && a.k == b.k);
     default:
-      gdb_assert (0);
+      gdb_assert_not_reached ("unexpected prologue value kind");
     }
 }
 
@@ -346,6 +345,7 @@ clear_entries (struct pv_area *area)
       do
         {
           struct area_entry *next = e->next;
+
           xfree (e);
           e = next;
         }
@@ -398,7 +398,7 @@ pv_area_store_would_trash (struct pv_area *area, pv_t addr)
    This may return zero, if AREA has no entries.
 
    And since the entries are a ring, this may return an entry that
-   entirely preceeds OFFSET.  This is the correct behavior: depending
+   entirely precedes OFFSET.  This is the correct behavior: depending
    on the sizes involved, we could still overlap such an area, with
    wrap-around.  */
 static struct area_entry *
@@ -468,6 +468,7 @@ pv_area_store (struct pv_area *area,
       while (e && overlaps (area, e, offset, size))
         {
           struct area_entry *next = (e->next == e) ? 0 : e->next;
+
           e->prev->next = e->next;
           e->next->prev = e->prev;
 
@@ -492,6 +493,7 @@ pv_area_store (struct pv_area *area,
     {
       CORE_ADDR offset = addr.k;
       struct area_entry *e = (struct area_entry *) xmalloc (sizeof (*e));
+
       e->offset = offset;
       e->size = size;
       e->value = value;

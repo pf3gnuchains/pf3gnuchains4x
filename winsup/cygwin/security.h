@@ -1,7 +1,7 @@
 /* security.h: security declarations
 
    Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
-   2010 Red Hat, Inc.
+   2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -26,7 +26,8 @@ details. */
 #define MAX_DACL_LEN(n) (sizeof (ACL) \
 		   + (n) * (sizeof (ACCESS_ALLOWED_ACE) - sizeof (DWORD) + MAX_SID_LEN))
 #define SD_MIN_SIZE (sizeof (SECURITY_DESCRIPTOR) + MAX_DACL_LEN (1))
-#define ACL_DEFAULT_SIZE 3072
+#define ACL_MAXIMUM_SIZE 65532	/* Yeah, right.  64K - sizeof (DWORD). */
+#define SD_MAXIMUM_SIZE 65536
 #define NO_SID ((PSID)NULL)
 
 #ifndef SE_CREATE_TOKEN_PRIVILEGE
@@ -94,6 +95,18 @@ cygpsid NO_COPY name = (PSID) &name##_struct;
 #define FILE_WRITE_BITS  (FILE_WRITE_DATA | GENERIC_WRITE | GENERIC_ALL)
 #define FILE_EXEC_BITS   (FILE_EXECUTE | GENERIC_EXECUTE | GENERIC_ALL)
 
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+  /* We need these declarations, otherwise g++ complains that the below
+     inline methods use an undefined function, if ntdll.h isn't included. */
+  BOOLEAN NTAPI RtlEqualSid (PSID, PSID);
+  NTSTATUS NTAPI RtlCopySid (ULONG, PSID, PSID);
+#ifdef __cplusplus
+}
+#endif
+
 class cygpsid {
 protected:
   PSID psid;
@@ -113,7 +126,7 @@ public:
     {
       if (!psid || !nsid)
 	return nsid == psid;
-      return EqualSid (psid, nsid);
+      return RtlEqualSid (psid, nsid);
     }
   bool operator!= (const PSID nsid) const
     { return !(*this == nsid); }
@@ -142,7 +155,7 @@ class cygsid : public cygpsid {
       else
 	{
 	  psid = (PSID) sbuf;
-	  CopySid (MAX_SID_LEN, psid, nsid);
+	  RtlCopySid (MAX_SID_LEN, psid, nsid);
 	  well_known_sid = well_known;
 	}
       return psid;
@@ -317,6 +330,7 @@ public:
 extern cygpsid well_known_null_sid;
 extern cygpsid well_known_world_sid;
 extern cygpsid well_known_local_sid;
+extern cygpsid well_known_console_logon_sid;
 extern cygpsid well_known_creator_owner_sid;
 extern cygpsid well_known_creator_group_sid;
 extern cygpsid well_known_dialup_sid;
@@ -327,6 +341,7 @@ extern cygpsid well_known_service_sid;
 extern cygpsid well_known_authenticated_users_sid;
 extern cygpsid well_known_this_org_sid;
 extern cygpsid well_known_system_sid;
+extern cygpsid well_known_builtin_sid;
 extern cygpsid well_known_admins_sid;
 extern cygpsid well_known_users_sid;
 extern cygpsid fake_logon_sid;
@@ -335,7 +350,13 @@ extern cygpsid mandatory_high_integrity_sid;
 extern cygpsid mandatory_system_integrity_sid;
 extern cygpsid well_known_samba_unix_user_fake_sid;
 
-bool privilege_luid (const PWCHAR pname, LUID *luid);
+bool privilege_luid (const PWCHAR pname, LUID &luid, bool &high_integrity);
+
+inline BOOL
+well_known_sid_type (SID_NAME_USE type)
+{
+  return type == SidTypeAlias || type == SidTypeWellKnownGroup;
+}
 
 inline BOOL
 legal_sid_type (SID_NAME_USE type)
@@ -347,17 +368,37 @@ legal_sid_type (SID_NAME_USE type)
 class path_conv;
 /* File manipulation */
 int __stdcall get_file_attribute (HANDLE, path_conv &, mode_t *,
-				  __uid32_t *, __gid32_t *);
+				  __uid32_t *, __gid32_t *)
+		__attribute__ ((regparm (3)));
 int __stdcall set_file_attribute (HANDLE, path_conv &,
-				  __uid32_t, __gid32_t, int);
-int __stdcall get_reg_attribute (HKEY hkey, mode_t *, __uid32_t *, __gid32_t *);
-LONG __stdcall get_file_sd (HANDLE fh, path_conv &, security_descriptor &sd);
-LONG __stdcall set_file_sd (HANDLE fh, path_conv &, security_descriptor &sd,
-			    bool is_chown);
-bool __stdcall add_access_allowed_ace (PACL acl, int offset, DWORD attributes, PSID sid, size_t &len_add, DWORD inherit);
-bool __stdcall add_access_denied_ace (PACL acl, int offset, DWORD attributes, PSID sid, size_t &len_add, DWORD inherit);
-int __stdcall check_file_access (path_conv &, int, bool);
-int __stdcall check_registry_access (HANDLE, int, bool);
+				  __uid32_t, __gid32_t, mode_t)
+		__attribute__ ((regparm (3)));
+int __stdcall get_object_sd (HANDLE, security_descriptor &)
+		__attribute__ ((regparm (2)));
+int __stdcall get_object_attribute (HANDLE, __uid32_t *, __gid32_t *, mode_t *)
+		__attribute__ ((regparm (3)));
+int __stdcall set_object_attribute (HANDLE, __uid32_t, __gid32_t, mode_t)
+		__attribute__ ((regparm (3)));
+int __stdcall create_object_sd_from_attribute (HANDLE, __uid32_t, __gid32_t,
+					       mode_t, security_descriptor &)
+		__attribute__ ((regparm (3)));
+int __stdcall set_object_sd (HANDLE, security_descriptor &, bool)
+		__attribute__ ((regparm (3)));
+
+int __stdcall get_reg_attribute (HKEY hkey, mode_t *, __uid32_t *, __gid32_t *)
+		__attribute__ ((regparm (3)));
+LONG __stdcall get_file_sd (HANDLE fh, path_conv &, security_descriptor &, bool)
+		__attribute__ ((regparm (3)));
+LONG __stdcall set_file_sd (HANDLE fh, path_conv &, security_descriptor &, bool)
+		__attribute__ ((regparm (3)));
+bool __stdcall add_access_allowed_ace (PACL, int, DWORD, PSID, size_t &, DWORD)
+		__attribute__ ((regparm (3)));
+bool __stdcall add_access_denied_ace (PACL, int, DWORD, PSID, size_t &, DWORD)
+		__attribute__ ((regparm (3)));
+int __stdcall check_file_access (path_conv &, int, bool)
+		__attribute__ ((regparm (3)));
+int __stdcall check_registry_access (HANDLE, int, bool)
+		__attribute__ ((regparm (3)));
 
 void set_security_attribute (path_conv &pc, int attribute,
 			     PSECURITY_ATTRIBUTES psa,
@@ -426,14 +467,12 @@ void set_cygwin_privileges (HANDLE token);
 #define pop_self_privilege()		   pop_thread_privilege()
 
 /* shared.cc: */
-/* Retrieve a security descriptor that allows all access */
-SECURITY_DESCRIPTOR *__stdcall get_null_sd ();
 
 /* Various types of security attributes for use in Create* functions. */
 extern SECURITY_ATTRIBUTES sec_none, sec_none_nih, sec_all, sec_all_nih;
-extern SECURITY_ATTRIBUTES *__stdcall __sec_user (PVOID sa_buf, PSID sid1, PSID sid2,
-						  DWORD access2, BOOL inherit)
-  __attribute__ ((regparm (3)));
+extern SECURITY_ATTRIBUTES *__stdcall __sec_user (PVOID, PSID, PSID,
+						  DWORD, BOOL)
+		__attribute__ ((regparm (3)));
 extern PSECURITY_DESCRIPTOR _everyone_sd (void *buf, ACCESS_MASK access);
 #define everyone_sd(access)	(_everyone_sd (alloca (SD_MIN_SIZE), (access)))
 
@@ -442,10 +481,12 @@ extern PSECURITY_DESCRIPTOR _everyone_sd (void *buf, ACCESS_MASK access);
 extern bool sec_acl (PACL acl, bool original, bool admins, PSID sid1 = NO_SID,
 		     PSID sid2 = NO_SID, DWORD access2 = 0);
 
-ssize_t __stdcall read_ea (HANDLE hdl, path_conv &pc, const char *name,
-			   char *value, size_t size);
-int __stdcall write_ea (HANDLE hdl, path_conv &pc, const char *name,
-			const char *value, size_t size, int flags);
+ssize_t __stdcall read_ea (HANDLE, path_conv &, const char *,
+			   char *, size_t)
+		__attribute__ ((regparm (3)));
+int __stdcall write_ea (HANDLE, path_conv &, const char *, const char *,
+			size_t, int)
+		__attribute__ ((regparm (3)));
 
 /* Note: sid1 is usually (read: currently always) the current user's
    effective sid (cygheap->user.sid ()). */

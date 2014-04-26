@@ -1,3 +1,463 @@
+2011-12-22  Corinna Vinschen  <corinna@vinschen.de>
+
+	* Makefile.in (ps.exe): Revert previous change.
+	* ps.cc: Include psapi.h again.
+	(main): In CW_GETPINFO_FULL case.  Evaluate minimal process access mask
+	required per OS and use that in OpenProcess call.  Use
+	GetModuleFileNameExW on Windows 2000 or if fetching the drive mapping
+	failed.  Handle empty process name.
+
+2011-12-22  Corinna Vinschen  <corinna@vinschen.de>
+
+	* Makefile.in (ps.exe): Drop -lpsapi from ALL_LDFLAGS.
+	* ps.cc: Don't include psapi.h.
+	(dosdevs): Drop.
+	(unicode_buf): Define.
+	(main): Simplify path evaluation in CW_GETPINFO_FULL case. Fetch drive
+	map from Cygwin DLL.  Use it to convert NT device paths to Win32 paths.
+
+2011-12-02  Corinna Vinschen  <corinna@vinschen.de>
+
+	* Makefile.in (cygpath.exe): Add -luserenv to ALL_LDFLAGS.
+	* cygpath.cc: Throughout, use cygwin_conv_path WIN_W rather than WIN_A
+	conversion.
+	(get_long_path_name_w32impl): Remove.
+	(get_long_name): Drop pre-Windows 2000 accommodations.  Just call
+	GetLongPathNameW here directly.
+	(get_special_folder): Convert first parameter to WCHAR buffer pointer.
+	Drop conversion of result from WCHAR * to char *.
+	(do_sysfolders): Accommodate change to get_special_folder and only
+	convert result to char * last.  Drop pre-Windows 2000 accommodations
+	and just call GetProfilesDirectoryW directly.  Replace call to
+	GetWindowsDirectoryW with call to GetSystemWindowsDirectoryW.
+	Just call GetShortPathNameW directly.
+	(do_pathconv): Simplify buffer handling.
+
+2011-12-01  Corinna Vinschen  <corinna@vinschen.de>
+
+	* mkgroup.c: Drop support for NT4 domains.
+	* mkpasswd.c: Ditto.
+	(psx_dir): Remove.
+	(current_user): Drop support for -m option.  Use $HOME as is since it's
+	a POSIX path anyway.
+	(enum_users): Drop support for -m option.
+	(usage): Mention -m option as ignored.
+	(main): Drop support for -m option.  Mark ignored options as deprecated.
+	* utils.sgml (mkpasswd): Remove description of -m option.
+
+2011-11-28  Corinna Vinschen  <corinna@vinschen.de>
+
+	* locale.cc (print_locale_with_codeset): Fetch Windows path as UNICODE
+	path and convert that to POSIX.
+
+2011-11-28  Corinna Vinschen  <corinna@vinschen.de>
+
+	* ps.cc: Remove all Win 9x considerations.  Use psapi functions
+	directly.  Drop support for older Cygwin DLLs.  Just use progname_long
+	as is since it's already a POSIX path now.  Rename "tty" to "pty" as in
+	the Cygwin DLL.  Call setlocale to make sure wcstombs does the right
+	thing according to the current locale.
+	* Makefile.in (ps.exe): Link against psapi.dll.
+
+2011-11-24  Christopher Faylor  <me.cygwin2011@cgf.cx>
+
+	* strace.cc (attach_process): Use NT_SUCCESS to figure out if
+	NtSetInformationProcess succeeded.
+	(handle_output_debug_string): Put back DebugActiveProcess since it
+	seems to still be needed (on my system at least).  Detect new format
+	_STRACE_INTERFACE_ACTIVATE_ADDR which informs whether this is a forked
+	process or not.  Use that to decide if forkdebug should be handled.
+
+2011-11-14  Christopher Faylor  <me.cygwin2011@cgf.cx>
+
+	* strace.cc (handle_output_debug_string): Disable code which attempted
+	to add stuff in between '****' blocks since they no longer are the
+	first thing output by an straced process.
+
+2011-10-13  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygcheck.cc (dump_sysinfo): Add Windows 8 recognition.  Note as
+	unsupported.  Update products array.
+
+2011-10-11  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* utils.sgml (getconf): Expand documentation.
+
+2011-10-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* ldd.cc (VERSION): Remove.
+
+2011-10-10  Christopher Faylor  <me.cygwin2011@cgf.cx>
+
+	* ldd.cc: Update copyright.
+
+2011-10-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* Align usage output, version output, as well as usage and version
+	option handling to use the same style throughout all Cygwin utils.
+	Throughout use program_invocation_short_name to refer to current
+	process name in Cygwin executables.
+	* utils.sgml: Align documentation to above change.  Add missing
+	sections for getconf, ldd, and setmetamode.
+	* strace.cc (proc_child): Avoid compiler warning.
+
+2011-10-10  Andy Koppe <andy.koppe@gmail.com>
+	    Corinna Vinschen  <corinna@vinschen.de>
+
+	* locale.cc (usage): Restructure, rephrase, add new options.  Drop
+	arguments, don't exit.
+	(print_version): New function.
+	(longopts): Add -f, -n, and -V options.  Reorder.
+	(opts): Add -f, -n, and -V options.
+	(main): Call GetSystemDefaultUILanguage for -s option.  Call
+	GetUserDefaultUILanguage for -u option.  Add -f and -n options and
+	call GetUserDefaultLCID and GetSystemDefaultLCID respectively.  Return
+	0 after calling usage in -h case.  Add -V option and call print_version.
+	Don't print full usage in default case, rather just a short help message
+	similar to GNU tools.
+	* utils.sgml (locale): Align to above changes.  Rephrase description.
+
+2011-10-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygcheck.cc (check_keys): Use UNICODE Win32 functions.
+
+2011-09-12  Jon TURNEY  <jon.turney@dronecode.org.uk>
+
+	* strace.cc (attach_process): Try to turn off DEBUG_ONLY_THIS_PROCESS
+	if Attaching to a process with the trace-children flag set.
+	(handle_output_debug_string): Apparently we don't need to explicitly
+	attach for debugging when a child process starts
+	* Makefile.in (strace.exe): Link with ntdll
+
+2011-08-21  Christopher Faylor  <me.cygwin2011@cgf.cx>
+
+	* Makefile.in: Check for header file existence when building dumper.exe
+	too.
+
+2011-08-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* ps.cc (main): Don't overwrite process name, just attach <defunct>
+	to it for zombie processes.
+
+2011-07-19  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* Makefile.in (CYGWIN_BINS): Add getconf.
+	(getconf.c): New file.
+
+2011-06-14  Christopher Faylor  <me.cygwin2011@cgf.cx>
+
+	* mingw: Force use of bash.
+
+2011-05-29  Christopher Faylor  <me.cygwin2011@cgf.cx>
+
+	* ps.cc (ttynam): Accommodate new console numbering.
+	(main): Ditto.
+
+2011-05-03  Corinna Vinschen  <corinna@vinschen.de>
+
+	* locale.cc (print_locale_with_codeset): Align printing of locale names
+	to POSIX.
+
+2011-04-18  Corinna Vinschen  <corinna@vinschen.de>
+
+	* setfacl.c (getaclentry): Allow extra colon in mask and other entries.
+
+2011-04-12  Jon TURNEY  <jon.turney@dronecode.org.uk>
+
+        * utils.sgml (strace): Fix a pair of exchanged lines in usage text.
+
+2011-04-04  Corinna Vinschen  <corinna@vinschen.de>
+
+	* passwd.c (main): Add the ability to specify a username for the -R
+	command.
+	* utils.sgml: Document the aforementioned change.
+
+2011-02-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* regtool.cc (cmd_set): Avoid a compiler warning.
+
+2011-02-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygcheck.cc (handle_unique_object_name): Avoid a compiler warning.
+	(dump_sysinfo): Ditto.
+	* loadlib.h (_load_sys_library): Mark as used, to avoid a compiler
+	warning.
+	* path.cc (oopt): Gurad with !FSTAB_ONLY to avoid a compiler warning.
+	(read_flags): Ditto.
+
+2011-02-28  Corinna Vinschen  <corinna@vinschen.de>
+
+	* setfacl.c (strchrnul): Drop local implementation.
+
+2011-02-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygcheck.cc: Fix copyright dates.
+
+2011-01-10  Jon TURNEY  <jon.turney@dronecode.org.uk>
+
+	* cygcheck.cc (main): don't imply -d from -s option to cygcheck
+
+2010-12-11  Corinna Vinschen  <corinna@vinschen.de>
+
+	* setfacl.c (strchrnul): New function.
+	(getaclentry): Rewrite.
+
+2010-12-06  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygpath.cc (get_device_name): Fix path length test.
+
+2010-10-30  Dmitry Potapov  <dpotapov@gmail.com>
+
+	* regtool.c (cmd_set): Write correct number of bytes for REG_MULTI_SZ
+	case.
+
+2010-09-06  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygpath.cc (RtlEqualUnicodePathPrefix): New helper function.
+	(HARDDISK_PREFIX): Move.
+	(GLOBALROOT_PREFIX): Define.
+	(get_device_name): Take GLOBALROOT_PREFIX into account.
+	Improve check for path to allow filesystem access via block devices.
+	Potentially drop \\.\ prefix if resulting path is a valid DOS
+	pathname.
+	(do_pathconv): Make sure to drop \\?\ prefix only if path is
+	actually a filesystem based path.
+	(print_version): Fix copyright.
+
+2010-08-28  Corinna Vinschen  <corinna@vinschen.de>
+
+	* ldh.cc (WinMain): Change DONT_RESOLVE_DLL_REFERENCES to
+	LOAD_WITH_ALTERED_SEARCH_PATH.
+
+2010-08-28  Corinna Vinschen  <corinna@vinschen.de>
+
+	* loadlib.h: New header implementing safe LoadLibrary calls.
+	Include throughout files using LoadLibrary function.
+	* cygcheck.cc (dump_sysinfo): Retrieve kernel32.dll handle via
+	GetModuleHandle, rather than using LoadLibrary.
+	* cygpath.cc (get_long_name): Ditto.
+	(do_sysfolders): Append .dll suffix in LoadLibrary call.
+	* ldh.cc (WinMain): Use LoadLibraryExW with DONT_RESOLVE_DLL_REFERENCES
+	to avoid loading malicious library code.
+	* locale.cc (print_locale_with_codeset): Change way to retrieve
+	kernel32.dll path.
+
+2010-08-26  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygpath.cc (get_device_name): Prefer the \\.\X: DOS device for
+	harddisks, if available.
+
+2010-08-21  Corinna Vinschen  <corinna@vinschen.de>
+
+	* ldd.cc (report): Drop long pathname considerations which result in
+	invalid path, now that this is done in cygwin_conv_path.
+
+2010-08-13  Corinna Vinschen  <corinna@vinschen.de>
+
+	* mount.cc (from_fstab): Fix potentially fatal typo.
+
+2010-08-11  Corinna Vinschen  <corinna@vinschen.de>
+
+	* mount.cc (do_mount): Don't treat "bind" mount as remote mount.
+	(mount_entries): Drop the "bind" option from output.
+	* utils.sgml (mount): Match examples to actual mount output.  Add
+	"bind" option and add example.
+
+2010-08-10  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* mingw: Use sysroot, if present, for mingw_dir.
+
+2010-07-21  Corinna Vinschen  <corinna@vinschen.de>
+
+	* dump_setup.cc (tfx_chars): New WCHAR array, copied from Cygwin.
+	(transform_chars): New function, copied from Cygwin.
+	(simple_nt_stat): New function to check file existance using native
+	NT function.  Explain why.
+	(directory_exists): Call simple_nt_stat.
+	(file_exists): Ditto.
+
+2010-07-05  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* ldd.cc: Clean up formatting throughout.
+	(head): Move earlier.
+	(saw_file): Ditto.
+	(print_dlls): Reset head here.  Record seen dll names so they will
+	not potentially be printed later.
+	(process_file): Remove clearing of head here.
+
+2010-07-05  Corinna Vinschen  <corinna@vinschen.de>
+
+	* dump_setup.cc (dump_file): Read requested content from setup.rc
+	file created by newer setup.exe.
+
+2010-06-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* utils.sgml (locale): Change stray local cygdrive prefix to Cygwin's
+	default.
+
+2010-04-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* utils.sgml (mount): Add description for "dos" and "ihash" mount
+	options.
+
+2010-04-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* path.cc: Include sys/cygwin.h if built for mount(1).
+	(struct opt): Add "dos" and "ihash" options.
+	(from_fstab_line): Call cygwin_internal rather than read_flags if
+	built for mount(1).
+
+2010-04-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* mount.cc (oopts): Remove entirely.
+	(usage): Call cygwin_internal (CW_LST_MNT_OPTS) to create list of
+	mount options.
+	(print_version): Fix copyright date.
+	(main): Replace option processing loop with single call to
+	cygwin_internal (CW_CVT_MNT_OPTS).
+
+2010-04-28  Corinna Vinschen  <corinna@vinschen.de>
+
+	* locale.cc (print_lc_xxx_charset): Remove.
+	(enum type_t): Change according to the fact that nl_langinfo now returns
+	all locale category values.
+	(lc_ctype_names): Add new category members.  Redefine for exclusive
+	nl_langinfo usage.
+	(lc_numeric_names): Ditto.
+	(lc_time_names): Ditto.
+	(lc_collate_names): Ditto.
+	(lc_monetary_names): Ditto.
+	(lc_messages_names): Ditto.
+	(print_lc): Change switch according to new type_t values.
+
+2010-03-27  Corinna Vinschen  <corinna@vinschen.de>
+
+	* locale.cc (print_charmaps): Add EUC-CN and GB2312.
+
+2010-03-24  Corinna Vinschen  <corinna@vinschen.de>
+
+	* regtool.cc (find_key): Fix allocation size of "value".
+
+2010-03-23  Corinna Vinschen  <corinna@vinschen.de>
+
+	* locale.cc (add_locale_alias_locales): Always use loc_num at function
+	start to avoid confusing bsearch.
+
+2010-03-23  Corinna Vinschen  <corinna@vinschen.de>
+
+	* locale.cc: Revert accidental checkin of unfinished changes.
+
+2010-03-23  Corinna Vinschen  <corinna@vinschen.de>
+
+	* locale.cc (print_locale_with_codeset): Drop redundant name parameter.
+	Simplify creating locale string.  Add "@" in case of a modifier.
+	(print_locale): Drop name parameter in calls to
+	print_locale_with_codeset.
+
+2010-02-25  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* utils.sgml (kill): Add SIGIO, SIGCLD, and SIGPWR.
+
+2010-02-25  Corinna Vinschen  <corinna@vinschen.de>
+
+	* utils.sgml (locale): Change description of -a and -av to match
+	latest changes.
+
+2010-02-23  Corinna Vinschen  <corinna@vinschen.de>
+
+	* locale.cc (printlocale): Remove.
+	(loc_t): New type to keep locale information for printing.
+	(print_codeset): New function to print codeset as on Linux.
+	(print_locale_with_codeset): New function to print single locale.
+	Print verbose style as the Linux locale(1) tool.
+	(print_locale): New function to print single locale plus its UTF-8
+	variation, if available.
+	(compare_locales): New helper function for bsearch and qsort on loc_t.
+	(add_locale): New function to store locale in loc_t array.
+	(add_locale_alias_locales): New function to store locales from
+	locale.alias file in loc_t.
+	(print_all_locales): Call add_locale instead of printlocale.
+	Call add_locale_alias_locales, sort locales alphabetically and print
+	them.
+
+2010-02-22  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* strace.cc (mnemonic_table): Add "special" mask option.
+	(usage): Document it.
+	* utils.sgml: Ditto.
+
+2010-02-22  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygpath.cc (do_pathconv): Fix erroneously printing native NT path
+	prefix introduced by previous patch.
+
+2010-02-22  Corinna Vinschen  <corinna@vinschen.de>
+
+	* locale.cc (lc_time_names): Add "date_fmt" entry.
+
+2010-02-19  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* strace.cc (mnemonic_table): Add pthread mask option.
+	(usage): Document strace pthread mask option.
+	* utils.sgml: Ditto.
+
+2010-02-19  Corinna Vinschen  <corinna@vinschen.de>
+
+	* locale.cc (print_lc_mstrings): New function to print
+	semicolon-separated strings.
+	(enum type_t): New type is_sepstrings_linf.
+	(lc_time_names): Change type of era and alt_digits entry to
+	is_sepstrings_linf.
+	(print_lc): Add case for is_sepstrings_linf and call print_lc_mstrings
+	in that case.
+
+2010-02-17  Corinna Vinschen  <corinna@vinschen.de>
+
+	* Makefile.in (CYGWIN_BINS): Rename getlocale to locale.
+	* getlocale.c: Rename to ...
+	* locale.cc: Revamp to add full functionality of POSIX locale(1) tool,
+	as far as Cygwin supports it.
+	* utils.sgml (getlocale): Move and rename to ...
+	(locale): Accommodate new functionality.
+
+2010-02-13  Ilguiz Latypov  <ilatypov@infradead.org>
+
+	* cygpath.cc (do_pathconv): Fix potential crash.
+
+2010-02-11  Corinna Vinschen  <corinna@vinschen.de>
+
+	* getlocale.c (main): Rename local variable to avoid problems.
+	Avoid string comparisons, rather test language and sublanguage codes
+	wheere possible.  Add more code to handle Serbian language/territory
+	state identical on all Windows versions.  Fix handling for "@latin"
+	modifier in Belarusian locale.
+	* utils.sgml (getlocale): Try to make wording and example clearer.
+
+2010-02-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* getlocale.c (usage): Change text slightly.
+
+2010-02-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* getlocale.c (main): Restrict -a loop to avoid psudo language entries
+	on Vista and later.
+
+2010-02-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* getlocale.c (main): Revamp -a loop to avoid duplicates and to print
+	locales with the correct, supported modifiers.
+
+2010-01-25  Corinna Vinschen  <corinna@vinschen.de>
+
+	* getlocale.c (main): Use setlocale and fetch string from Windows
+	using GetLocaleInfoW.  Explain why.
+
+2010-01-22  Corinna Vinschen  <corinna@vinschen.de>
+
+	* Makefile.in (CYGWIN_BINS): Add getlocale.
+	* getlocale.c: New file.
+	* utils.sgml (getlocale): New section describing new getlocale tool.
+
 2010-01-16  Corinna Vinschen  <corinna@vinschen.de>
 
 	* cygpath.cc (get_mixed_name): Drop function.  Replace with call to
@@ -1123,7 +1583,7 @@
 
 2006-10-16  Corinna Vinschen  <corinna@vinschen.de>
 
-	* regtool.cc (KEY_WOW64_64KEY): Drop definition.  Instead define 
+	* regtool.cc (KEY_WOW64_64KEY): Drop definition.  Instead define
 	WINVER to 0x0502 before including windows.h.
 
 2006-10-16  Corinna Vinschen  <corinna@vinschen.de>

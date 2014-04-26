@@ -1,6 +1,7 @@
 /* fhandler_process.cc: fhandler for /proc/<pid> virtual filesystem
 
-   Copyright 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009 Red Hat, Inc.
+   Copyright 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
+   2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -24,10 +25,10 @@ details. */
 #include "ntdll.h"
 #include "cygtls.h"
 #include "pwdgrp.h"
+#include "mount.h"
 #include "tls_pbuf.h"
 #include <sys/param.h>
 #include <ctype.h>
-#include <psapi.h>
 
 #define _COMPILING_NEWLIB
 #include <dirent.h>
@@ -53,44 +54,42 @@ static _off64_t format_process_mounts (void *, char *&);
 
 static const virt_tab_t process_tab[] =
 {
-  { ".",          FH_PROCESS,   virt_directory, NULL },
-  { "..",         FH_PROCESS,   virt_directory, NULL },
-  { "ppid",       FH_PROCESS,   virt_file,      format_process_ppid },
-  { "winpid",     FH_PROCESS,   virt_file,	format_process_winpid },
-  { "winexename", FH_PROCESS,   virt_file,      format_process_winexename },
-  { "status",     FH_PROCESS,   virt_file,      format_process_status },
-  { "uid",        FH_PROCESS,   virt_file,      format_process_uid },
-  { "gid",        FH_PROCESS,   virt_file,      format_process_gid },
-  { "pgid",       FH_PROCESS,   virt_file,      format_process_pgid },
-  { "sid",        FH_PROCESS,   virt_file,      format_process_sid },
-  { "ctty",       FH_PROCESS,   virt_file,      format_process_ctty },
-  { "stat",       FH_PROCESS,   virt_file,      format_process_stat },
-  { "statm",      FH_PROCESS,   virt_file,      format_process_statm },
-  { "cmdline",    FH_PROCESS,   virt_file,      format_process_cmdline },
-  { "maps",       FH_PROCESS,   virt_file,      format_process_maps },
-  { "fd",         FH_PROCESSFD, virt_directory, format_process_fd },
-  { "exename",    FH_PROCESS,   virt_file,      format_process_exename },
-  { "root",       FH_PROCESS,   virt_symlink,   format_process_root },
-  { "exe",        FH_PROCESS,   virt_symlink,   format_process_exename },
-  { "cwd",        FH_PROCESS,   virt_symlink,   format_process_cwd },
-  { "mounts",     FH_PROCESS,   virt_file,      format_process_mounts },
-  { NULL,         0,            virt_none,      NULL }
+  { _VN ("."),          FH_PROCESS,   virt_directory, NULL },
+  { _VN (".."),         FH_PROCESS,   virt_directory, NULL },
+  { _VN ("cmdline"),    FH_PROCESS,   virt_file,      format_process_cmdline },
+  { _VN ("ctty"),       FH_PROCESS,   virt_file,      format_process_ctty },
+  { _VN ("cwd"),        FH_PROCESS,   virt_symlink,   format_process_cwd },
+  { _VN ("exe"),        FH_PROCESS,   virt_symlink,   format_process_exename },
+  { _VN ("exename"),    FH_PROCESS,   virt_file,      format_process_exename },
+  { _VN ("fd"),         FH_PROCESSFD, virt_directory, format_process_fd },
+  { _VN ("gid"),        FH_PROCESS,   virt_file,      format_process_gid },
+  { _VN ("maps"),       FH_PROCESS,   virt_file,      format_process_maps },
+  { _VN ("mounts"),     FH_PROCESS,   virt_file,      format_process_mounts },
+  { _VN ("pgid"),       FH_PROCESS,   virt_file,      format_process_pgid },
+  { _VN ("ppid"),       FH_PROCESS,   virt_file,      format_process_ppid },
+  { _VN ("root"),       FH_PROCESS,   virt_symlink,   format_process_root },
+  { _VN ("sid"),        FH_PROCESS,   virt_file,      format_process_sid },
+  { _VN ("stat"),       FH_PROCESS,   virt_file,      format_process_stat },
+  { _VN ("statm"),      FH_PROCESS,   virt_file,      format_process_statm },
+  { _VN ("status"),     FH_PROCESS,   virt_file,      format_process_status },
+  { _VN ("uid"),        FH_PROCESS,   virt_file,      format_process_uid },
+  { _VN ("winexename"), FH_PROCESS,   virt_file,      format_process_winexename },
+  { _VN ("winpid"),     FH_PROCESS,   virt_file,      format_process_winpid },
+  { NULL, 0,	        FH_NADA,       virt_none,      NULL }
 };
 
 static const int PROCESS_LINK_COUNT =
   (sizeof (process_tab) / sizeof (virt_tab_t)) - 1;
-
-static int get_process_state (DWORD dwProcessId);
+int get_process_state (DWORD dwProcessId);
 static bool get_mem_values (DWORD dwProcessId, unsigned long *vmsize,
 			    unsigned long *vmrss, unsigned long *vmtext,
 			    unsigned long *vmdata, unsigned long *vmlib,
 			    unsigned long *vmshare);
 
 /* Returns 0 if path doesn't exist, >0 if path is a directory,
- * -1 if path is a file, -2 if path is a symlink, -3 if path is a pipe,
- * -4 if path is a socket.
- */
-int
+   -1 if path is a file, -2 if path is a symlink, -3 if path is a pipe,
+   -4 if path is a socket. */
+virtual_ftype_t
 fhandler_process::exists ()
 {
   const char *path = get_name ();
@@ -99,21 +98,20 @@ fhandler_process::exists ()
   while (*path != 0 && !isdirsep (*path))
     path++;
   if (*path == 0)
-    return 2;
+    return virt_rootdir;
 
-  for (int i = 0; process_tab[i].name; i++)
+  virt_tab_t *entry = virt_tab_search (path + 1, true, process_tab,
+				       PROCESS_LINK_COUNT);
+  if (entry)
     {
-      if (!strcmp (path + 1, process_tab[i].name))
+      if (!path[entry->name_len + 1])
 	{
-	  fileid = i;
-	  return process_tab[i].type;
+	  fileid = entry - process_tab;
+	  return entry->type;
 	}
-      if (process_tab[i].type == virt_directory
-	  && !strncmp (path + 1, process_tab[i].name,
-		       strlen (process_tab[i].name))
-	  && path[1 + strlen (process_tab[i].name)] == '/')
+      if (entry->type == virt_directory)
 	{
-	  fileid = i;
+	  fileid = entry - process_tab;
 	  if (fill_filebuf ())
 	    return virt_symlink;
 	  /* Check for nameless device entries. */
@@ -143,8 +141,13 @@ fhandler_process::fstat (struct __stat64 *buf)
   fhandler_base::fstat (buf);
   path += proc_len + 1;
   pid = atoi (path);
+
   pinfo p (pid);
-  if (!p)
+  /* If p->pid != pid, then pid is actually the Windows PID for an execed
+     Cygwin process, and the pinfo entry is the additional entry created
+     at exec time.  We don't want to enable the user to access a process
+     entry by using the Win32 PID, though. */
+  if (!p || p->pid != pid)
     {
       set_errno (ENOENT);
       return -1;
@@ -205,6 +208,12 @@ fhandler_process::opendir (int fd)
 }
 
 int
+fhandler_process::closedir (DIR *dir)
+{
+  return fhandler_virtual::closedir (dir);
+}
+
+int
 fhandler_process::readdir (DIR *dir, dirent *de)
 {
   int res = ENMFILE;
@@ -225,15 +234,13 @@ fhandler_process::readdir (DIR *dir, dirent *de)
   dir->__flags |= dirent_saw_dot | dirent_saw_dot_dot;
   res = 0;
 out:
-  syscall_printf ("%d = readdir (%p, %p) (%s)", res, dir, de, de->d_name);
+  syscall_printf ("%d = readdir(%p, %p) (%s)", res, dir, de, de->d_name);
   return res;
 }
 
 int
 fhandler_process::open (int flags, mode_t mode)
 {
-  int process_file_no = -1;
-
   int res = fhandler_virtual::open (flags, mode);
   if (!res)
     goto out;
@@ -267,29 +274,15 @@ fhandler_process::open (int flags, mode_t mode)
 	}
     }
 
-  process_file_no = -1;
-  for (int i = 0; process_tab[i].name; i++)
+  virt_tab_t *entry;
+  entry = virt_tab_search (path + 1, true, process_tab, PROCESS_LINK_COUNT);
+  if (!entry)
     {
-      if (path_prefix_p (process_tab[i].name, path + 1,
-			 strlen (process_tab[i].name), false))
-	process_file_no = i;
+      set_errno ((flags & O_CREAT) ? EROFS : ENOENT);
+      res = 0;
+      goto out;
     }
-  if (process_file_no == -1)
-    {
-      if (flags & O_CREAT)
-	{
-	  set_errno (EROFS);
-	  res = 0;
-	  goto out;
-	}
-      else
-	{
-	  set_errno (ENOENT);
-	  res = 0;
-	  goto out;
-	}
-    }
-  if (process_tab[process_file_no].fhandler == FH_PROCESSFD)
+  if (entry->fhandler == FH_PROCESSFD)
     {
       flags |= O_DIROPEN;
       goto success;
@@ -301,7 +294,7 @@ fhandler_process::open (int flags, mode_t mode)
       goto out;
     }
 
-  fileid = process_file_no;
+  fileid = entry - process_tab;
   if (!fill_filebuf ())
 	{
 	  res = 0;
@@ -318,7 +311,7 @@ success:
   set_flags ((flags & ~O_TEXT) | O_BINARY);
   set_open_status ();
 out:
-  syscall_printf ("%d = fhandler_proc::open (%p, %d)", res, flags, mode);
+  syscall_printf ("%d = fhandler_proc::open(%p, %d)", res, flags, mode);
   return res;
 }
 
@@ -336,8 +329,11 @@ fhandler_process::fill_filebuf ()
     pid = atoi (path);
 
   pinfo p (pid);
-
-  if (!p)
+  /* If p->pid != pid, then pid is actually the Windows PID for an execed
+     Cygwin process, and the pinfo entry is the additional entry created
+     at exec time.  We don't want to enable the user to access a process
+     entry by using the Win32 PID, though. */
+  if (!p || p->pid != pid)
     {
       set_errno (ENOENT);
       return false;
@@ -346,7 +342,7 @@ fhandler_process::fill_filebuf ()
   if (process_tab[fileid].format_func)
     {
       if (process_tab[fileid].fhandler == FH_PROCESSFD)
-        {
+	{
 	  process_fd_t fd = { path, p };
 	  filesize = process_tab[fileid].format_func (&fd, filebuf);
 	}
@@ -434,9 +430,11 @@ format_process_gid (void *data, char *&destbuf)
 static _off64_t
 format_process_ctty (void *data, char *&destbuf)
 {
+  device d;
   _pinfo *p = (_pinfo *) data;
-  destbuf = (char *) crealloc_abort (destbuf, 40);
-  return __small_sprintf (destbuf, "%d\n", p->ctty);
+  d.parse (p->ctty);
+  destbuf = (char *) crealloc_abort (destbuf, strlen (d.name) + 2);
+  return __small_sprintf (destbuf, "%s\n", d.name);
 }
 
 static _off64_t
@@ -537,32 +535,272 @@ static _off64_t
 format_process_winexename (void *data, char *&destbuf)
 {
   _pinfo *p = (_pinfo *) data;
-  int len = strlen (p->progname);
-  destbuf = (char *) crealloc_abort (destbuf, len + 2);
-  strcpy (destbuf, p->progname);
+  size_t len = sys_wcstombs (NULL, 0, p->progname);
+  destbuf = (char *) crealloc_abort (destbuf, len + 1);
+  sys_wcstombs (destbuf, len, p->progname);
   destbuf[len] = '\n';
   return len + 1;
 }
+
+struct heap_info
+{
+  struct heap
+  {
+    heap *next;
+    unsigned heap_id;
+    char *base;
+    char *end;
+    unsigned long flags;
+  };
+  heap *heap_vm_chunks;
+
+  heap_info (DWORD pid)
+    : heap_vm_chunks (NULL)
+  {
+    PDEBUG_BUFFER buf;
+    NTSTATUS status;
+    PDEBUG_HEAP_ARRAY harray;
+
+    buf = RtlCreateQueryDebugBuffer (0, FALSE);
+    if (!buf)
+      return;
+    status = RtlQueryProcessDebugInformation (pid, PDI_HEAPS | PDI_HEAP_BLOCKS,
+					      buf);
+    if (NT_SUCCESS (status)
+	&& (harray = (PDEBUG_HEAP_ARRAY) buf->HeapInformation) != NULL)
+      for (ULONG hcnt = 0; hcnt < harray->Count; ++hcnt)
+	{
+	  PDEBUG_HEAP_BLOCK barray = (PDEBUG_HEAP_BLOCK)
+				     harray->Heaps[hcnt].Blocks;
+	  if (!barray)
+	    continue;
+	  for (ULONG bcnt = 0; bcnt < harray->Heaps[hcnt].BlockCount; ++bcnt)
+	    if (barray[bcnt].Flags & 2)
+	      {
+		heap *h = (heap *) malloc (sizeof (heap));
+		if (h)
+		  {
+		    *h = (heap) { heap_vm_chunks,
+				  hcnt, (char *) barray[bcnt].Address,
+				  (char *) barray[bcnt].Address
+					   + barray[bcnt].Size,
+				  harray->Heaps[hcnt].Flags };
+		    heap_vm_chunks = h;
+		  }
+	      }
+	}
+    RtlDestroyQueryDebugBuffer (buf);
+  }
+
+  char *fill_if_match (char *base, ULONG type, char *dest)
+  {
+    for (heap *h = heap_vm_chunks; h; h = h->next)
+      if (base >= h->base && base < h->end)
+	{
+	  char *p = dest + __small_sprintf (dest, "[win heap %ld", h->heap_id);
+	  if (!(h->flags & HEAP_FLAG_NONDEFAULT))
+	    p = stpcpy (p, " default");
+	  if ((h->flags & HEAP_FLAG_SHAREABLE) && (type & MEM_MAPPED))
+	    p = stpcpy (p, " shared");
+	  if (h->flags & HEAP_FLAG_EXECUTABLE)
+	    p = stpcpy (p, " exec");
+	  if (h->flags & HEAP_FLAG_GROWABLE)
+	    p = stpcpy (p, " grow");
+	  if (h->flags & HEAP_FLAG_NOSERIALIZE)
+	    p = stpcpy (p, " noserial");
+	  if (h->flags == HEAP_FLAG_DEBUGGED)
+	    p = stpcpy (p, " debug");
+	  stpcpy (p, "]");
+	  return dest;
+	}
+    return 0;
+  }
+
+  ~heap_info ()
+  {
+    heap *n = 0;
+    for (heap *m = heap_vm_chunks; m; m = n)
+      {
+	n = m->next;
+	free (m);
+      }
+  }
+};
+
+struct thread_info
+{
+  struct region
+  {
+    region *next;
+    ULONG thread_id;
+    char *start;
+    char *end;
+    bool teb;
+  };
+  region *regions;
+
+  thread_info (DWORD pid, HANDLE process)
+    : regions (NULL)
+  {
+    NTSTATUS status;
+    PVOID buf = NULL;
+    size_t size = 50 * (sizeof (SYSTEM_PROCESSES)
+			+ 16 * sizeof (SYSTEM_THREADS));
+    PSYSTEM_PROCESSES proc;
+    PSYSTEM_THREADS thread;
+
+    do
+      {
+	buf = realloc (buf, size);
+	status = NtQuerySystemInformation (SystemProcessesAndThreadsInformation,
+					   buf, size, NULL);
+	size <<= 1;
+      }
+    while (status == STATUS_INFO_LENGTH_MISMATCH);
+    if (!NT_SUCCESS (status))
+      {
+	if (buf)
+	  free (buf);
+	debug_printf ("NtQuerySystemInformation, %p", status);
+	return;
+      }
+    proc = (PSYSTEM_PROCESSES) buf;
+    while (true)
+      {
+	if (proc->ProcessId == pid)
+	  break;
+	if (!proc->NextEntryDelta)
+	  {
+	    free (buf);
+	    return;
+	  }
+	proc = (PSYSTEM_PROCESSES) ((PBYTE) proc + proc->NextEntryDelta);
+      }
+    thread = proc->Threads;
+    for (ULONG i = 0; i < proc->ThreadCount; ++i)
+      {
+	THREAD_BASIC_INFORMATION tbi;
+	TEB teb;
+	HANDLE thread_h;
+
+	if (!(thread_h = OpenThread (THREAD_QUERY_INFORMATION, FALSE,
+				     (ULONG) thread[i].ClientId.UniqueThread)))
+	  continue;
+	status = NtQueryInformationThread (thread_h, ThreadBasicInformation,
+					   &tbi, sizeof tbi, NULL);
+	CloseHandle (thread_h);
+	if (!NT_SUCCESS (status))
+	  continue;
+	region *r = (region *) malloc (sizeof (region));
+	if (r)
+	  {
+	    *r = (region) { regions, (ULONG) thread[i].ClientId.UniqueThread,
+			    (char *) tbi.TebBaseAddress,
+			    (char *) tbi.TebBaseAddress + wincap.page_size (),
+			    true };
+	    regions = r;
+	  }
+	if (!ReadProcessMemory (process, (PVOID) tbi.TebBaseAddress,
+				&teb, sizeof teb, NULL))
+	  continue;
+	r = (region *) malloc (sizeof (region));
+	if (r)
+	  {
+	    *r = (region) { regions, (ULONG) thread[i].ClientId.UniqueThread,
+			    (char *) (teb.DeallocationStack
+				      ?: teb.Tib.StackLimit),
+			    (char *) teb.Tib.StackBase,
+			    false };
+	    regions = r;
+	  }
+      }
+    free (buf);
+  }
+
+  char *fill_if_match (char *base, ULONG type, char *dest)
+  {
+    for (region *r = regions; r; r = r->next)
+      if ((base >= r->start && base < r->end)
+	  /* Special case WOW64.  The TEB is 8K within the region reserved
+	     for it.  No idea what the lower 8K are used for. */
+	  || (r->teb && wincap.is_wow64 ()
+	      && r->start == base + 2 * wincap.page_size ()))
+	{
+	  char *p = dest + __small_sprintf (dest, "[%s (tid %ld)",
+					    r->teb ? "teb" : "stack",
+					    r->thread_id);
+	  if (type & MEM_MAPPED)
+	    p = stpcpy (p, " shared");
+	  stpcpy (p, "]");
+	  return dest;
+	}
+    return 0;
+  }
+
+  ~thread_info ()
+  {
+    region *n = 0;
+    for (region *m = regions; m; m = n)
+      {
+	n = m->next;
+	free (m);
+      }
+  }
+};
 
 static _off64_t
 format_process_maps (void *data, char *&destbuf)
 {
   _pinfo *p = (_pinfo *) data;
   HANDLE proc = OpenProcess (PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-			     FALSE,
-			     p->dwProcessId);
+			     FALSE, p->dwProcessId);
   if (!proc)
     return 0;
 
+  NTSTATUS status;
+  PROCESS_BASIC_INFORMATION pbi;
+  PPEB peb = NULL;
+
+  memset (&pbi, 0, sizeof (pbi));
+  status = NtQueryInformationProcess (proc, ProcessBasicInformation,
+				      &pbi, sizeof pbi, NULL);
+  if (NT_SUCCESS (status))
+    peb = pbi.PebBaseAddress;
+  /* myself is in the same spot in every process, so is the pointer to the
+     procinfo.  But make sure the destructor doesn't try to release procinfo! */
+  pinfo proc_pinfo;
+  if (ReadProcessMemory (proc, &myself, &proc_pinfo, sizeof proc_pinfo, NULL))
+    proc_pinfo.preserve ();
+  /* The heap info on the cygheap is also in the same spot in each process
+     because the cygheap is located at the same address. */
+  user_heap_info user_heap;
+  ReadProcessMemory (proc, &cygheap->user_heap, &user_heap,
+		     sizeof user_heap, NULL);
+
   _off64_t len = 0;
-  HMODULE *modules;
-  DWORD needed, i;
-  DWORD_PTR wset_size;
-  DWORD_PTR *workingset = NULL;
-  MODULEINFO info;
+
+  union access
+  {
+    char flags[8];
+    _off64_t word;
+  } a;
+
+  struct region {
+    access a;
+    char *abase;
+    char *rbase;
+    char *rend;
+  } cur = {{{'\0'}}, (char *)1, 0, 0};
+
+  MEMORY_BASIC_INFORMATION mb;
+  dos_drive_mappings drive_maps;
+  heap_info heaps (p->dwProcessId);
+  thread_info threads (p->dwProcessId, proc);
+  struct __stat64 st;
+  long last_pass = 0;
 
   tmp_pathbuf tp;
-  PWCHAR modname = tp.w_get ();
+  PMEMORY_SECTION_NAME msi = (PMEMORY_SECTION_NAME) tp.w_get ();
   char *posix_modname = tp.c_get ();
   size_t maxsize = 0;
 
@@ -571,75 +809,122 @@ format_process_maps (void *data, char *&destbuf)
       cfree (destbuf);
       destbuf = NULL;
     }
-  if (!EnumProcessModules (proc, NULL, 0, &needed))
-    {
-      __seterrno ();
-      len = -1;
-      goto out;
-    }
-  modules = (HMODULE*) alloca (needed);
-  if (!EnumProcessModules (proc, modules, needed, &needed))
-    {
-      __seterrno ();
-      len = -1;
-      goto out;
-    }
 
-  QueryWorkingSet (proc, (void *) &wset_size, sizeof wset_size);
-  if (GetLastError () == ERROR_BAD_LENGTH)
+  /* Iterate over each VM region in the address space, coalescing
+     memory regions with the same permissions. Once we run out, do one
+     last_pass to trigger output of the last accumulated region. */
+  for (char *i = 0;
+       VirtualQueryEx (proc, i, &mb, sizeof(mb)) || (1 == ++last_pass);
+       i = cur.rend)
     {
-      workingset = (DWORD_PTR *) alloca (sizeof (DWORD_PTR) * ++wset_size);
-      if (!QueryWorkingSet (proc, (void *) workingset,
-			    sizeof (DWORD_PTR) * wset_size))
-	workingset = NULL;
-    }
-  for (i = 0; i < needed / sizeof (HMODULE); i++)
-    if (GetModuleInformation (proc, modules[i], &info, sizeof info)
-	&& GetModuleFileNameExW (proc, modules[i], modname, NT_MAX_PATH))
-      {
-	char access[5];
-	strcpy (access, "r--p");
-	struct __stat64 st;
-	if (mount_table->conv_to_posix_path (modname, posix_modname, 0))
-	  sys_wcstombs (posix_modname, NT_MAX_PATH, modname);
-	if (stat64 (posix_modname, &st))
-	  {
-	    st.st_dev = 0;
-	    st.st_ino = 0;
-	  }
-	size_t newlen = strlen (posix_modname) + 62;
-	if (len + newlen >= maxsize)
-	  destbuf = (char *) crealloc_abort (destbuf,
-					   maxsize += roundup2 (newlen, 2048));
-	if (workingset)
-	  for (unsigned i = 1; i <= wset_size; ++i)
+      if (last_pass)
+	posix_modname[0] = '\0';
+      if (mb.State == MEM_FREE)
+	a.word = 0;
+      else if (mb.State == MEM_RESERVE)
+	{
+	  char *p = stpcpy (a.flags, "===");
+	  stpcpy (p, (mb.Type & MEM_MAPPED) ? "s" : "p");
+	}
+      else
+	{
+	  static DWORD const RO = (PAGE_EXECUTE_READ | PAGE_READONLY);
+	  static DWORD const RW = (PAGE_EXECUTE_READWRITE | PAGE_READWRITE
+				   | PAGE_EXECUTE_WRITECOPY | PAGE_WRITECOPY);
+	  static DWORD const X = (PAGE_EXECUTE | PAGE_EXECUTE_READ
+				  | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY);
+	  static DWORD const WC = (PAGE_EXECUTE_WRITECOPY | PAGE_WRITECOPY);
+	  DWORD p = mb.Protect;
+	  a = (access) {{
+	      (p & (RO | RW))				? 'r' : '-',
+	      (p & (RW))				? 'w' : '-',
+	      (p & (X))					? 'x' : '-',
+	      (mb.Type & MEM_MAPPED) && !(p & (WC))	? 's'
+	      : (p & PAGE_GUARD)			? 'g' : 'p',
+	      '\0', // zero-fill the remaining bytes
+	    }};
+	}
+
+      region next = { a,
+		      (char *) mb.AllocationBase,
+		      (char *) mb.BaseAddress,
+		      (char *) mb.BaseAddress+mb.RegionSize
+      };
+
+      /* Windows permissions are more fine-grained than the unix rwxp,
+	 so we reduce clutter by manually coalescing regions sharing
+	 the same allocation base and effective permissions. */
+      bool newbase = (next.abase != cur.abase);
+      if (!last_pass && !newbase && next.a.word == cur.a.word)
+	  cur.rend = next.rend; /* merge with previous */
+      else
+	{
+	  /* output the current region if it's "interesting". */
+	  if (cur.a.word)
 	    {
-	      DWORD_PTR addr = workingset[i] & 0xfffff000UL;
-	      if ((char *)addr >= info.lpBaseOfDll
-		  && (char *)addr < (char *)info.lpBaseOfDll + info.SizeOfImage)
+	      size_t newlen = strlen (posix_modname) + 62;
+	      if (len + newlen >= maxsize)
+		destbuf = (char *) crealloc_abort (destbuf,
+						   maxsize += roundup2 (newlen,
+									2048));
+	      int written = __small_sprintf (destbuf + len,
+					     "%08lx-%08lx %s %08lx %04x:%04x %U   ",
+					     cur.rbase, cur.rend, cur.a.flags,
+					     cur.rbase - cur.abase,
+					     st.st_dev >> 16,
+					     st.st_dev & 0xffff,
+					     st.st_ino);
+	      while (written < 62)
+		destbuf[len + written++] = ' ';
+	      len += written;
+	      len += __small_sprintf (destbuf + len, "%s\n", posix_modname);
+	    }
+	  /* start of a new region (but possibly still the same allocation). */
+	  cur = next;
+	  /* if a new allocation, figure out what kind it is. */
+	  if (newbase && !last_pass && mb.State != MEM_FREE)
+	    {
+	      /* If the return length pointer is missing, NtQueryVirtualMemory
+		 returns with STATUS_ACCESS_VIOLATION on Windows 2000. */
+	      ULONG ret_len = 0;
+
+	      st.st_dev = 0;
+	      st.st_ino = 0;
+	      if ((mb.Type & (MEM_MAPPED | MEM_IMAGE))
+		  && NT_SUCCESS (status = NtQueryVirtualMemory (proc, cur.abase,
+						       MemorySectionName,
+						       msi, 65536, &ret_len)))
 		{
-		  access[0] = (workingset[i] & 0x5) ? 'r' : '-';
-		  access[1] = (workingset[i] & 0x4) ? 'w' : '-';
-		  access[2] = (workingset[i] & 0x2) ? 'x' : '-';
-		  access[3] = (workingset[i] & 0x100) ? 's' : 'p';
+		  PWCHAR dosname =
+		      drive_maps.fixup_if_match (msi->SectionFileName.Buffer);
+		  if (mount_table->conv_to_posix_path (dosname,
+						       posix_modname, 0))
+		    sys_wcstombs (posix_modname, NT_MAX_PATH, dosname);
+		  stat64 (posix_modname, &st);
+		}
+	      else if (!threads.fill_if_match (cur.abase, mb.Type,
+					       posix_modname)
+		       && !heaps.fill_if_match (cur.abase, mb.Type,
+						posix_modname))
+		{
+		  if (cur.abase == (char *) peb)
+		    strcpy (posix_modname, "[peb]");
+		  else if (cur.abase == (char *) &SharedUserData)
+		    strcpy (posix_modname, "[shared-user-data]");
+		  else if (cur.abase == (char *) cygwin_shared)
+		    strcpy (posix_modname, "[cygwin-shared]");
+		  else if (cur.abase == (char *) user_shared)
+		    strcpy (posix_modname, "[cygwin-user-shared]");
+		  else if (cur.abase == (char *) *proc_pinfo)
+		    strcpy (posix_modname, "[procinfo]");
+		  else if (cur.abase == user_heap.base)
+		    strcpy (posix_modname, "[heap]");
+		  else
+		    posix_modname[0] = 0;
 		}
 	    }
-	int written = __small_sprintf (destbuf + len,
-				"%08lx-%08lx %s %08lx %04x:%04x %U   ",
-				info.lpBaseOfDll,
-				(unsigned long)info.lpBaseOfDll
-				+ info.SizeOfImage,
-				access,
-				info.EntryPoint,
-				st.st_dev >> 16,
-				st.st_dev & 0xffff,
-				st.st_ino);
-	while (written < 62)
-	  destbuf[len + written++] = ' ';
-	len += written;
-	len += __small_sprintf (destbuf + len, "%s\n", posix_modname);
-      }
-out:
+	}
+    }
   CloseHandle (proc);
   return len;
 }
@@ -649,6 +934,7 @@ format_process_stat (void *data, char *&destbuf)
 {
   _pinfo *p = (_pinfo *) data;
   char cmd[NAME_MAX + 1];
+  WCHAR wcmd[NAME_MAX + 1];
   int state = 'R';
   unsigned long fault_count = 0UL,
 		utime = 0UL, stime = 0UL,
@@ -659,8 +945,9 @@ format_process_stat (void *data, char *&destbuf)
     strcpy (cmd, "<defunct>");
   else
     {
-      char *last_slash = strrchr (p->progname, '\\');
-      strcpy (cmd, last_slash ? last_slash + 1 : p->progname);
+      PWCHAR last_slash = wcsrchr (p->progname, L'\\');
+      wcscpy (wcmd, last_slash ? last_slash + 1 : p->progname);
+      sys_wcstombs (cmd, NAME_MAX + 1, wcmd);
       int len = strlen (cmd);
       if (len > 4)
 	{
@@ -669,10 +956,8 @@ format_process_stat (void *data, char *&destbuf)
 	    *s = 0;
 	 }
     }
-  /*
-   * Note: under Windows, a _process_ is always running - it's only _threads_
-   * that get suspended. Therefore the default state is R (runnable).
-   */
+  /* Note: under Windows, a process is always running - it's only threads
+     that get suspended.  Therefore the default state is R (runnable). */
   if (p->process_state & PID_EXITED)
     state = 'Z';
   else if (p->process_state & PID_STOPPED)
@@ -681,7 +966,7 @@ format_process_stat (void *data, char *&destbuf)
     state = get_process_state (p->dwProcessId);
   start_time = (GetTickCount () / 1000 - time (NULL) + p->start_time) * HZ;
 
-  NTSTATUS ret;
+  NTSTATUS status;
   HANDLE hProcess;
   VM_COUNTERS vmc;
   KERNEL_USER_TIMES put;
@@ -693,25 +978,17 @@ format_process_stat (void *data, char *&destbuf)
 			  FALSE, p->dwProcessId);
   if (hProcess != NULL)
     {
-      ret = NtQueryInformationProcess (hProcess,
-				       ProcessVmCounters,
-				       (PVOID) &vmc,
-				       sizeof vmc, NULL);
-      if (ret == STATUS_SUCCESS)
-	ret = NtQueryInformationProcess (hProcess,
-					 ProcessTimes,
-					 (PVOID) &put,
-					 sizeof put, NULL);
-      if (ret == STATUS_SUCCESS)
-	ret = NtQueryInformationProcess (hProcess,
-					 ProcessBasicInformation,
-					 (PVOID) &pbi,
-					 sizeof pbi, NULL);
-      if (ret == STATUS_SUCCESS)
-	ret = NtQueryInformationProcess (hProcess,
-					 ProcessQuotaLimits,
-					 (PVOID) &ql,
-					 sizeof ql, NULL);
+      status = NtQueryInformationProcess (hProcess, ProcessVmCounters,
+					  (PVOID) &vmc, sizeof vmc, NULL);
+      if (NT_SUCCESS (status))
+	status = NtQueryInformationProcess (hProcess, ProcessTimes,
+					    (PVOID) &put, sizeof put, NULL);
+      if (NT_SUCCESS (status))
+	status = NtQueryInformationProcess (hProcess, ProcessBasicInformation,
+					    (PVOID) &pbi, sizeof pbi, NULL);
+      if (NT_SUCCESS (status))
+	status = NtQueryInformationProcess (hProcess, ProcessQuotaLimits,
+					    (PVOID) &ql, sizeof ql, NULL);
       CloseHandle (hProcess);
     }
   else
@@ -721,18 +998,16 @@ format_process_stat (void *data, char *&destbuf)
       debug_printf ("OpenProcess: ret %d", error);
       return 0;
     }
-  if (ret == STATUS_SUCCESS)
-    ret = NtQuerySystemInformation (SystemTimeOfDayInformation,
-				    (PVOID) &stodi,
-				    sizeof stodi, NULL);
-  if (ret == STATUS_SUCCESS)
-    ret = NtQuerySystemInformation (SystemProcessorTimes,
-				    (PVOID) &spt,
-				    sizeof spt, NULL);
-  if (ret != STATUS_SUCCESS)
+  if (NT_SUCCESS (status))
+    status = NtQuerySystemInformation (SystemTimeOfDayInformation,
+				       (PVOID) &stodi, sizeof stodi, NULL);
+  if (NT_SUCCESS (status))
+    status = NtQuerySystemInformation (SystemProcessorTimes, (PVOID) &spt,
+				       sizeof spt, NULL);
+  if (!NT_SUCCESS (status))
     {
-      __seterrno_from_nt_status (ret);
-      debug_printf ("NtQueryInformationProcess: ret %d, Dos(ret) %E", ret);
+      __seterrno_from_nt_status (status);
+      debug_printf ("NtQueryInformationProcess: status %p, %E", status);
       return 0;
     }
   fault_count = vmc.PageFaultCount;
@@ -751,7 +1026,7 @@ format_process_stat (void *data, char *&destbuf)
      start_time = (spt.KernelTme.QuadPart + spt.UserTime.QuadPart) * HZ / 10000000ULL;
 #endif
   priority = pbi.BasePriority;
-  unsigned page_size = getsystempagesize ();
+  unsigned page_size = wincap.page_size ();
   vmsize = vmc.PagefileUsage;
   vmrss = vmc.WorkingSetSize / page_size;
   vmmaxrss = ql.MaximumWorkingSetSize / page_size;
@@ -766,7 +1041,7 @@ format_process_stat (void *data, char *&destbuf)
 				   "%lu",
 			  p->pid, cmd,
 			  state,
-			  p->ppid, p->pgid, p->sid, makedev (FH_TTYS, p->ctty),
+			  p->ppid, p->pgid, p->sid, p->ctty,
 			  -1, 0, fault_count, fault_count, 0, 0, utime, stime,
 			  utime, stime, priority, 0, 0, 0,
 			  start_time, vmsize,
@@ -779,28 +1054,23 @@ format_process_status (void *data, char *&destbuf)
 {
   _pinfo *p = (_pinfo *) data;
   char cmd[NAME_MAX + 1];
+  WCHAR wcmd[NAME_MAX + 1];
   int state = 'R';
   const char *state_str = "unknown";
   unsigned long vmsize = 0UL, vmrss = 0UL, vmdata = 0UL, vmlib = 0UL, vmtext = 0UL,
 		vmshare = 0UL;
-  if (p->process_state & PID_EXITED)
-    strcpy (cmd, "<defunct>");
-  else
+  PWCHAR last_slash = wcsrchr (p->progname, L'\\');
+  wcscpy (wcmd, last_slash ? last_slash + 1 : p->progname);
+  sys_wcstombs (cmd, NAME_MAX + 1, wcmd);
+  int len = strlen (cmd);
+  if (len > 4)
     {
-      char *last_slash = strrchr (p->progname, '\\');
-      strcpy (cmd, last_slash ? last_slash + 1 : p->progname);
-      int len = strlen (cmd);
-      if (len > 4)
-	{
-	  char *s = cmd + len - 4;
-	  if (ascii_strcasematch (s, ".exe"))
-	    *s = 0;
-	 }
-    }
-  /*
-   * Note: under Windows, a _process_ is always running - it's only _threads_
-   * that get suspended. Therefore the default state is R (runnable).
-   */
+      char *s = cmd + len - 4;
+      if (ascii_strcasematch (s, ".exe"))
+	*s = 0;
+     }
+  /* Note: under Windows, a process is always running - it's only threads
+     that get suspended.  Therefore the default state is R (runnable). */
   if (p->process_state & PID_EXITED)
     state = 'Z';
   else if (p->process_state & PID_STOPPED)
@@ -829,12 +1099,12 @@ format_process_status (void *data, char *&destbuf)
   if (!get_mem_values (p->dwProcessId, &vmsize, &vmrss, &vmtext, &vmdata,
 		       &vmlib, &vmshare))
     return 0;
-  unsigned page_size = getsystempagesize ();
+  unsigned page_size = wincap.page_size ();
   vmsize *= page_size; vmrss *= page_size; vmdata *= page_size;
   vmtext *= page_size; vmlib *= page_size;
-  // The real uid value for *this* process is stored at cygheap->user.real_uid
-  // but we can't get at the real uid value for any other process, so
-  // just fake it as p->uid. Similar for p->gid.
+  /* The real uid value for *this* process is stored at cygheap->user.real_uid
+     but we can't get at the real uid value for any other process, so
+     just fake it as p->uid.  Similar for p->gid. */
   destbuf = (char *) crealloc_abort (destbuf, strlen (cmd) + 320);
   return __small_sprintf (destbuf, "Name:\t%s\n"
 				   "State:\t%c (%s)\n"
@@ -897,15 +1167,14 @@ format_process_mounts (void *data, char *&destbuf)
   if (p->pid != myself->pid)
     {
       WCHAR sid_string[UNLEN + 1] = L""; /* Large enough for SID */
-      shared_locations sl = SH_JUSTOPEN;
 
       cygsid p_sid;
 
       if (!p_sid.getfrompw (internal_getpwuid (p->uid)))
-      	return 0;
+	return 0;
       p_sid.string (sid_string);
       u_shared = (user_info *) open_shared (sid_string, USER_VERSION, u_hdl,
-					    sizeof (user_info), sl,
+					    sizeof (user_info), SH_JUSTOPEN,
 					    &sec_none_nih);
       if (!u_shared)
 	return 0;
@@ -942,53 +1211,49 @@ format_process_mounts (void *data, char *&destbuf)
   return len;
 }
 
-static int
+int
 get_process_state (DWORD dwProcessId)
 {
-  /*
-   * This isn't really heavy magic - just go through the processes'
-   * threads one by one and return a value accordingly
-   * Errors are silently ignored.
-   */
-  NTSTATUS ret;
-  SYSTEM_PROCESSES *sp;
-  ULONG n = 0x1000;
-  PULONG p = new ULONG[n];
+  /* This isn't really heavy magic - just go through the processes' threads
+     one by one and return a value accordingly.  Errors are silently ignored. */
+  NTSTATUS status;
+  PSYSTEM_PROCESSES p, sp;
+  ULONG n = 0x4000;
   int state =' ';
-  while (STATUS_INFO_LENGTH_MISMATCH ==
-	 (ret = NtQuerySystemInformation (SystemProcessesAndThreadsInformation,
-					 (PVOID) p,
-					 n * sizeof *p, NULL)))
-    delete [] p, p = new ULONG[n *= 2];
-  if (ret != STATUS_SUCCESS)
+
+  p = (PSYSTEM_PROCESSES) malloc (n);
+  if (!p)
+    return state;
+  while (true)
     {
-      debug_printf ("NtQuerySystemInformation: ret %d, Dos(ret) %d",
-		    ret, RtlNtStatusToDosError (ret));
+      status = NtQuerySystemInformation (SystemProcessesAndThreadsInformation,
+					 (PVOID) p, n, NULL);
+      if (status != STATUS_INFO_LENGTH_MISMATCH)
+	break;
+      n <<= 1;
+      PSYSTEM_PROCESSES new_p = (PSYSTEM_PROCESSES) realloc (p, n);
+      if (!new_p)
+      	goto out;
+      p = new_p;
+    }
+  if (!NT_SUCCESS (status))
+    {
+      debug_printf ("NtQuerySystemInformation: status %p, %lu",
+		    status, RtlNtStatusToDosError (status));
       goto out;
     }
   state = 'Z';
-  sp = (SYSTEM_PROCESSES *) p;
+  sp = p;
   for (;;)
     {
       if (sp->ProcessId == dwProcessId)
 	{
 	  SYSTEM_THREADS *st;
-	  if (wincap.has_process_io_counters ())
-	    /*
-	     * Windows 2000 and XP have an extra member in SYSTEM_PROCESSES
-	     * which means the offset of the first SYSTEM_THREADS entry is
-	     * different on these operating systems compared to NT 4.
-	     */
-	    st = &sp->Threads[0];
-	  else
-	    /*
-	     * 136 is the offset of the first SYSTEM_THREADS entry on
-	     * Windows NT 4.
-	     */
-	    st = (SYSTEM_THREADS *) ((char *) sp + 136);
+	  st = &sp->Threads[0];
 	  state = 'S';
 	  for (unsigned i = 0; i < sp->ThreadCount; i++)
 	    {
+	      /* FIXME: at some point we should consider generating 'O' */
 	      if (st->State == StateRunning ||
 		  st->State == StateReady)
 		{
@@ -1001,10 +1266,10 @@ get_process_state (DWORD dwProcessId)
 	}
       if (!sp->NextEntryDelta)
 	 break;
-      sp = (SYSTEM_PROCESSES *) ((char *) sp + sp->NextEntryDelta);
+      sp = (PSYSTEM_PROCESSES) ((char *) sp + sp->NextEntryDelta);
     }
 out:
-  delete [] p;
+  free (p);
   return state;
 }
 
@@ -1013,44 +1278,55 @@ get_mem_values (DWORD dwProcessId, unsigned long *vmsize, unsigned long *vmrss,
 		unsigned long *vmtext, unsigned long *vmdata,
 		unsigned long *vmlib, unsigned long *vmshare)
 {
-  bool res = true;
-  NTSTATUS ret;
+  bool res = false;
+  NTSTATUS status;
   HANDLE hProcess;
   VM_COUNTERS vmc;
-  MEMORY_WORKING_SET_LIST *mwsl;
-  ULONG n = 0x1000, length;
-  PULONG p = (PULONG) malloc (sizeof (ULONG) * n);
-  unsigned page_size = getsystempagesize ();
-  hProcess = OpenProcess (PROCESS_QUERY_INFORMATION,
-			  FALSE, dwProcessId);
+  PMEMORY_WORKING_SET_LIST p;
+  ULONG n = 0x4000, length;
+
+  p = (PMEMORY_WORKING_SET_LIST) malloc (n);
+  if (!p)
+    return false;
+  hProcess = OpenProcess (PROCESS_QUERY_INFORMATION, FALSE, dwProcessId);
   if (hProcess == NULL)
     {
-      DWORD error = GetLastError ();
-      __seterrno_from_win_error (error);
-      debug_printf ("OpenProcess: ret %d", error);
+      __seterrno ();
+      debug_printf ("OpenProcess, %E");
       return false;
     }
-  while ((ret = NtQueryVirtualMemory (hProcess, 0,
-				      MemoryWorkingSetList,
-				      (PVOID) p,
-				      n * sizeof *p, &length)),
-	 (ret == STATUS_SUCCESS || ret == STATUS_INFO_LENGTH_MISMATCH) &&
-	 length >= (n * sizeof (*p)))
-      p = (PULONG) realloc (p, n *= (2 * sizeof (ULONG)));
-
-  if (ret != STATUS_SUCCESS)
+  while (true)
     {
-      debug_printf ("NtQueryVirtualMemory: ret %d, Dos(ret) %d",
-		   ret, RtlNtStatusToDosError (ret));
-      res = false;
+      status = NtQueryVirtualMemory (hProcess, 0, MemoryWorkingSetList,
+				     (PVOID) p, n,
+				     (length = ULONG_MAX, &length));
+      if (status != STATUS_INFO_LENGTH_MISMATCH)
+	break;
+      n <<= 1;
+      PMEMORY_WORKING_SET_LIST new_p = (PMEMORY_WORKING_SET_LIST)
+				       realloc (p, n);
+      if (!new_p)
+	goto out;
+      p = new_p;
+    }
+  if (!NT_SUCCESS (status))
+    {
+      debug_printf ("NtQueryVirtualMemory: status %p", status);
+      if (status == STATUS_PROCESS_IS_TERMINATING)
+	{
+	  *vmsize = *vmrss = *vmtext = *vmdata = *vmlib = *vmshare = 0;
+	  res = true;
+	}
+      else
+	__seterrno_from_nt_status (status);
       goto out;
     }
-  mwsl = (MEMORY_WORKING_SET_LIST *) p;
-  for (unsigned long i = 0; i < mwsl->NumberOfPages; i++)
+  for (unsigned long i = 0; i < p->NumberOfPages; i++)
     {
       ++*vmrss;
-      unsigned flags = mwsl->WorkingSetList[i] & 0x0FFF;
-      if ((flags & (WSLE_PAGE_EXECUTE | WSLE_PAGE_SHAREABLE)) == (WSLE_PAGE_EXECUTE | WSLE_PAGE_SHAREABLE))
+      unsigned flags = p->WorkingSetList[i] & 0x0FFF;
+      if ((flags & (WSLE_PAGE_EXECUTE | WSLE_PAGE_SHAREABLE))
+	  == (WSLE_PAGE_EXECUTE | WSLE_PAGE_SHAREABLE))
 	++*vmlib;
       else if (flags & WSLE_PAGE_SHAREABLE)
 	++*vmshare;
@@ -1059,16 +1335,16 @@ get_mem_values (DWORD dwProcessId, unsigned long *vmsize, unsigned long *vmrss,
       else
 	++*vmdata;
     }
-  ret = NtQueryInformationProcess (hProcess, ProcessVmCounters, (PVOID) &vmc,
-				   sizeof vmc, NULL);
-  if (ret != STATUS_SUCCESS)
+  status = NtQueryInformationProcess (hProcess, ProcessVmCounters, (PVOID) &vmc,
+				      sizeof vmc, NULL);
+  if (!NT_SUCCESS (status))
     {
-      debug_printf ("NtQueryInformationProcess: ret %d, Dos(ret) %d",
-		    ret, RtlNtStatusToDosError (ret));
-      res = false;
+      debug_printf ("NtQueryInformationProcess: status %p", status);
+      __seterrno_from_nt_status (status);
       goto out;
     }
-  *vmsize = vmc.PagefileUsage / page_size;
+  *vmsize = vmc.PagefileUsage / wincap.page_size ();
+  res = true;
 out:
   free (p);
   CloseHandle (hProcess);

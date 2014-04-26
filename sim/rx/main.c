@@ -1,6 +1,6 @@
 /* main.c --- main function for stand-alone RX simulator.
 
-Copyright (C) 2005, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+Copyright (C) 2005, 2007-2012 Free Software Foundation, Inc.
 Contributed by Red Hat, Inc.
 
 This file is part of the GNU simulators.
@@ -19,13 +19,21 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 
+#include "config.h"
 #include <stdio.h>
 #include <string.h>
+#ifdef HAVE_STDLIB_H
 #include <stdlib.h>
+#endif
+#ifdef HAVE_UNISTD_H
 #include <unistd.h>
+#endif
 #include <assert.h>
 #include <setjmp.h>
 #include <signal.h>
+#ifdef HAVE_GETOPT_H
+#include <getopt.h>
+#endif
 
 #include "bfd.h"
 
@@ -74,6 +82,8 @@ done (int exit_code)
 	printf ("insns: %14s\n", comma (rx_cycles));
       else
 	printf ("insns: %u\n", rx_cycles);
+
+      pipeline_stats ();
     }
   exit (exit_code);
 }
@@ -84,6 +94,7 @@ main (int argc, char **argv)
   int o;
   int save_trace;
   bfd *prog;
+  int rc;
 
   /* By default, we exit when an execution error occurs.  */
   execution_error_init_standalone ();
@@ -168,33 +179,50 @@ main (int argc, char **argv)
 
   sim_disasm_init (prog);
 
-  while (1)
+  enable_counting = verbose;
+
+  rc = setjmp (decode_jmp_buf);
+
+  if (rc == 0)
     {
-      int rc;
-
-      if (trace)
-	printf ("\n");
-
-      if (disassemble)
-	sim_disasm_one ();
-
-      enable_counting = verbose;
-      rc = decode_opcode ();
-      enable_counting = 0;
-
-      if (RX_HIT_BREAK (rc))
-	done (1);
-      else if (RX_EXITED (rc))
-	done (RX_EXIT_STATUS (rc));
-      else if (RX_STOPPED (rc))
+      if (!trace && !disassemble)
 	{
-	  if (verbose)
-	    printf("Stopped on signal %d\n", RX_STOP_SIG (rc));
-	  exit(1);
+	  /* This will longjmp to the above if an exception
+	     happens.  */
+	  for (;;)
+	    decode_opcode ();
 	}
       else
-	assert (RX_STEPPED (rc));
+	while (1)
+	  {
 
-      trace_register_changes ();
+	    if (trace)
+	      printf ("\n");
+
+	    if (disassemble)
+	      {
+		enable_counting = 0;
+		sim_disasm_one ();
+		enable_counting = verbose;
+	      }
+
+	    rc = decode_opcode ();
+
+	    if (trace)
+	      trace_register_changes ();
+	  }
     }
+
+  if (RX_HIT_BREAK (rc))
+    done (1);
+  else if (RX_EXITED (rc))
+    done (RX_EXIT_STATUS (rc));
+  else if (RX_STOPPED (rc))
+    {
+      if (verbose)
+	printf("Stopped on signal %d\n", RX_STOP_SIG (rc));
+      exit(1);
+    }
+  done (0);
+  exit (0);
 }

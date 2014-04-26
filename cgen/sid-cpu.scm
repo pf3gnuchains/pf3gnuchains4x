@@ -1,5 +1,5 @@
 ; CPU family related simulator generator, excluding decoding and model support.
-; Copyright (C) 2000, 2002, 2003, 2005, 2006, 2009 Red Hat, Inc.
+; Copyright (C) 2000, 2002, 2003, 2005, 2006, 2009, 2010 Red Hat, Inc.
 ; This file is part of CGEN.
 
 ; ***********
@@ -85,8 +85,13 @@
 namespace @arch@ {
 \n"
 
-   "// Enums.\n\n"
-   (lambda () (string-map gen-decl (current-enum-list)))
+   (let ((enums (find (lambda (obj) (not (obj-has-attr? obj 'VIRTUAL)))
+		      (current-enum-list))))
+     (if (null? enums)
+	 ""
+	 (string-list
+	  "// Enums.\n\n"
+	  (string-map gen-decl enums))))
 
    /gen-attr-decls
    /gen-insn-attr-decls

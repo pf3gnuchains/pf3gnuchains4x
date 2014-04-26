@@ -1,7 +1,7 @@
 /* cygthread.cc
 
-   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2008, 2009
-   Red Hat, Inc.
+   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2008,
+   2009, 2010, 2011 Red Hat, Inc.
 
 This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
@@ -12,10 +12,11 @@ details. */
 #include <stdlib.h>
 #include "sigproc.h"
 #include "cygtls.h"
+#include "ntdll.h"
 
 #undef CloseHandle
 
-static cygthread NO_COPY threads[32];
+static cygthread NO_COPY threads[64];
 #define NTHREADS (sizeof (threads) / sizeof (threads[0]))
 
 DWORD NO_COPY cygthread::main_thread_id;
@@ -41,7 +42,7 @@ cygthread::callfunc (bool issimplestub)
     {
       /* Wait for main thread to assign 'h' */
       while (!h)
-	low_priority_sleep (0);
+	yield ();
       if (ev)
 	CloseHandle (ev);
       ev = h;
@@ -135,7 +136,10 @@ cygthread::simplestub (VOID *arg)
   cygthread *info = (cygthread *) arg;
   _my_tls._ctinfo = info;
   info->stack_ptr = &arg;
+  HANDLE notify = info->notify_detached;
   info->callfunc (true);
+  if (notify)
+     SetEvent (notify);
   return 0;
 }
 
@@ -185,20 +189,30 @@ out:
   return info;
 }
 
-cygthread::cygthread (LPTHREAD_START_ROUTINE start, size_t n, void *param,
-		      const char *name, HANDLE notify)
- : __name (name), func (start), arglen (n), arg (param), notify_detached (notify)
+/* This function is called via QueueUserAPC.  Apparently creating threads
+   asynchronously is a huge performance win on Win64.  */
+void CALLBACK
+cygthread::async_create (ULONG_PTR arg)
 {
-  thread_printf ("name %s, id %p", name, id);
+  cygthread *that = (cygthread *) arg;
+  that->create ();
+  ::SetThreadPriority (that->h, THREAD_PRIORITY_HIGHEST);
+  that->zap_h ();
+}
+
+void
+cygthread::create ()
+{
+  thread_printf ("name %s, id %p, this %p", __name, id, this);
   HANDLE htobe;
   if (h)
     {
       if (ev)
 	ResetEvent (ev);
       while (!thread_sync)
-	low_priority_sleep (0);
+	yield ();
       SetEvent (thread_sync);
-      thread_printf ("activated name '%s', thread_sync %p for thread %p", name, thread_sync, id);
+      thread_printf ("activated name '%s', thread_sync %p for id %p", __name, thread_sync, id);
       htobe = h;
     }
   else
@@ -207,17 +221,17 @@ cygthread::cygthread (LPTHREAD_START_ROUTINE start, size_t n, void *param,
       htobe = CreateThread (&sec_none_nih, 0, is_freerange ? simplestub : stub,
 			    this, 0, &id);
       if (!htobe)
-	api_fatal ("CreateThread failed for %s - %p<%p>, %E", name, h, id);
-      thread_printf ("created name '%s', thread %p, id %p", name, h, id);
+	api_fatal ("CreateThread failed for %s - %p<%p>, %E", __name, h, id);
+      thread_printf ("created name '%s', thread %p, id %p", __name, h, id);
 #ifdef DEBUGGING
       terminated = false;
 #endif
     }
 
-  if (n)
+  if (arglen)
     {
       while (!ev)
-	low_priority_sleep (0);
+	yield ();
       WaitForSingleObject (ev, INFINITE);
       ResetEvent (ev);
     }
@@ -243,12 +257,15 @@ cygthread::name (DWORD tid)
 	break;
       }
 
-  if (!res)
+  if (res)
+    /* ok */;
+  else if (!_main_tls)
+    res = "main";
+  else
     {
       __small_sprintf (_my_tls.locals.unknown_thread_name, "unknown (%p)", tid);
       res = _my_tls.locals.unknown_thread_name;
     }
-
   return res;
 }
 
@@ -256,7 +273,7 @@ cygthread::operator
 HANDLE ()
 {
   while (!ev)
-    low_priority_sleep (0);
+    yield ();
   return ev;
 }
 
@@ -287,7 +304,7 @@ cygthread::terminate_thread ()
   bool terminated = true;
   debug_printf ("thread '%s', id %p, inuse %d, stack_ptr %p", __name, id, inuse, stack_ptr);
   while (inuse && !stack_ptr)
-    low_priority_sleep (0);
+    yield ();
 
   if (!inuse)
     goto force_notterminated;
@@ -299,7 +316,7 @@ cygthread::terminate_thread ()
   if (!inuse || exiting)
     goto force_notterminated;
 
-  if (ev && !(terminated = WaitForSingleObject (ev, 0) != WAIT_OBJECT_0))
+  if (ev && !(terminated = !IsEventSignalled (ev)))
     ResetEvent (ev);
 
   MEMORY_BASIC_INFORMATION m;

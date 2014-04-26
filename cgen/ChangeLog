@@ -1,3 +1,166 @@
+2010-10-28  Nick Clifton<nickc@redhat.com>
+
+	* cpu/xstormy16.cpu (alignfix-mem-far): New macro.  Like
+	alignfix-mem, but works with 32-bit addresses.
+	(set-alignfix-mem-far): New macro.  Like set-alignfix-mem but
+	works with 32-bit addresses.
+	(movfgrgri, movfgrgripostinc, movfgrgripredec, movfgrgrii,
+	movfgrgriipostinc, movfgrgriipredec): Use alignfix-mem-far.
+	(movfgrigr, movfgripostincgr, movfgripredecgr): Use
+	set-alignfix-mem-far.
+	(movfgrgriipostinc, movfgriipostincgr): Propagate addition to
+	source register into base register.
+	(movfgrgriipredec, movfgriipredecgr): Propagate subtraction from
+	source register into base register.
+
+2010-10-09  Matt Rice  <ratmice@gmail.com>
+
+	* utils-cgen.scm (gen-attr-accessors): Rename bool attribute to bool_.
+	* cpu/mep.opc (mep_cgen_insn_supported): Ditto.
+
+2010-08-30  Doug Evans  <dje@sebabeach.org>
+
+	* rtl-c.scm (s-float-predop): New function.
+	(nan, qnan, snan): Call it.
+
+2010-06-28  Alan Modra  <amodra@gmail.com>
+
+	* cpu/mep.opc (mep_examine_ivc2_insns): Delete set but unused var.
+
+2010-06-01  DJ Delorie  <dj@redhat.com>
+
+	* cpu/xstormy16.cpu (movgriipostincgr, movgriipredecgr,
+	movfgriipredecgr): Fix increment/decrement amount.
+
+2010-02-12  Doug Evans  <dje@sebabeach.org>
+
+	* iformat.scm (/sfmt-search-key): Use iformat key instead of list
+	of ifields.
+
+2010-02-11  Doug Evans  <dje@sebabeach.org>
+
+	* testsuite/location-1.test: Use %pmacros.
+
+	* desc-cpu.scm (/gen-cpu-open): Remove comment on K&R support.
+	* utils-cgen.scm (gen-define-with-symcat): Remove K&R support.
+
+	* utils-sim.scm (compute-sformat-argbufs!): Use more consistent name
+	for name of empty sbuf.
+
+	* iformat.scm (/sfmt-search-key, /ifmt-lookup-sfmt!): Add assert.
+
+	* insn.scm (<insn>): Add initial value for members fmt-desc, ifmt,
+	sfmt, tmp.
+	(/sub-insn-ifields): Delete old commented out code.
+	(/sub-insn-make!, /parse-insn-format-symbol): Ditto.
+	* operand.scm (/anyof-merge-setter, anyof-merge-semantics): Ditto.
+
+	* sim-decode.scm (/gen-decode-insn-globals): Tweak formatting of
+	generated code.
+
+2010-02-10  Doug Evans  <dje@sebabeach.org>
+
+	* gen-all: Print options.
+
+2010-01-28  Doug Evans  <dje@sebabeach.org>
+
+	* pmacros.scm (pmacros-init!): New arg rtl-version, all callers
+	updated.  Use %-prefix if rtl-version >= 0.9.
+	* read.scm (/supported-rtl-versions): Add (0 9).
+	(/rtl-version-valid?): New function.
+	(/cmd-define-rtl-version): If new rtl version, reinvoke pmacros-init!.
+	(/reader-expr): New function.
+	(reader-process): New function.
+	(/reader-process-with-loc!): Renamed from /reader-process!.
+	Don't pre-expand `if' commands.
+	(/cmd-if): Simplify.  Pmacro-expand test, then, else clauses here.
+	Handle rtl-version-equal?, rtl-version-at-least?.
+	* testsuite/Makefile.am (clean-test-files): Remove *.test.cpu*.
+	* testsuite/Makefile.in: Regenerate.
+	* testsuite/pmacros-1.test: Test both . and % as prefixes.
+	* testsuite/testsuite.cpu (/begin, /print, /dump): New pmacros.
+	(newline, print-match, print-expr, print-thunk): Use them.
+	(internal-verify): Update definition.
+	* doc/rtl.texi (define-rtl-version): Document rtl version 0.9.
+	(Top level conditionals): New node.
+
+	* read.scm (rtl-version-at-least?): Fix typo.
+
+2010-01-27  Doug Evans  <dje@sebabeach.org>
+
+	* read.scm: Follow commenting convention.
+	* mach.scm: Follow commenting convention.
+
+	* pmacros.scm: Follow commenting convention.  Replace change to
+	$pmacro to %pmacro.  $pmacro is confusing with $ in assembler syntax.
+	(/pmacro-orig-prefix, /pmacro-prefix): New globals.
+
+2010-01-25  Doug Evans  <dje@sebabeach.org>
+
+	* co-for-gen-all: Simplify a bit.
+
+2010-01-24  Doug Evans  <dje@sebabeach.org>
+
+	* desc-cpu.scm (cgen-desc.h): Don't print virtual enums.
+	* sid-cpu.scm (cgen-desc.h): Ditto.
+	* enum.scm (enum-builtin!): New function.
+	* read.scm (reader-install-builtin!): Call it.
+	* rtl-c.scm (s-convop): Delete, replaced with ...
+	(s-int-convop, s-float-convop): ... new fns.
+	(ext, zext, trunc): Update.
+	(fext, ftrunc, float, ufloat, fix, ufix): Update.
+	* rtx-funcs.scm (fext, ftrunc, float, ufloat, fix, ufix): New parameter
+	`how'.
+	* cpu/mep-fmax.cpu (fcvtsw): Update.
+	* cpu/sh.cpu (h-fsd, h-fmov): Update.
+	* doc/rtl.texi (float-convop): Update.
+
+	* gen-all: Be more consistent with intrinsic generation.
+
+	* utils-cgen.scm (<location>): Define using new define-class.
+	(<ident>, <source-ident>, <context>): Ditto.
+
+	* cos.scm (/object-string): New function.
+	(/object-error): Use it.
+	(/object-count-true): New function
+	(object-copy-top): Delete.  All callers changed to call object-copy.
+	(/parse-member-list, /build-getter-defs, /build-setter-defs): New fns.
+	(define-class, define-interface, define-method): New macros.
+	(define-getters, define-setters, vmake): Moved here ...
+	* utils-cgen.scm: ... from here.
+
+	* cos.scm: Follow commenting convention.  Why did a single ; have to
+	get indented like it does? :-(
+	* utils-cgen.scm: Ditto.
+
+2010-01-23  Doug Evans  <dje@sebabeach.org>
+
+	* gen-all: Move build-configuration related parameters to an
+	external file.  Add usage info.  Add "force" option.
+	Be smarter about what diffs to generate.
+
+	* doc/rtl.texi (Expressions): Add more docs on conversion functions.
+
+2010-01-21  Doug Evans  <dje@sebabeach.org>
+
+	* doc/rtl.texi (Expressions): Fix docs on `subword'.
+
+2010-01-20  Doug Evans  <dje@sebabeach.org>
+
+	* rtx-funcs.scm (nan,qnan,snan): New rtl functions.
+	* rtl-c.scm (nan,qnan,snan): New rtl functions.
+	* doc/rtl.texi (Expressions): Add docs for them.
+
+	* rtl-traverse.scm (/rtx-canon-anycexprmode): New function.
+	(/rtx-make-canon-table): Add entry for ANYCEXPRMODE.
+	(/rtx-canon-operands): Print expr-mode if /rtx-canon-debug?
+	Do final error check on mode assigned to expression.
+	(/rtx-make-traverser-table): Add entry for ANYCEXPRMODE.
+	* rtl-xform.scm (/rtx-trim-args): Handle ANYCEXPRMODE.
+	* rtl.scm (/rtx-valid-mode-types): Add ANYCEXPRMODE.
+	* rtx-funcs.scm (c-code, c-call, c-raw-call): Use ANYCEXPRMODE.
+	(if, cond, case): Use ANYEXPRMODE.
+
 2010-01-19  Doug Evans  <dje@sebabeach.org>
 
 	* testsuite/pmacros-1.test: Add more .splice tests.

@@ -48,7 +48,7 @@ enum interrupt_type
   num_int_types
 };
 
-char *interrupt_names[] = {
+const char *interrupt_names[] = {
   "reset",
   "nmi",
   "intov1",
@@ -65,7 +65,7 @@ do_interrupt (sd, data)
      SIM_DESC sd;
      void *data;
 {
-  char **interrupt_name = (char**)data;
+  const char **interrupt_name = (const char**)data;
   enum interrupt_type inttype;
   inttype = (interrupt_name - STATE_WATCHPOINTS (sd)->interrupt_names);
 
@@ -327,24 +327,5 @@ sim_store_register (sd, rn, memory, length)
      int length;
 {
   State.regs[rn] = T2H_4 (*(unsigned32*)memory);
-  return -1;
-}
-
-void
-sim_do_command (sd, cmd)
-     SIM_DESC sd;
-     char *cmd;
-{
-  char *mm_cmd = "memory-map";
-  char *int_cmd = "interrupt";
-
-  if (sim_args_command (sd, cmd) != SIM_RC_OK)
-    {
-      if (strncmp (cmd, mm_cmd, strlen (mm_cmd) == 0))
-	sim_io_eprintf (sd, "`memory-map' command replaced by `sim memory'\n");
-      else if (strncmp (cmd, int_cmd, strlen (int_cmd)) == 0)
-	sim_io_eprintf (sd, "`interrupt' command replaced by `sim watch'\n");
-      else
-	sim_io_eprintf (sd, "Unknown command `%s'\n", cmd);
-    }
+  return length;
 }

@@ -55,9 +55,8 @@ an easy way to port many UNIX packages, with only minimal source code
 changes.
 </para>
 <para>
-Note that there are some workarounds
-that cause Cygwin to behave differently than most UNIX-like operating
-systems; these are described in more detail in 
+Note that there are some workarounds that cause Cygwin to behave differently
+than most UNIX-like operating systems; these are described in more detail in 
 <xref linkend="using-effectively"></xref>.
 </para>
 <para>
@@ -109,12 +108,9 @@ process-specific information.</para>
 the hood it's using the Win32 API, as well as the native NT API, where
 appropriate.</para>
 
-<para>Because processes run under the standard Win32 subsystem, they
-can access both the UNIX compatibility calls provided by Cygwin as well as
-any of the Win32 API calls.  This gives the programmer complete flexibility in
-designing the structure of their program in terms of the APIs used.  For
-example, they could write a Win32-specific GUI using Win32 API calls on top of
-a UNIX back-end that uses Cygwin.</para>
+<note><para>Some restrictions apply for calls to the Win32 API.
+For details, see <xref linkend="setup-env-win32"></xref>,
+as well as <xref linkend="pathnames-win32-api"></xref>.</para></note>
 
 <para>The native NT API is used mainly for speed, as well as to access
 NT capabilities which are useful to implement certain POSIX features, but
@@ -123,7 +119,15 @@ are hidden to the Win32 API.
 
 <para>Due to some restrictions in Windows, it's not always possible
 to strictly adhere to existing UNIX standards like POSIX.1.  Fortunately
-these are mostely border cases.</para>
+these are mostly corner cases.</para>
+
+<para>Note that many of the things that Cygwin does to provide POSIX
+compatibility do not mesh well with the native Windows API.  If you mix
+POSIX calls with Windows calls in your program it is possible that you
+will see uneven results.  In particular, Cygwin signals will not work
+with Windows functions which block and Windows functions which accept
+filenames may be confused by Cygwin's support for long filenames.</para>
+
 </sect2>
 
 <sect2 id="ov-hi-perm"><title>Permissions and Security</title>
@@ -341,6 +345,57 @@ multiple Windows PIDs associated with a single Cygwin PID.  In some
 cases, stubs of each of these Win32 processes may linger, waiting for
 their exec'd Cygwin process to exit.</para>
 </sect2>
+
+<sect3 id='ov-hi-process-problems'>
+<title>Problems with process creation</title>
+
+<para>The semantics of <literal>fork</literal> require that a forked
+child process have <emphasis>exactly</emphasis> the same address
+space layout as its parent. However, Windows provides no native
+support for cloning address space between processes and several
+features actively undermine a reliable <literal>fork</literal>
+implementation. Three issues are especially prevalent:</para>
+
+<para><itemizedlist>
+<listitem>DLL base address collisions. Unlike *nix shared
+libraries, which use "position-independent code", Windows shared
+libraries assume a fixed base address. Whenever the hard-wired
+address ranges of two DLLs collide (which occurs quite often), the
+Windows loader must "rebase" one of them to a different
+address. However, it may not resolve collisions consistently, and
+may rebase a different dll and/or move it to a different address
+every time. Cygwin can usually compensate for this effect when it
+involves libraries opened dynamically, but collisions among
+statically-linked dlls (dependencies known at compile time) are
+resolved before <literal>cygwin1.dll</literal> initializes and
+cannot be fixed afterward. This problem can only be solved by
+removing the base address conflicts which cause the problem,
+usually using the <literal>rebaseall</literal> tool.</listitem>
+
+<listitem>Address space layout randomization (ASLR). Starting with
+Vista, Windows implements ASLR, which means that thread stacks,
+heap, memory-mapped files, and statically-linked dlls are placed
+at different (random) locations in each process. This behaviour
+interferes with a proper <literal>fork</literal>, and if an
+unmovable object (process heap or system dll) ends up at the wrong
+location, Cygwin can do nothing to compensate (though it will
+retry a few times automatically).</listitem>
+
+<listitem>DLL injection by
+<ulink url="http://cygwin.com/faq/faq.using.html#faq.using.bloda">
+BLODA</ulink>. Badly-behaved applications which
+inject dlls into other processes often manage to clobber important
+sections of the child's address space, leading to base address
+collisions which rebasing cannot fix. The only way to resolve this
+problem is to remove (usually uninstall) the offending
+app.</listitem></itemizedlist></para>
+
+<para>In summary, current Windows implementations make it
+impossible to implement a perfectly reliable fork, and occasional
+fork failures are inevitable.
+</para>
+
+</sect3>
 
 <sect2 id="ov-hi-signals"><title>Signals</title>
 <para>When

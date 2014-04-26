@@ -6,6 +6,7 @@
 The official maintainers of newlib:
 
 Jeff Johnston			jjohnstn@redhat.com
+Corinna Vinschen		corinna@vinschen.de
 
 
 		     Various Domain Maintainers
@@ -37,6 +38,7 @@ arm                     Nick Clifton            nickc@redhat.com
 m32c port		DJ Delorie		dj@redhat.com
 mn10300			Nick Clifton		nickc@redhat.com
 moxie			Anthony Green		green@moxielogic.com
+rl78			DJ Delorie		dj@redhat.com
 
 
 			Write After Approval
@@ -47,3 +49,4 @@ Anthony Green			green@moxielogic.com
 DJ Delorie			dj@redhat.com
 Jim Wilson			wilson@specifixinc.com
 Nick Clifton			nickc@redhat.com
+Eric Blake			eblake@redhat.com

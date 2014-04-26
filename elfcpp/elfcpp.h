@@ -1,6 +1,6 @@
 // elfcpp.h -- main header file for elfcpp    -*- C++ -*-
 
-// Copyright 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
+// Copyright 2006, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
 // Written by Ian Lance Taylor <iant@google.com>.
 
 // This file is part of elfcpp.
@@ -129,10 +129,9 @@ enum ELFOSABI
   ELFOSABI_NONE = 0,
   ELFOSABI_HPUX = 1,
   ELFOSABI_NETBSD = 2,
-  // ELFOSABI_LINUX is not listed in the ELF standard.
+  ELFOSABI_GNU = 3,
+  // ELFOSABI_LINUX is an alias for ELFOSABI_GNU.
   ELFOSABI_LINUX = 3,
-  // ELFOSABI_HURD is not listed in the ELF standard.
-  ELFOSABI_HURD = 4,
   ELFOSABI_SOLARIS = 6,
   ELFOSABI_AIX = 7,
   ELFOSABI_IRIX = 8,
@@ -365,6 +364,9 @@ enum SHT
   // The remaining values are not in the standard.
   // Incremental build data.
   SHT_GNU_INCREMENTAL_INPUTS = 0x6fff4700,
+  SHT_GNU_INCREMENTAL_SYMTAB = 0x6fff4701,
+  SHT_GNU_INCREMENTAL_RELOCS = 0x6fff4702,
+  SHT_GNU_INCREMENTAL_GOT_PLT = 0x6fff4703,
   // Object attributes.
   SHT_GNU_ATTRIBUTES = 0x6ffffff5,
   // GNU style dynamic hash table.
@@ -784,6 +786,7 @@ const int VER_NEED_CURRENT = 1;
 
 const int VER_FLG_BASE = 0x1;
 const int VER_FLG_WEAK = 0x2;
+const int VER_FLG_INFO = 0x4;
 
 // Special constants found in the SHT_GNU_versym entries.
 

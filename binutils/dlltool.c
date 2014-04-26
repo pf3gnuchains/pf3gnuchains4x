@@ -1,6 +1,6 @@
 /* dlltool.c -- tool to generate stuff for PE style DLLs
    Copyright 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
+   2005, 2006, 2007, 2008, 2009, 2011  Free Software Foundation, Inc.
 
    This file is part of GNU Binutils.
 
@@ -399,6 +399,7 @@ typedef struct identify_data_t
 static char *head_label;
 static char *imp_name_lab;
 static char *dll_name;
+static int dll_name_set_by_exp_name;
 static int add_indirect = 0;
 static int add_underscore = 0;
 static int add_stdcall_underscore = 0;
@@ -1089,6 +1090,11 @@ def_name (const char *name, int base)
   if (d_is_dll)
     non_fatal (_("Can't have LIBRARY and NAME"));
 
+  if (dll_name_set_by_exp_name && name && *name != 0)
+    {
+      dll_name = NULL;
+      dll_name_set_by_exp_name = 0;
+    }
   /* If --dllname not provided, use the one in the DEF file.
      FIXME: Is this appropriate for executables?  */
   if (!dll_name)
@@ -1104,6 +1110,12 @@ def_library (const char *name, int base)
 
   if (d_is_exe)
     non_fatal (_("Can't have LIBRARY and NAME"));
+
+  if (dll_name_set_by_exp_name && name && *name != 0)
+    {
+      dll_name = NULL;
+      dll_name_set_by_exp_name = 0;
+    }
 
   /* If --dllname not provided, use the one in the DEF file.  */
   if (!dll_name)
@@ -1251,7 +1263,7 @@ def_import (const char *app_name, const char *module, const char *dllext,
 void
 def_version (int major, int minor)
 {
-  printf ("VERSION %d.%d\n", major, minor);
+  printf (_("VERSION %d.%d\n"), major, minor);
 }
 
 void
@@ -1299,7 +1311,7 @@ run (const char *what, char *args)
   char *errmsg_fmt, *errmsg_arg;
   char *temp_base = choose_temp_base ();
 
-  inform ("run: %s %s", what, args);
+  inform (_("run: %s %s"), what, args);
 
   /* Count the args */
   i = 0;
@@ -1399,12 +1411,26 @@ scan_drectve_symbols (bfd *abfd)
 	  flagword flags = BSF_FUNCTION;
 
 	  p += 8;
-	  name = p;
-	  while (p < e && *p != ',' && *p != ' ' && *p != '-')
-	    p++;
+	  /* Do we have a quoted export?  */
+	  if (*p == '"')
+	    {
+	      p++;
+	      name = p;
+	      while (p < e && *p != '"')
+		++p;
+	    }
+	  else
+	    {
+	      name = p;
+	      while (p < e && *p != ',' && *p != ' ' && *p != '-')
+		p++;
+	    }
 	  c = xmalloc (p - name + 1);
 	  memcpy (c, name, p - name);
 	  c[p - name] = 0;
+	  /* Advance over trailing quote.  */
+	  if (p < e && *p == '"')
+	    ++p;
 	  if (p < e && *p == ',')       /* found type tag.  */
 	    {
 	      char *tag_start = ++p;
@@ -4143,6 +4169,16 @@ main (int ac, char **av)
   /* Check if we generated PE+.  */
   create_for_pep = strcmp (mname, "i386:x86-64") == 0;
 
+  {
+    /* Check the default underscore */
+    int u = leading_underscore; /* Underscoring mode. -1 for use default.  */
+    if (u == -1)
+      bfd_get_target_info (mtable[machine].how_bfd_target, NULL,
+                           NULL, &u, NULL);
+    if (u != -1)
+      leading_underscore = (u != 0 ? TRUE : FALSE);
+  }
+
   if (!dll_name && exp_name)
     {
       /* If we are inferring dll_name from exp_name,
@@ -4153,6 +4189,7 @@ main (int ac, char **av)
       dll_name = xmalloc (len);
       strcpy (dll_name, exp_basename);
       strcat (dll_name, ".dll");
+      dll_name_set_by_exp_name = 1;
     }
 
   if (as_name == NULL)

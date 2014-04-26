@@ -1,6 +1,6 @@
 /* This testcase is part of GDB, the GNU debugger.
 
-   Copyright 2009, 2010 Free Software Foundation, Inc.
+   Copyright 2009-2012 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -33,8 +33,6 @@
 /* Terminate always in the main task, it can lock up with SIGSTOPped GDB
    otherwise.  */
 #define TIMEOUT (gettid () == getpid() ? 10 : 15)
-
-static pthread_mutex_t gdbstop_mutex = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
 
 static pid_t thread1_tid;
 static pthread_cond_t thread1_tid_cond = PTHREAD_COND_INITIALIZER;
@@ -89,18 +87,19 @@ thread1_func (void *unused)
   int i;
   volatile int rwatch_store;
 
+  timed_mutex_lock (&thread1_tid_mutex);
+
+  /* THREAD1_TID_MUTEX must be already locked to avoid race.  */
   thread1_tid = gettid ();
+
   i = pthread_cond_signal (&thread1_tid_cond);
   assert (i == 0);
-
-  /* Be sure GDB is already stopped before continuing.  */
-  timed_mutex_lock (&gdbstop_mutex);
-  i = pthread_mutex_unlock (&gdbstop_mutex);
+  i = pthread_mutex_unlock (&thread1_tid_mutex);
   assert (i == 0);
 
   rwatch_store = thread1_rwatch;
 
-  /* Be sure the "T (tracing stop)" test can proceed for both threads.  */
+  /* Be sure the "t (tracing stop)" test can proceed for both threads.  */
   timed_mutex_lock (&terminate_mutex);
   i = pthread_mutex_unlock (&terminate_mutex);
   assert (i == 0);
@@ -114,18 +113,19 @@ thread2_func (void *unused)
   int i;
   volatile int rwatch_store;
 
+  timed_mutex_lock (&thread2_tid_mutex);
+
+  /* THREAD2_TID_MUTEX must be already locked to avoid race.  */
   thread2_tid = gettid ();
+
   i = pthread_cond_signal (&thread2_tid_cond);
   assert (i == 0);
-
-  /* Be sure GDB is already stopped before continuing.  */
-  timed_mutex_lock (&gdbstop_mutex);
-  i = pthread_mutex_unlock (&gdbstop_mutex);
+  i = pthread_mutex_unlock (&thread2_tid_mutex);
   assert (i == 0);
 
   rwatch_store = thread2_rwatch;
 
-  /* Be sure the "T (tracing stop)" test can proceed for both threads.  */
+  /* Be sure the "t (tracing stop)" test can proceed for both threads.  */
   timed_mutex_lock (&terminate_mutex);
   i = pthread_mutex_unlock (&terminate_mutex);
   assert (i == 0);
@@ -211,6 +211,13 @@ state_wait (pid_t process, const char *wanted)
   do
     {
       state = proc_string (filename, "State:\t");
+
+      /* torvalds/linux-2.6.git 464763cf1c6df632dccc8f2f4c7e50163154a2c0
+	 has changed "T (tracing stop)" to "t (tracing stop)".  Make the GDB
+	 testcase backward compatible with older Linux kernels.  */
+      if (strcmp (state, "T (tracing stop)") == 0)
+	state = "t (tracing stop)";
+
       if (strcmp (state, wanted) == 0)
 	{
 	  free (filename);
@@ -267,7 +274,8 @@ main (int argc, char **argv)
 
   setbuf (stdout, NULL);
 
-  timed_mutex_lock (&gdbstop_mutex);
+  timed_mutex_lock (&thread1_tid_mutex);
+  timed_mutex_lock (&thread2_tid_mutex);
 
   timed_mutex_lock (&terminate_mutex);
 
@@ -306,29 +314,23 @@ main (int argc, char **argv)
       state_wait (tracer, "T (stopped)");
     }
 
-  timed_mutex_lock (&thread1_tid_mutex);
-  timed_mutex_lock (&thread2_tid_mutex);
-
-  /* Let the threads start.  */
-  i = pthread_mutex_unlock (&gdbstop_mutex);
-  assert (i == 0);
+  /* Threads are now waiting at timed_mutex_lock (thread1_tid_mutex) and so
+     they could not trigger the watchpoints before GDB gets unstopped later.
+     Threads get resumed at pthread_cond_wait below.  Use `while' loops for
+     protection against spurious pthread_cond_wait wakeups.  */
 
   printf ("Waiting till the threads initialize their TIDs.\n");
 
-  if (thread1_tid == 0)
+  while (thread1_tid == 0)
     {
       i = pthread_cond_wait (&thread1_tid_cond, &thread1_tid_mutex);
       assert (i == 0);
-
-      assert (thread1_tid > 0);
     }
 
-  if (thread2_tid == 0)
+  while (thread2_tid == 0)
     {
       i = pthread_cond_wait (&thread2_tid_cond, &thread2_tid_mutex);
       assert (i == 0);
-
-      assert (thread2_tid > 0);
     }
 
   printf ("Thread 1 TID = %lu, thread 2 TID = %lu, PID = %lu.\n",
@@ -341,9 +343,9 @@ main (int argc, char **argv)
     {
       /* s390x-unknown-linux-gnu will fail with "R (running)".  */
 
-      state_wait (thread1_tid, "T (tracing stop)");
+      state_wait (thread1_tid, "t (tracing stop)");
 
-      state_wait (thread2_tid, "T (tracing stop)");
+      state_wait (thread2_tid, "t (tracing stop)");
     }
 
   cleanup ();

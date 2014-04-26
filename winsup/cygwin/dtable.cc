@@ -1,7 +1,7 @@
 /* dtable.cc: file descriptor support.
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -38,12 +38,12 @@ static const NO_COPY DWORD std_consts[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
 static bool handle_to_fn (HANDLE, char *);
 
 #define WCLEN(x) ((sizeof (x) / sizeof (WCHAR)) - 1)
-char unknown_file[] = "some disk file";
-const WCHAR DEV_NULL[] = L"\\Device\\Null";
+static const char unknown_file[] = "some disk file";
+static const WCHAR DEV_NULL[] = L"\\Device\\Null";
 static const WCHAR DEV_SOCKET[] = L"\\Device\\Afd";
 
-const WCHAR DEVICE_PREFIX[] = L"\\device\\";
-const size_t DEVICE_PREFIX_LEN WCLEN (DEVICE_PREFIX);
+static const WCHAR DEVICE_PREFIX[] = L"\\device\\";
+static const size_t DEVICE_PREFIX_LEN WCLEN (DEVICE_PREFIX);
 
 static const WCHAR DEV_NAMED_PIPE[] = L"\\Device\\NamedPipe\\";
 static const size_t DEV_NAMED_PIPE_LEN = WCLEN (DEV_NAMED_PIPE);
@@ -113,7 +113,7 @@ dtable::get_debugger_info ()
   extern bool jit_debug;
   if (!jit_debug && being_debugged ())
     {
-      char std[3][sizeof ("/dev/ttyNNNN")];
+      char std[3][sizeof ("/dev/ptyNNNN")];
       std[0][0] = std[1][0] = std [2][0] = '\0';
       char buf[sizeof ("cYgstd %x") + 32];
       sprintf (buf, "cYgstd %x %x %x", (unsigned) &std, sizeof (std[0]), 3);
@@ -130,12 +130,14 @@ dtable::get_debugger_info ()
 			   | O_BINARY, 0777))
 	      release (i);
 	    else
-	      CloseHandle (h);
-	      /* Copy to Windows' idea of a standard handle, otherwise
-		 we have invalid standard handles when calling Windows
-		 functions (small_printf and strace might suffer, too). */
-	      SetStdHandle (std_consts[i], i ? fh->get_output_handle ()
-					     : fh->get_handle ());
+	      {
+		CloseHandle (h);
+		/* Copy to Windows' idea of a standard handle, otherwise
+		   we have invalid standard handles when calling Windows
+		   functions (small_printf and strace might suffer, too). */
+		SetStdHandle (std_consts[i], i ? fh->get_output_handle ()
+					       : fh->get_handle ());
+	      }
 	  }
     }
 }
@@ -147,15 +149,10 @@ dtable::get_debugger_info ()
 void
 dtable::stdio_init ()
 {
-  extern void set_console_ctty ();
-  /* Set these before trying to output anything from strace.
-     Also, always set them even if we're to pick up our parent's fds
-     in case they're missed.  */
-
   if (myself->cygstarted || ISSTATE (myself, PID_CYGPARENT))
     {
-      tty_min *t = cygwin_shared->tty.get_tty (myself->ctty);
-      if (t && t->getpgid () == myself->pid && t->gethwnd ())
+      tty_min *t = cygwin_shared->tty.get_cttyp ();
+      if (t && t->is_console)
 	init_console_handler (true);
       return;
     }
@@ -173,7 +170,7 @@ dtable::stdio_init ()
      initialized in dtable::get_debugger_info ().  In this case
      init_std_file_from_handle is a no-op, so, even if out == err we don't
      want to duplicate the handle since it will be unused. */
-  if (out == err && (!being_debugged () || !not_open (2)))
+  if (out == err && (!being_debugged () || not_open (2)))
     {
       /* Since this code is not invoked for forked tasks, we don't have
 	 to worry about the close-on-exec flag here.  */
@@ -189,11 +186,6 @@ dtable::stdio_init ()
 
   init_std_file_from_handle (1, out);
   init_std_file_from_handle (2, err);
-
-  /* Assign the console as the controlling tty for this process if we actually
-     have a console and no other controlling tty has been assigned. */
-  if (!fhandler_console::need_invisible () && myself->ctty < 0)
-    set_console_ctty ();
 }
 
 const int dtable::initial_archetype_size;
@@ -202,7 +194,7 @@ fhandler_base *
 dtable::find_archetype (device& dev)
 {
   for (unsigned i = 0; i < farchetype; i++)
-    if (archetypes[i]->get_device () == (unsigned) dev)
+    if (archetypes[i]->get_device () == (DWORD) dev)
       return archetypes[i];
   return NULL;
 }
@@ -221,7 +213,8 @@ dtable::delete_archetype (fhandler_base *fh)
   for (unsigned i = 0; i < farchetype; i++)
     if (fh == archetypes[i])
       {
-	debug_printf ("deleting element %d for %s", i, fh->get_name ());
+	debug_printf ("deleting element %d for %s(%d/%d)", i, fh->get_name (),
+		      fh->dev ().get_major (), fh->dev ().get_minor ());
 	if (i < --farchetype)
 	  archetypes[i] = archetypes[farchetype];
 	break;
@@ -244,19 +237,26 @@ dtable::find_unused_handle (int start)
   return -1;
 }
 
-void
+bool
 dtable::release (int fd)
 {
-  if (!not_open (fd))
+  bool deleted;
+  if (not_open (fd))
+    deleted = false;
+  else
     {
       if (fds[fd]->need_fixup_before ())
 	dec_need_fixup_before ();
-      fhandler_base *arch = fds[fd]->archetype;
-      delete fds[fd];
-      if (arch && !arch->usecount)
-	cygheap->fdtab.delete_archetype (arch);
+      if (fds[fd]->refcnt (-1) > 0)
+	deleted = false;
+      else
+	{
+	  deleted = true;
+	  delete fds[fd];
+	}
       fds[fd] = NULL;
     }
+  return deleted;
 }
 
 extern "C" int
@@ -267,6 +267,7 @@ cygwin_attach_handle_to_fd (char *name, int fd, HANDLE handle, mode_t bin,
     fd = cygheap->fdtab.find_unused_handle ();
   fhandler_base *fh = build_fh_name (name);
   cygheap->fdtab[fd] = fh;
+  cygheap->fdtab[fd]->refcnt (1);
   fh->init (handle, myaccess, bin ?: fh->pc_binmode ());
   return fd;
 }
@@ -277,9 +278,8 @@ dtable::init_std_file_from_handle (int fd, HANDLE handle)
   CONSOLE_SCREEN_BUFFER_INFO buf;
   DCB dcb;
   unsigned bin = O_BINARY;
-  device dev;
+  device dev = {};
 
-  dev.devn = 0;		/* FIXME: device */
   first_fd_for_open = 0;
 
   if (!not_open (fd))
@@ -297,10 +297,11 @@ dtable::init_std_file_from_handle (int fd, HANDLE handle)
       int rcv = 0, len = sizeof (int);
 
       if (handle_to_fn (handle, name))
-	/* ok */;
+	dev.parse (name);
       else if (strcmp (name, ":sock:") == 0
-	       /* On NT4, NtQueryObject returns STATUS_NOT_IMPLEMENTED when
-	          called for a socket handle. */
+	       /* NtQueryObject returns an error when called on an LSP socket
+		  handle.  While fdsock now tries to fetch the underlying
+		  base socket, this only works on Vista and later. */
 	       || (strcmp (name, unknown_file) == 0
 		   && !::getsockopt ((SOCKET) handle, SOL_SOCKET, SO_RCVBUF,
 				     (char *) &rcv, &len)))
@@ -313,28 +314,23 @@ dtable::init_std_file_from_handle (int fd, HANDLE handle)
 	dev = *piper_dev;
       else
 	dev = *pipew_dev;
-      if (name[0])
-	access = FILE_CREATE_PIPE_INSTANCE;
     }
-  else if (GetConsoleScreenBufferInfo (handle, &buf))
+  else if (GetConsoleScreenBufferInfo (handle, &buf)
+	   || GetNumberOfConsoleInputEvents (handle, (DWORD *) &buf))
     {
-      /* Console output */
-      if (ISSTATE (myself, PID_USETTY))
-	dev.parse (FH_TTY);
+      /* Console I/O */
+      if (myself->ctty > 0)
+	dev.parse (myself->ctty);
       else
-	dev = *console_dev;
-    }
-  else if (GetNumberOfConsoleInputEvents (handle, (DWORD *) &buf))
-    {
-      /* Console input */
-      if (ISSTATE (myself, PID_USETTY))
-	dev.parse (FH_TTY);
-      else
-	dev = *console_dev;
+	{
+	  dev.parse (FH_CONSOLE);
+	  CloseHandle (handle);
+	  handle = INVALID_HANDLE_VALUE;
+	}
     }
   else if (GetCommState (handle, &dcb))
-    /* serial */
-    dev.parse (DEV_TTYS_MAJOR, 0);
+    /* FIXME: Not right - assumes ttyS0 */
+    dev.parse (DEV_SERIAL_MAJOR, 0);
   else
     /* Try to figure it out from context - probably a disk file */
     handle_to_fn (handle, name);
@@ -350,9 +346,6 @@ dtable::init_std_file_from_handle (int fd, HANDLE handle)
       else
 	fh = build_fh_name (name);
 
-      if (fh)
-	cygheap->fdtab[fd] = fh;
-
       if (name[0])
 	{
 	  bin = fh->pc_binmode ();
@@ -364,41 +357,68 @@ dtable::init_std_file_from_handle (int fd, HANDLE handle)
 	    }
 	}
 
-      if (dev == FH_TTY || dev == FH_CONSOLE)
-      	access |= GENERIC_READ | GENERIC_WRITE;
+      IO_STATUS_BLOCK io;
+      FILE_ACCESS_INFORMATION fai;
+      int openflags = O_BINARY;
+
+      /* Console windows are not kernel objects, so the access mask returned
+	 by NtQueryInformationFile is meaningless.  CMD always hands down
+	 stdin handles as R/O handles, but our tty slave sides are R/W. */
+      if (!iscons_dev (dev) && fh->is_tty ())
+	{
+	  openflags |= O_RDWR;
+	  access |= GENERIC_READ | GENERIC_WRITE;
+	}
+      else if (!iscons_dev (dev)
+	       && NT_SUCCESS (NtQueryInformationFile (handle, &io, &fai,
+						      sizeof fai,
+						      FileAccessInformation)))
+	{
+	  if (fai.AccessFlags & FILE_WRITE_DATA)
+	    {
+	      openflags |= O_WRONLY;
+	      access |= GENERIC_WRITE;
+	    }
+	  if (fai.AccessFlags & FILE_READ_DATA)
+	    {
+	      openflags |= openflags & O_WRONLY ? O_RDWR : O_RDONLY;
+	      access |= GENERIC_READ;
+	    }
+	}
       else if (fd == 0)
-	access |= GENERIC_READ;
+	{
+	  openflags |= O_RDONLY;
+	  access |= GENERIC_READ;
+	}
       else
-	access |= GENERIC_WRITE;  /* Should be rdwr for stderr but not sure that's
-				    possible for some versions of handles */
-      /* FIXME: Workaround Windows 7 issue.  If the parent process of
-	 the process tree closes the original handles to the console window,
-	 strange problems occur when starting child processes later on if
-	 stdio redirection is used.
-
-	 CV 2009-08-08:  It looks like this problem has been fixed only
-	 half-heartedly in RTM.  Unfortunately the new implementation
-	 has still a problem which now also occurs on the 32 bit release
-	 of Windows 7.  It's still not quite clear what happens but it's
-	 easily reproducible.  Just start X via the start menu entry.
-	 This opens an xterm window with a shell.  Exit from the shell,
-	 and you get a Windows error box reporting a crash in the
-	 Console Window Host application (conhost.exe) due to an access
-	 violation.
-
-	 This needs further investigation but the workaround not to close
-	 the handles will have a marginal hit of three extra handles per
-	 process at most. */
-      if (fh->init (dev == FH_CONSOLE && wincap.has_console_handle_problem ()
-		     ? INVALID_HANDLE_VALUE : handle, access, bin))
-	set_std_handle (fd);
-      else
+	{
+	  openflags |= O_WRONLY;
+	  access |= GENERIC_WRITE;  /* Should be rdwr for stderr but not sure that's
+				       possible for some versions of handles */
+	}
+      if (!fh->init (handle, access, bin))
 	api_fatal ("couldn't initialize fd %d for %s", fd, fh->get_name ());
+
+      fh->open_setup (openflags);
+      fh->usecount = 0;
+      cygheap->fdtab[fd] = fh;
+      cygheap->fdtab[fd]->refcnt (1);
+      set_std_handle (fd);
       paranoid_printf ("fd %d, handle %p", fd, handle);
     }
 }
 
-#define cnew(name) new ((void *) ccalloc (HEAP_FHANDLER, 1, sizeof (name))) name
+#define cnew(name, ...) \
+  ({ \
+    void* ptr = (void*) ccalloc (HEAP_FHANDLER, 1, sizeof (name)); \
+    ptr ? new (ptr) name (__VA_ARGS__) : NULL; \
+  })
+
+#define cnew_no_ctor(name, ...) \
+  ({ \
+    void* ptr = (void*) ccalloc (HEAP_FHANDLER, 1, sizeof (name)); \
+    ptr ? new (ptr) name (ptr) : NULL; \
+  })
 
 fhandler_base *
 build_fh_name (const char *name, unsigned opt, suffix_info *si)
@@ -406,7 +426,7 @@ build_fh_name (const char *name, unsigned opt, suffix_info *si)
   path_conv pc (name, opt | PC_NULLEMPTY | PC_POSIX, si);
   if (pc.error)
     {
-      fhandler_base *fh = cnew (fhandler_nodevice) ();
+      fhandler_base *fh = cnew (fhandler_nodevice);
       if (fh)
 	fh->set_error (pc.error);
       set_errno (fh ? pc.error : EMFILE);
@@ -428,21 +448,25 @@ build_fh_dev (const device& dev, const char *unix_name)
 }
 
 #define fh_unset ((fhandler_base *) 1)
-fhandler_base *
-build_fh_pc (path_conv& pc, bool set_name)
+static device last_tty_dev;
+#define fh_last_tty_dev ((fhandler_termios *) cygheap->fdtab.find_archetype (last_tty_dev))
+
+static fhandler_base *
+fh_alloc (path_conv& pc)
 {
   fhandler_base *fh = fh_unset;
+  fhandler_base *fhraw = NULL;
 
-  switch (pc.dev.major)
+  switch (pc.dev.get_major ())
     {
-    case DEV_TTYS_MAJOR:
-      fh = cnew (fhandler_tty_slave) ();
+    case DEV_PTYS_MAJOR:
+      fh = cnew (fhandler_pty_slave, pc.dev.get_minor ());
       break;
-    case DEV_TTYM_MAJOR:
-      fh = cnew (fhandler_tty_master) ();
+    case DEV_PTYM_MAJOR:
+      fh = cnew (fhandler_pty_master, pc.dev.get_minor ());
       break;
     case DEV_CYGDRIVE_MAJOR:
-      fh = cnew (fhandler_cygdrive) ();
+      fh = cnew (fhandler_cygdrive);
       break;
     case DEV_FLOPPY_MAJOR:
     case DEV_CDROM_MAJOR:
@@ -454,35 +478,41 @@ build_fh_pc (path_conv& pc, bool set_name)
     case DEV_SD5_MAJOR:
     case DEV_SD6_MAJOR:
     case DEV_SD7_MAJOR:
-      fh = cnew (fhandler_dev_floppy) ();
+      fh = cnew (fhandler_dev_floppy);
       break;
     case DEV_TAPE_MAJOR:
-      fh = cnew (fhandler_dev_tape) ();
+      fh = cnew (fhandler_dev_tape);
       break;
     case DEV_SERIAL_MAJOR:
-      fh = cnew (fhandler_serial) ();
+      fh = cnew (fhandler_serial);
+      break;
+    case DEV_CONS_MAJOR:
+      fh = cnew (fhandler_console, pc.dev);
       break;
     default:
-      switch (pc.dev)
+      switch ((int) pc.dev)
 	{
 	case FH_CONSOLE:
 	case FH_CONIN:
 	case FH_CONOUT:
-	  fh = cnew (fhandler_console) ();
+	  fh = cnew (fhandler_console, pc.dev);
 	  break;
-	case FH_PTYM:
-	  fh = cnew (fhandler_pty_master) ();
+	case FH_PTMX:
+	  if (pc.isopen ())
+	    fh = cnew (fhandler_pty_master, -1);
+	  else
+	    fhraw = cnew_no_ctor (fhandler_pty_master, -1);
 	  break;
 	case FH_WINDOWS:
-	  fh = cnew (fhandler_windows) ();
+	  fh = cnew (fhandler_windows);
 	  break;
 	case FH_FIFO:
-	  fh = cnew (fhandler_fifo) ();
+	  fh = cnew (fhandler_fifo);
 	  break;
 	case FH_PIPE:
 	case FH_PIPER:
 	case FH_PIPEW:
-	  fh = cnew (fhandler_pipe) ();
+	  fh = cnew (fhandler_pipe);
 	  break;
 	case FH_TCP:
 	case FH_UDP:
@@ -490,71 +520,142 @@ build_fh_pc (path_conv& pc, bool set_name)
 	case FH_UNIX:
 	case FH_STREAM:
 	case FH_DGRAM:
-	  fh = cnew (fhandler_socket) ();
+	  fh = cnew (fhandler_socket);
 	  break;
 	case FH_FS:
-	  fh = cnew (fhandler_disk_file) ();
+	  fh = cnew (fhandler_disk_file);
 	  break;
 	case FH_NULL:
-	  fh = cnew (fhandler_dev_null) ();
+	  fh = cnew (fhandler_dev_null);
 	  break;
 	case FH_ZERO:
 	case FH_FULL:
-	  fh = cnew (fhandler_dev_zero) ();
+	  fh = cnew (fhandler_dev_zero);
 	  break;
 	case FH_RANDOM:
 	case FH_URANDOM:
-	  fh = cnew (fhandler_dev_random) ();
+	  fh = cnew (fhandler_dev_random);
 	  break;
 	case FH_MEM:
 	case FH_PORT:
-	  fh = cnew (fhandler_dev_mem) ();
+	  fh = cnew (fhandler_dev_mem);
 	  break;
 	case FH_CLIPBOARD:
-	  fh = cnew (fhandler_dev_clipboard) ();
+	  fh = cnew (fhandler_dev_clipboard);
 	  break;
 	case FH_OSS_DSP:
-	  fh = cnew (fhandler_dev_dsp) ();
+	  fh = cnew (fhandler_dev_dsp);
 	  break;
 	case FH_PROC:
-	  fh = cnew (fhandler_proc) ();
+	  fh = cnew (fhandler_proc);
 	  break;
 	case FH_REGISTRY:
-	  fh = cnew (fhandler_registry) ();
+	  fh = cnew (fhandler_registry);
 	  break;
 	case FH_PROCESS:
 	case FH_PROCESSFD:
-	  fh = cnew (fhandler_process) ();
+	  fh = cnew (fhandler_process);
 	  break;
 	case FH_PROCNET:
-	  fh = cnew (fhandler_procnet) ();
+	  fh = cnew (fhandler_procnet);
+	  break;
+	case FH_PROCSYS:
+	  fh = cnew (fhandler_procsys);
+	  break;
+	case FH_PROCSYSVIPC:
+	  fh = cnew (fhandler_procsysvipc);
 	  break;
 	case FH_NETDRIVE:
-	  fh = cnew (fhandler_netdrive) ();
+	  fh = cnew (fhandler_netdrive);
 	  break;
 	case FH_TTY:
-	  {
-	    if (myself->ctty == TTY_CONSOLE)
-	      fh = cnew (fhandler_console) ();
-	    else if (myself->ctty >= 0)
-	      fh = cnew (fhandler_tty_slave) ();
-	    break;
-	  }
+	  if (!pc.isopen ())
+	    {
+	      fhraw = cnew_no_ctor (fhandler_console, -1);
+	      debug_printf ("not called from open for /dev/tty");
+	    }
+	  else if (myself->ctty <= 0 && last_tty_dev
+		   && !myself->set_ctty (fh_last_tty_dev, 0))
+	    debug_printf ("no /dev/tty assigned");
+	  else if (myself->ctty > 0)
+	    {
+	      debug_printf ("determining /dev/tty assignment for ctty %p", myself->ctty);
+	      if (iscons_dev (myself->ctty))
+		fh = cnew (fhandler_console, pc.dev);
+	      else
+		fh = cnew (fhandler_pty_slave, myself->ctty);
+	      if (fh->dev () != FH_NADA)
+		fh->set_name ("/dev/tty");
+	    }
+	  break;
 	case FH_KMSG:
-	  fh = cnew (fhandler_mailslot) ();
+	  fh = cnew (fhandler_mailslot);
 	  break;
       }
     }
 
+  /* If `fhraw' is set that means that this fhandler is just a dummy
+     set up for stat().  Mock it up for use by stat without actually
+     trying to do any real initialization.  */
+  if (fhraw)
+    {
+      fh = fhraw;
+      fh->set_name (pc);
+      if (fh->use_archetype ())
+	fh->archetype = fh;
+    }
   if (fh == fh_unset)
-    fh = cnew (fhandler_nodevice) ();
+    fh = cnew (fhandler_nodevice);
+  else if (fh->dev () == FH_ERROR)
+    {
+      delete fh;
+      fh = NULL;
+    }
+  return fh;
+}
+
+fhandler_base *
+build_fh_pc (path_conv& pc)
+{
+  fhandler_base *fh = fh_alloc (pc);
 
   if (!fh)
-    set_errno (EMFILE);
-  else if (set_name)
-    fh->set_name (pc);
+    {
+      set_errno (ENXIO);
+      goto out;
+    }
 
-  debug_printf ("fh %p", fh);
+  if (!fh->use_archetype ())
+    fh->set_name (pc);
+  else if ((fh->archetype = cygheap->fdtab.find_archetype (fh->dev ())))
+    {
+      debug_printf ("found an archetype for %s(%d/%d) io_handle %p", fh->get_name (), fh->dev ().get_major (), fh->dev ().get_minor (),
+		    fh->archetype->get_io_handle ());
+      if (!fh->get_name ())
+	fh->set_name (fh->archetype->dev ().name);
+    }
+  else if (cygwin_finished_initializing && !pc.isopen ())
+    fh->set_name (pc);
+  else
+    {
+      if (!fh->get_name ())
+	fh->set_name (fh->dev ().name);
+      fh->archetype = fh->clone ();
+      debug_printf ("created an archetype (%p) for %s(%d/%d)", fh->archetype, fh->get_name (), fh->dev ().get_major (), fh->dev ().get_minor ());
+      fh->archetype->archetype = NULL;
+      *cygheap->fdtab.add_archetype () = fh->archetype;
+    }
+
+
+  /* Keep track of the last tty-like thing opened.  We could potentially want
+     to open it if /dev/tty is referenced. */
+  if (myself->ctty > 0 || !fh->is_tty () || !pc.isctty_capable ())
+    last_tty_dev = FH_NADA;
+  else
+    last_tty_dev = fh->dev ();
+
+out:
+  debug_printf ("fh %p, dev %p", fh, fh ? (DWORD) fh->dev () : 0);
   return fh;
 }
 
@@ -564,14 +665,16 @@ dtable::dup_worker (fhandler_base *oldfh, int flags)
   /* Don't call set_name in build_fh_pc.  It will be called in
      fhandler_base::operator= below.  Calling it twice will result
      in double allocation. */
-  fhandler_base *newfh = build_fh_pc (oldfh->pc, false);
+  fhandler_base *newfh = oldfh->clone ();
   if (!newfh)
     debug_printf ("build_fh_pc failed");
   else
     {
-      *newfh = *oldfh;
-      newfh->set_io_handle (NULL);
-      if (oldfh->dup (newfh))
+      if (!oldfh->archetype)
+	newfh->set_io_handle (NULL);
+
+      newfh->pc.reset_conv_handle ();
+      if (oldfh->dup (newfh, flags))
 	{
 	  delete newfh;
 	  newfh = NULL;
@@ -579,12 +682,20 @@ dtable::dup_worker (fhandler_base *oldfh, int flags)
 	}
       else
 	{
+	  newfh->usecount = 0;
+	  newfh->archetype_usecount (1);
 	  /* The O_CLOEXEC flag enforces close-on-exec behaviour. */
-	  if (flags & O_CLOEXEC)
-	    newfh->set_close_on_exec (true);
-	  else
-	    newfh->close_on_exec (false);
+	  newfh->set_close_on_exec (!!(flags & O_CLOEXEC));
 	  debug_printf ("duped '%s' old %p, new %p", oldfh->get_name (), oldfh->get_io_handle (), newfh->get_io_handle ());
+#ifdef DEBUGGING
+	  debug_printf ("duped output_handles old %p, new %p",
+			oldfh->get_output_handle (),
+			newfh->get_output_handle ());
+	  if (oldfh->archetype)
+	    debug_printf ("duped output_handles archetype old %p, archetype new %p",
+			  oldfh->archetype->get_output_handle (),
+			  newfh->archetype->get_output_handle ());
+#endif /*DEBUGGING*/
 	}
     }
   return newfh;
@@ -619,6 +730,13 @@ dtable::dup3 (int oldfd, int newfd, int flags)
       return -1;
     }
 
+  /* This is a temporary kludge until all utilities can catch up with
+     a change in behavior that implements linux functionality:  opening
+     a tty should not automatically cause it to become the controlling
+     tty for the process.  */
+  if (newfd > 2)
+    flags |= O_NOCTTY;
+
   if ((newfh = dup_worker (fds[oldfd], flags)) == NULL)
     {
       res = -1;
@@ -647,7 +765,7 @@ dtable::dup3 (int oldfd, int newfd, int flags)
 done:
   MALLOC_CHECK;
   unlock ();
-  syscall_printf ("%d = dup3 (%d, %d, %p)", res, oldfd, newfd, flags);
+  syscall_printf ("%R = dup3(%d, %d, %p)", res, oldfd, newfd, flags);
 
   return res;
 }
@@ -683,7 +801,7 @@ dtable::select_write (int fd, select_stuff *ss)
   s->fd = fd;
   s->fh = fh;
   s->thread_errno = 0;
-  debug_printf ("%s fd %d", fh->get_name ());
+  debug_printf ("%s fd %d", fh->get_name (), fd);
   return true;
 }
 
@@ -741,7 +859,7 @@ dtable::fixup_after_exec ()
 	    if (fh->archetype)
 	      {
 		debug_printf ("closing fd %d since it is an archetype", i);
-		fh->close ();
+		fh->close_with_arch ();
 	      }
 	    release (i);
 	  }
@@ -773,107 +891,11 @@ dtable::fixup_after_fork (HANDLE parent)
       }
 }
 
-#ifdef NEWVFORK
-int
-dtable::vfork_child_dup ()
-{
-  fhandler_base **newtable;
-  lock ();
-  newtable = (fhandler_base **) ccalloc (HEAP_ARGV, size, sizeof (fds[0]));
-  int res = 1;
-
-  /* Remove impersonation */
-  cygheap->user.deimpersonate ();
-  if (cygheap->ctty)
-    {
-      cygheap->ctty->usecount++;
-      cygheap->console_count++;
-      report_tty_counts (cygheap->ctty, "vfork dup", "incremented ", "");
-    }
-
-  for (size_t i = 0; i < size; i++)
-    if (not_open (i))
-      continue;
-    else if ((newtable[i] = dup_worker (fds[i])) != NULL)
-      newtable[i]->set_close_on_exec (fds[i]->close_on_exec ());
-    else
-      {
-	res = 0;
-	goto out;
-      }
-
-  fds_on_hold = fds;
-  fds = newtable;
-
-out:
-  /* Restore impersonation */
-  cygheap->user.reimpersonate ();
-
-  unlock ();
-  return 1;
-}
-
-void
-dtable::vfork_parent_restore ()
-{
-  lock ();
-
-  fhandler_tty_slave *ctty_on_hold = cygheap->ctty_on_hold;
-  close_all_files ();
-  fhandler_base **deleteme = fds;
-  fds = fds_on_hold;
-  fds_on_hold = NULL;
-  cfree (deleteme);
-  unlock ();
-
-  if (cygheap->ctty != ctty_on_hold)
-    {
-      cygheap->ctty = ctty_on_hold;		// revert
-      cygheap->ctty->close ();			// Undo previous bump of this archetype
-    }
-  cygheap->ctty_on_hold = NULL;
-}
-
-void
-dtable::vfork_child_fixup ()
-{
-  if (!fds_on_hold)
-    return;
-  debug_printf ("here");
-  fhandler_base **saveme = fds;
-  fds = fds_on_hold;
-
-  fhandler_base *fh;
-  for (int i = 0; i < (int) size; i++)
-    if ((fh = fds[i]) != NULL)
-      {
-	fh->clear_readahead ();
-	if (!fh->archetype && fh->close_on_exec ())
-	  release (i);
-	else
-	  {
-	    fh->close ();
-	    release (i);
-	  }
-      }
-
-  fds = saveme;
-  cfree (fds_on_hold);
-  fds_on_hold = NULL;
-
-  if (cygheap->ctty_on_hold)
-    {
-      cygheap->ctty_on_hold->close ();
-      cygheap->ctty_on_hold = NULL;
-    }
-}
-#endif /*NEWVFORK*/
-
 static void
 decode_tty (char *buf, WCHAR *w32)
 {
   int ttyn = wcstol (w32, NULL, 10);
-  __small_sprintf (buf, "/dev/tty%d", ttyn);
+  __ptsname (buf, ttyn);
 }
 
 /* Try to derive posix filename from given handle.  Return true if
@@ -925,9 +947,9 @@ handle_to_fn (HANDLE h, char *posix_fn)
 	  if (*w32 != L'-')
 	    return false;
 	  ++w32;
-	  bool istty = wcsncmp (w32, L"tty", WCLEN (L"tty")) == 0;
+	  bool istty = wcsncmp (w32, L"pty", WCLEN (L"pty")) == 0;
 	  if (istty)
-	    decode_tty (posix_fn, w32 + WCLEN (L"tty"));
+	    decode_tty (posix_fn, w32 + WCLEN (L"pty"));
 	  else if (wcsncmp (w32, L"pipe", WCLEN (L"pipe")) == 0)
 	    strcpy (posix_fn, "/dev/pipe");
 	  return istty;
@@ -1017,11 +1039,12 @@ dtable::fixup_before_fork (DWORD target_proc_id)
   for (size_t i = 0; i < size; i++)
     if ((fh = fds[i]) != NULL)
       {
-        debug_printf ("fd %d (%s)", i, fh->get_name ());
-        fh->fixup_before_fork_exec (target_proc_id);
+	debug_printf ("fd %d (%s)", i, fh->get_name ());
+	fh->fixup_before_fork_exec (target_proc_id);
       }
   unlock ();
-} 
+}
+
 void
 dtable::fixup_before_exec (DWORD target_proc_id)
 {
@@ -1030,9 +1053,8 @@ dtable::fixup_before_exec (DWORD target_proc_id)
   for (size_t i = 0; i < size; i++)
     if ((fh = fds[i]) != NULL && !fh->close_on_exec ())
       {
-        debug_printf ("fd %d (%s)", i, fh->get_name ());
-        fh->fixup_before_fork_exec (target_proc_id);
+	debug_printf ("fd %d (%s)", i, fh->get_name ());
+	fh->fixup_before_fork_exec (target_proc_id);
       }
   unlock ();
-} 
-
+}

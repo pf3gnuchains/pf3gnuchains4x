@@ -41,86 +41,286 @@ __RCSID("$NetBSD: strptime.c,v 1.28 2008/04/28 20:23:01 martin Exp $");
 #include <sys/localedef.h>
 #endif
 #include <ctype.h>
+#include <stdlib.h>
 #include <locale.h>
 #include <string.h>
 #include <time.h>
 #include <tzfile.h>
+#include "../locale/timelocal.h"
 
 #ifdef __weak_alias
 __weak_alias(strptime,_strptime)
 #endif
 
-#ifdef __CYGWIN__
-typedef struct {
-	const char *abday[7];
-	const char *day[7];
-	const char *abmon[12];
-	const char *mon[12];
-	const char *am_pm[2];
-	const char *d_t_fmt;
-	const char *d_fmt;
-	const char *t_fmt;
-	const char *t_fmt_ampm;
-} _TimeLocale;
-
-_TimeLocale _DefaultTimeLocale = 
-{
-	{
-		"Sun","Mon","Tue","Wed","Thu","Fri","Sat",
-	},
-	{
-		"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
-		"Friday", "Saturday"
-	},
-	{
-		"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-	},
-	{
-		"January", "February", "March", "April", "May", "June", "July",
-		"August", "September", "October", "November", "December"
-	},
-	{
-		"AM", "PM"
-	},
-	"%a %b %e %H:%M:%S %Y",
-	"%m/%d/%y",
-	"%H:%M:%S",
-	"%I:%M:%S %p"
-};
-
-_TimeLocale *_CurrentTimeLocale = &_DefaultTimeLocale;
-#endif
-
 #define	_ctloc(x)		(_CurrentTimeLocale->x)
 
-/*
- * We do not implement alternate representations. However, we always
- * check whether a given modifier is allowed for a certain conversion.
- */
 #define ALT_E			0x01
 #define ALT_O			0x02
 #define	LEGAL_ALT(x)		{ if (alt_format & ~(x)) return NULL; }
 
+static _CONST int _DAYS_BEFORE_MONTH[12] =
+{0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+
+#define SET_MDAY 1
+#define SET_MON  2
+#define SET_YEAR 4
+#define SET_WDAY 8
+#define SET_YDAY 16
+#define SET_YMD  (SET_YEAR | SET_MON | SET_MDAY)
+
 static const char gmt[4] = { "GMT" };
 
-static const u_char *conv_num(const unsigned char *, int *, uint, uint);
+typedef struct _era_info_t {
+  size_t num;		/* Only in first entry: Number of entries,
+			   1 otherwise. */
+  int dir;		/* Direction */
+  long offset;		/* Number of year closest to start_date in the era. */
+  struct tm start;	/* Start date of era */
+  struct tm end;	/* End date of era */
+  CHAR *era_C;		/* Era string */
+  CHAR *era_Y;		/* Replacement for %EY */
+} era_info_t;
+
+static void
+free_era_info (era_info_t *era_info)
+{
+  size_t num = era_info->num;
+
+  for (size_t i = 0; i < num; ++i)
+    {
+      free (era_info[i].era_C);
+      free (era_info[i].era_Y);
+    }
+  free (era_info);
+}
+
+static era_info_t *
+get_era_info (const char *era)
+{
+  char *c;
+  era_info_t *ei = NULL;
+  size_t num = 0, cur = 0, len;
+
+  while (*era)
+    {
+      ++num;
+      era_info_t *tmp = (era_info_t *) realloc (ei, num * sizeof (era_info_t));
+      if (!tmp)
+	{
+	  ei->num = cur;
+	  free_era_info (ei);
+	  return NULL;
+	}
+      ei = tmp;
+      ei[cur].num = 1;
+      ei[cur].dir = (*era == '+') ? 1 : -1;
+      era += 2;
+      ei[cur].offset = strtol (era, &c, 10);
+      era = c + 1;
+      ei[cur].start.tm_year = strtol (era, &c, 10);
+      /* Adjust offset for negative gregorian dates. */
+      if (ei[cur].start.tm_year < 0)
+	++ei[cur].start.tm_year;
+      ei[cur].start.tm_mon = strtol (c + 1, &c, 10);
+      ei[cur].start.tm_mday = strtol (c + 1, &c, 10);
+      ei[cur].start.tm_hour = ei[cur].start.tm_min = ei[cur].start.tm_sec = 0;
+      era = c + 1;
+      if (era[0] == '-' && era[1] == '*')
+	{
+	  ei[cur].end = ei[cur].start;
+	  ei[cur].start.tm_year = INT_MIN;
+	  ei[cur].start.tm_mon = ei[cur].start.tm_mday = ei[cur].start.tm_hour
+	  = ei[cur].start.tm_min = ei[cur].start.tm_sec = 0;
+	  era += 3;
+	}
+      else if (era[0] == '+' && era[1] == '*')
+	{
+	  ei[cur].end.tm_year = INT_MAX;
+	  ei[cur].end.tm_mon = 12;
+	  ei[cur].end.tm_mday = 31;
+	  ei[cur].end.tm_hour = 23;
+	  ei[cur].end.tm_min = ei[cur].end.tm_sec = 59;
+	  era += 3;
+	}
+      else
+	{
+	  ei[cur].end.tm_year = strtol (era, &c, 10);
+	  /* Adjust offset for negative gregorian dates. */
+	  if (ei[cur].end.tm_year < 0)
+	    ++ei[cur].end.tm_year;
+	  ei[cur].end.tm_mon = strtol (c + 1, &c, 10);
+	  ei[cur].end.tm_mday = strtol (c + 1, &c, 10);
+	  ei[cur].end.tm_mday = 31;
+	  ei[cur].end.tm_hour = 23;
+	  ei[cur].end.tm_min = ei[cur].end.tm_sec = 59;
+	  era = c + 1;
+	}
+      /* era_C */
+      c = strchr (era, ':');
+      len = c - era;
+      ei[cur].era_C = (CHAR *) malloc ((len + 1) * sizeof (CHAR));
+      if (!ei[cur].era_C)
+	{
+	  ei->num = cur;
+	  free_era_info (ei);
+	  return NULL;
+	}
+      strncpy (ei[cur].era_C, era, len);
+      era += len;
+      ei[cur].era_C[len] = '\0';
+      /* era_Y */
+      ++era;
+      c = strchr (era, ';');
+      if (!c)
+	c = strchr (era, '\0');
+      len = c - era;
+      ei[cur].era_Y = (CHAR *) malloc ((len + 1) * sizeof (CHAR));
+      if (!ei[cur].era_Y)
+	{
+	  free (ei[cur].era_C);
+	  ei->num = cur;
+	  free_era_info (ei);
+	  return NULL;
+	}
+      strncpy (ei[cur].era_Y, era, len);
+      era += len;
+      ei[cur].era_Y[len] = '\0';
+      ++cur;
+      if (*c)
+	era = c + 1;
+    }
+  ei->num = num;
+  return ei;
+}
+
+typedef struct _alt_digits_t {
+  size_t num;
+  char **digit;
+  char *buffer;
+} alt_digits_t;
+
+static alt_digits_t *
+get_alt_digits (const char *alt_digits)
+{
+  alt_digits_t *adi;
+  const char *a, *e;
+  char *aa, *ae;
+  size_t len;
+
+  adi = (alt_digits_t *) calloc (1, sizeof (alt_digits_t));
+  if (!adi)
+    return NULL;
+
+  /* Compute number of alt_digits. */
+  adi->num = 1;
+  for (a = alt_digits; (e = strchr (a, ';')) != NULL; a = e + 1)
+      ++adi->num;
+  /* Allocate the `digit' array, which is an array of `num' pointers into
+     `buffer'. */
+  adi->digit = (CHAR **) calloc (adi->num, sizeof (CHAR **));
+  if (!adi->digit)
+    {
+      free (adi);
+      return NULL;
+    }
+  /* Compute memory required for `buffer'. */
+  len = strlen (alt_digits);
+  /* Allocate it. */
+  adi->buffer = (CHAR *) malloc ((len + 1) * sizeof (CHAR));
+  if (!adi->buffer)
+    {
+      free (adi->digit);
+      free (adi);
+      return NULL;
+    }
+  /* Store digits in it. */
+  strcpy (adi->buffer, alt_digits);
+  /* Store the pointers into `buffer' into the appropriate `digit' slot. */
+  for (len = 0, aa = adi->buffer; (ae = strchr (aa, ';')) != NULL;
+       ++len, aa = ae + 1)
+    {
+      *ae = '\0';
+      adi->digit[len] = aa;
+    }
+  adi->digit[len] = aa;
+  return adi;
+}
+
+static void
+free_alt_digits (alt_digits_t *adi)
+{
+  free (adi->digit);
+  free (adi->buffer);
+  free (adi);
+}
+
+static const unsigned char *
+find_alt_digits (const unsigned char *bp, alt_digits_t *adi, uint *pval)
+{
+  /* This is rather error-prone, but the entire idea of alt_digits
+     isn't thought out well.  If you start to look for matches at the
+     start, there's a high probability that you find short matches but
+     the entire translation is wrong.  So we scan the alt_digits array
+     from the highest to the lowest digits instead, hoping that it's
+     more likely to catch digits consisting of multiple characters. */
+  for (int i = (int) adi->num - 1; i >= 0; --i)
+    {
+      size_t len = strlen (adi->digit[i]);
+      if (!strncmp ((const char *) bp, adi->digit[i], len))
+	{
+	  *pval = i;
+	  return bp + len;
+	}
+    }
+  return NULL;
+}
+
+static int
+is_leap_year (int year)
+{
+  return (year % 4) == 0 && ((year % 100) != 0 || (year % 400) == 0);
+}
+
+static int
+first_day (int year)
+{
+  int ret = 4;
+
+  while (--year >= 1970)
+    ret = (ret + 365 + is_leap_year (year)) % 7;
+  return ret;
+}
+
+/* This simplifies the calls to conv_num enormously. */
+#define ALT_DIGITS	((alt_format & ALT_O) ? *alt_digits : NULL)
+
+static const u_char *conv_num(const unsigned char *, int *, uint, uint,
+			      alt_digits_t *);
 static const u_char *find_string(const u_char *, int *, const char * const *,
 	const char * const *, int);
 
-
-char *
-strptime(const char *buf, const char *fmt, struct tm *tm)
+static char *
+__strptime(const char *buf, const char *fmt, struct tm *tm,
+	   era_info_t **era_info, alt_digits_t **alt_digits)
 {
 	unsigned char c;
 	const unsigned char *bp;
 	int alt_format, i, split_year = 0;
+	era_info_t *era = NULL;
+	int era_offset, got_eoff = 0;
+	int saw_padding;
+	unsigned long width;
 	const char *new_fmt;
+	uint ulim;
+	int ymd = 0;
 
 	bp = (const u_char *)buf;
+	struct lc_time_T *_CurrentTimeLocale = __get_current_time_locale ();
 
 	while (bp != NULL && (c = *fmt++) != '\0') {
 		/* Clear `alternate' modifier prior to new conversion. */
+		saw_padding = 0;
+		width = 0;
 		alt_format = 0;
 		i = 0;
 
@@ -150,29 +350,63 @@ literal:
 		case 'E':	/* "%E?" alternative conversion modifier. */
 			LEGAL_ALT(0);
 			alt_format |= ALT_E;
+			if (!*era_info && *_CurrentTimeLocale->era)
+			  *era_info = get_era_info (_CurrentTimeLocale->era);
 			goto again;
 
 		case 'O':	/* "%O?" alternative conversion modifier. */
 			LEGAL_ALT(0);
 			alt_format |= ALT_O;
+			if (!*alt_digits && *_CurrentTimeLocale->alt_digits)
+			  *alt_digits =
+			      get_alt_digits (_CurrentTimeLocale->alt_digits);
 			goto again;
-
+		case '0':
+		case '+':
+			LEGAL_ALT(0);
+			if (saw_padding)
+			  return NULL;
+			saw_padding = 1;
+			goto again;
+		case '1': case '2': case '3': case '4': case '5':
+		case '6': case '7': case '8': case '9':
+			/* POSIX-1.2008 maximum field width.  Per POSIX,
+			   the width is only defined for the 'C', 'F', and 'Y'
+			   conversion specifiers. */
+			LEGAL_ALT(0);
+			{
+			  char *end;
+			  width = strtoul (fmt - 1, &end, 10);
+			  fmt = (const char *) end;
+			  goto again;
+			}
 		/*
 		 * "Complex" conversion rules, implemented through recursion.
 		 */
 		case 'c':	/* Date and time, using the locale's format. */
-			new_fmt = _ctloc(d_t_fmt);
+			new_fmt = (alt_format & ALT_E)
+				  ? _ctloc (era_d_t_fmt) : _ctloc(c_fmt);
+			LEGAL_ALT(ALT_E);
+			ymd |= SET_WDAY | SET_YMD;
 			goto recurse;
 
 		case 'D':	/* The date as "%m/%d/%y". */
 			new_fmt = "%m/%d/%y";
 			LEGAL_ALT(0);
+			ymd |= SET_YMD;
 			goto recurse;
 
 		case 'F':	/* The date as "%Y-%m-%d". */
-			new_fmt = "%Y-%m-%d";
-			LEGAL_ALT(0);
-			goto recurse;
+			{
+			  LEGAL_ALT(0);
+			  ymd |= SET_YMD;
+			  char *tmp = __strptime ((const char *) bp, "%Y-%m-%d",
+						  tm, era_info, alt_digits);
+			  if (tmp && (uint) (tmp - (char *) bp) > width)
+			    return NULL;
+			  bp = (const unsigned char *) tmp;
+			  continue;
+			}
 
 		case 'R':	/* The time as "%H:%M". */
 			new_fmt = "%H:%M";
@@ -180,7 +414,7 @@ literal:
 			goto recurse;
 
 		case 'r':	/* The time in 12-hour clock representation. */
-			new_fmt =_ctloc(t_fmt_ampm);
+			new_fmt =_ctloc(ampm_fmt);
 			LEGAL_ALT(0);
 			goto recurse;
 
@@ -190,15 +424,20 @@ literal:
 			goto recurse;
 
 		case 'X':	/* The time, using the locale's format. */
-			new_fmt =_ctloc(t_fmt);
+			new_fmt = (alt_format & ALT_E)
+				  ? _ctloc (era_t_fmt) : _ctloc(X_fmt);
+			LEGAL_ALT(ALT_E);
 			goto recurse;
 
 		case 'x':	/* The date, using the locale's format. */
-			new_fmt =_ctloc(d_fmt);
-		    recurse:
-			bp = (const u_char *)strptime((const char *)bp,
-							    new_fmt, tm);
+			new_fmt = (alt_format & ALT_E)
+				  ? _ctloc (era_d_fmt) : _ctloc(x_fmt);
 			LEGAL_ALT(ALT_E);
+			ymd |= SET_YMD;
+		    recurse:
+			bp = (const u_char *)__strptime((const char *)bp,
+							new_fmt, tm,
+							era_info, alt_digits);
 			continue;
 
 		/*
@@ -206,72 +445,103 @@ literal:
 		 */
 		case 'A':	/* The day of week, using the locale's form. */
 		case 'a':
-			bp = find_string(bp, &tm->tm_wday, _ctloc(day),
-					_ctloc(abday), 7);
+			bp = find_string(bp, &tm->tm_wday, _ctloc(weekday),
+					_ctloc(wday), 7);
 			LEGAL_ALT(0);
+			ymd |= SET_WDAY;
 			continue;
 
 		case 'B':	/* The month, using the locale's form. */
 		case 'b':
 		case 'h':
-			bp = find_string(bp, &tm->tm_mon, _ctloc(mon),
-					_ctloc(abmon), 12);
+			bp = find_string(bp, &tm->tm_mon, _ctloc(month),
+					_ctloc(mon), 12);
 			LEGAL_ALT(0);
+			ymd |= SET_WDAY;
 			continue;
 
 		case 'C':	/* The century number. */
+			LEGAL_ALT(ALT_E);
+			ymd |= SET_YEAR;
+			if ((alt_format & ALT_E) && *era_info)
+			  {
+			    /* With E modifier, an era.  We potentially
+			       don't know the era offset yet, so we have to
+			       store the value in a local variable.
+			       The final computation of tm_year is only done
+			       right before this function returns. */
+			    size_t num = (*era_info)->num;
+			    for (size_t i = 0; i < num; ++i)
+			      if (!strncmp ((const char *) bp,
+					    (*era_info)[i].era_C,
+					    strlen ((*era_info)[i].era_C)))
+				{
+				  era = (*era_info) + i;
+				  bp += strlen (era->era_C);
+				  break;
+				}
+			    if (!era)
+			      return NULL;
+			    continue;
+			  }
 			i = 20;
-			bp = conv_num(bp, &i, 0, 99);
+			for (ulim = 99; width && width < 2; ++width)
+			  ulim /= 10;
+			bp = conv_num(bp, &i, 0, ulim, NULL);
 
 			i = i * 100 - TM_YEAR_BASE;
 			if (split_year)
 				i += tm->tm_year % 100;
 			split_year = 1;
 			tm->tm_year = i;
-			LEGAL_ALT(ALT_E);
+			era = NULL;
+			got_eoff = 0;
 			continue;
 
 		case 'd':	/* The day of month. */
 		case 'e':
-			bp = conv_num(bp, &tm->tm_mday, 1, 31);
 			LEGAL_ALT(ALT_O);
+			ymd |= SET_MDAY;
+			bp = conv_num(bp, &tm->tm_mday, 1, 31, ALT_DIGITS);
 			continue;
 
 		case 'k':	/* The hour (24-hour clock representation). */
 			LEGAL_ALT(0);
 			/* FALLTHROUGH */
 		case 'H':
-			bp = conv_num(bp, &tm->tm_hour, 0, 23);
 			LEGAL_ALT(ALT_O);
+			bp = conv_num(bp, &tm->tm_hour, 0, 23, ALT_DIGITS);
 			continue;
 
 		case 'l':	/* The hour (12-hour clock representation). */
 			LEGAL_ALT(0);
 			/* FALLTHROUGH */
 		case 'I':
-			bp = conv_num(bp, &tm->tm_hour, 1, 12);
+			LEGAL_ALT(ALT_O);
+			bp = conv_num(bp, &tm->tm_hour, 1, 12, ALT_DIGITS);
 			if (tm->tm_hour == 12)
 				tm->tm_hour = 0;
-			LEGAL_ALT(ALT_O);
 			continue;
 
 		case 'j':	/* The day of year. */
 			i = 1;
-			bp = conv_num(bp, &i, 1, 366);
+			bp = conv_num(bp, &i, 1, 366, NULL);
 			tm->tm_yday = i - 1;
 			LEGAL_ALT(0);
+			ymd |= SET_YDAY;
 			continue;
 
 		case 'M':	/* The minute. */
-			bp = conv_num(bp, &tm->tm_min, 0, 59);
 			LEGAL_ALT(ALT_O);
+			bp = conv_num(bp, &tm->tm_min, 0, 59, ALT_DIGITS);
 			continue;
 
 		case 'm':	/* The month. */
-			i = 1;
-			bp = conv_num(bp, &i, 1, 12);
-			tm->tm_mon = i - 1;
 			LEGAL_ALT(ALT_O);
+			ymd |= SET_MON;
+			i = 1;
+			bp = conv_num(bp, &i, 1, 12, ALT_DIGITS);
+			tm->tm_mon = i - 1;
 			continue;
 
 		case 'p':	/* The locale's equivalent of AM/PM. */
@@ -283,8 +553,8 @@ literal:
 			continue;
 
 		case 'S':	/* The seconds. */
-			bp = conv_num(bp, &tm->tm_sec, 0, 61);
 			LEGAL_ALT(ALT_O);
+			bp = conv_num(bp, &tm->tm_sec, 0, 61, ALT_DIGITS);
 			continue;
 
 		case 'U':	/* The week of year, beginning on sunday. */
@@ -295,28 +565,76 @@ literal:
 			 * point to calculate a real value, so just check the
 			 * range for now.
 			 */
-			 bp = conv_num(bp, &i, 0, 53);
 			 LEGAL_ALT(ALT_O);
+			 bp = conv_num(bp, &i, 0, 53, ALT_DIGITS);
 			 continue;
 
-		case 'w':	/* The day of week, beginning on sunday. */
-			bp = conv_num(bp, &tm->tm_wday, 0, 6);
+		case 'u':	/* The day of week, beginning on monday. */
 			LEGAL_ALT(ALT_O);
+			ymd |= SET_WDAY;
+			bp = conv_num(bp, &i, 1, 7, ALT_DIGITS);
+			tm->tm_wday = i % 7;
+			continue;
+		case 'w':	/* The day of week, beginning on sunday. */
+			LEGAL_ALT(ALT_O);
+			ymd |= SET_WDAY;
+			bp = conv_num(bp, &tm->tm_wday, 0, 6, ALT_DIGITS);
 			continue;
 
 		case 'Y':	/* The year. */
-			i = TM_YEAR_BASE;	/* just for data sanity... */
-			bp = conv_num(bp, &i, 0, 9999);
-			tm->tm_year = i - TM_YEAR_BASE;
 			LEGAL_ALT(ALT_E);
+			ymd |= SET_YEAR;
+			if ((alt_format & ALT_E) && *era_info)
+			  {
+			    bool gotit = false;
+			    size_t num = (*era_info)->num;
+			    (*era_info)->num = 1;
+			    for (size_t i = 0; i < num; ++i)
+			      {
+				era_info_t *tmp_ei = (*era_info) + i;
+				char *tmp = __strptime ((const char *) bp,
+							tmp_ei->era_Y,
+							tm, &tmp_ei,
+							alt_digits);
+				if (tmp)
+				  {
+				    bp = (const unsigned char *) tmp;
+				    gotit = true;
+				    break;
+				  }
+			      }
+			    (*era_info)->num = num;
+			    if (gotit)
+			      continue;
+			    return NULL;
+			  }
+			i = TM_YEAR_BASE;	/* just for data sanity... */
+			for (ulim = 9999; width && width < 4; ++width)
+			  ulim /= 10;
+			bp = conv_num(bp, &i, 0, ulim, NULL);
+			tm->tm_year = i - TM_YEAR_BASE;
+			era = NULL;
+			got_eoff = 0;
 			continue;
 
 		case 'y':	/* The year within 100 years of the epoch. */
 			/* LEGAL_ALT(ALT_E | ALT_O); */
-			bp = conv_num(bp, &i, 0, 99);
+			ymd |= SET_YEAR;
+			if ((alt_format & ALT_E) && *era_info)
+			  {
+			    /* With E modifier, the offset to the start date
+			       of the era specified with %EC.  We potentially
+			       don't know the era yet, so we have to store the
+			       value in a local variable, just like era itself.
+			       The final computation of tm_year is only done
+			       right before this function returns. */
+			    bp = conv_num(bp, &era_offset, 0, UINT_MAX, NULL);
+			    got_eoff = 1;
+			    continue;
+			  }
+			bp = conv_num(bp, &i, 0, 99, ALT_DIGITS);
 
-			if (split_year)
-				/* preserve century */
+			if (split_year) /* preserve century */
 				i += (tm->tm_year / 100) * 100;
 			else {
 				split_year = 1;
@@ -326,6 +644,8 @@ literal:
 					i = i + 1900 - TM_YEAR_BASE;
 			}
 			tm->tm_year = i;
+			era = NULL;
+			got_eoff = 0;
 			continue;
 
 		case 'Z':
@@ -374,29 +694,112 @@ literal:
 		}
 	}
 
+	if (bp && (era || got_eoff))
+	  {
+	    /* Default to current era. */
+	    if (!era)
+	      era = *era_info;
+	    /* Default to first year of era if offset is missing */
+	    if (!got_eoff)
+	      era_offset = era->offset;
+	    tm->tm_year = (era->start.tm_year != INT_MIN
+			   ? era->start.tm_year : era->end.tm_year)
+			   + (era_offset - era->offset) * era->dir;
+	    /* Check if year falls into the era.  If not, it's an
+	       invalid combination of era and offset. */
+	    if (era->start.tm_year > tm->tm_year
+	    	|| era->end.tm_year < tm->tm_year)
+	      return NULL;
+	    tm->tm_year -= TM_YEAR_BASE;
+	  }
+
+	if ((ymd & SET_YMD) == SET_YMD)
+	  {
+	    /* all of tm_year, tm_mon and tm_mday, but... */
+	    if (!(ymd & SET_YDAY))
+	      {
+		/* ...not tm_yday, so fill it in */
+		tm->tm_yday = _DAYS_BEFORE_MONTH[tm->tm_mon] + tm->tm_mday;
+		if (!is_leap_year (tm->tm_year + TM_YEAR_BASE)
+		    || tm->tm_mon < 2)
+		  tm->tm_yday--;
+		ymd |= SET_YDAY;
+	      }
+	  }
+	else if ((ymd & (SET_YEAR | SET_YDAY)) == (SET_YEAR | SET_YDAY))
+	  {
+	    /* both of tm_year and tm_yday, but... */
+	    if (!(ymd & SET_MON))
+	      {
+		/* ...not tm_mon, so fill it in, and/or... */
+		if (tm->tm_yday < _DAYS_BEFORE_MONTH[1])
+		  tm->tm_mon = 0;
+		else
+		  {
+		    int leap = is_leap_year (tm->tm_year + TM_YEAR_BASE);
+		    for (i = 2; i < 12; ++i)
+		      if (tm->tm_yday < _DAYS_BEFORE_MONTH[i] + leap)
+			break;
+		    tm->tm_mon = i - 1;
+		  }
+	      }
+	    if (!(ymd & SET_MDAY))
+	      {
+		/* ...not tm_mday, so fill it in */
+		tm->tm_mday = tm->tm_yday - _DAYS_BEFORE_MONTH[tm->tm_mon];
+		if (!is_leap_year (tm->tm_year + TM_YEAR_BASE)
+		    || tm->tm_mon < 2)
+		  tm->tm_mday++;
+	      }
+	  }
+
+	if ((ymd & (SET_YEAR | SET_YDAY | SET_WDAY)) == (SET_YEAR | SET_YDAY))
+	  {
+	    /* fill in tm_wday */
+	    int fday = first_day (tm->tm_year + TM_YEAR_BASE);
+	    tm->tm_wday = (fday + tm->tm_yday) % 7;
+	  }
 	return (char *) bp;
 }
 
+char *
+strptime (const char *buf, const char *fmt, struct tm *tm)
+{
+  era_info_t *era_info = NULL;
+  alt_digits_t *alt_digits = NULL;
+  char *ret = __strptime (buf, fmt, tm, &era_info, &alt_digits);
+  if (era_info)
+    free_era_info (era_info);
+  if (alt_digits)
+    free_alt_digits (alt_digits);
+  return ret;
+}
 
 static const u_char *
-conv_num(const unsigned char *buf, int *dest, uint llim, uint ulim)
+conv_num(const unsigned char *buf, int *dest, uint llim, uint ulim,
+	 alt_digits_t *alt_digits)
 {
 	uint result = 0;
 	unsigned char ch;
 
-	/* The limit also determines the number of valid digits. */
-	uint rulim = ulim;
+	if (alt_digits)
+	  buf = find_alt_digits (buf, alt_digits, &result);
+	else
+	  {
+	    /* The limit also determines the number of valid digits. */
+	    uint rulim = ulim;
 
-	ch = *buf;
-	if (ch < '0' || ch > '9')
-		return NULL;
+	    ch = *buf;
+	    if (ch < '0' || ch > '9')
+		    return NULL;
 
-	do {
-		result *= 10;
-		result += ch - '0';
-		rulim /= 10;
-		ch = *++buf;
-	} while ((result * 10 <= ulim) && rulim && ch >= '0' && ch <= '9');
+	    do {
+		    result *= 10;
+		    result += ch - '0';
+		    rulim /= 10;
+		    ch = *++buf;
+	    } while ((result * 10 <= ulim) && rulim && ch >= '0' && ch <= '9');
+	  }
 
 	if (result < llim || result > ulim)
 		return NULL;

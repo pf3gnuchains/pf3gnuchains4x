@@ -1,7 +1,7 @@
 /* strace.cc: system/windows tracing
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009 Red Hat, Inc.
+   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -31,31 +31,46 @@ class strace NO_COPY strace;
 
 #ifndef NOSTRACE
 
-strace::strace ()
+void
+strace::activate (bool isfork)
 {
-  if (!dynamically_loaded && !_active && being_debugged ())
+  if (!_active && being_debugged ())
     {
       char buf[30];
-      __small_sprintf (buf, "cYg%8x %x", _STRACE_INTERFACE_ACTIVATE_ADDR, &_active);
+      __small_sprintf (buf, "cYg%8x %x %d", _STRACE_INTERFACE_ACTIVATE_ADDR, &_active, isfork);
       OutputDebugString (buf);
+      if (_active)
+	{
+	  char pidbuf[80];
+	  WCHAR progname_buf[NT_MAX_PATH - 512];
+	  WCHAR *progname;
+	  if (myself)
+	    {
+	      __small_sprintf (pidbuf, "(pid %d, ppid %d, windows pid %u)", myself->pid,
+			       myself->ppid ?: 1, GetCurrentProcessId ());
+	      progname = myself->progname;
+	    }
+	  else
+	    {
+	      GetModuleFileNameW (NULL, progname_buf, sizeof (myself->progname));
+	      __small_sprintf (pidbuf, "(windows pid %u)", GetCurrentProcessId ());
+	      progname = progname_buf;
+	    }
+	  prntf (1, NULL, "**********************************************");
+	  prntf (1, NULL, "Program name: %W %s", progname, pidbuf);
+	  prntf (1, NULL, "OS version:   Windows %s", wincap.osname ());
+	  if (cygheap && cygheap->user_heap.chunk)
+	    prntf (1, NULL, "Heap size:    %u", cygheap->user_heap.chunk);
+	  prntf (1, NULL, "**********************************************");
+	}
     }
 }
 
 void
-strace::hello ()
+strace::dll_info ()
 {
   if (active ())
     {
-      char pidbuf[40];
-      if (myself->progname[0])
-	__small_sprintf (pidbuf, "(pid %d, ppid %d)", myself->pid, myself->ppid ?: 1);
-      else
-	{
-	  GetModuleFileName (NULL, myself->progname, sizeof (myself->progname));
-	  __small_sprintf (pidbuf, "(windows pid %d)", GetCurrentProcessId ());
-	}
-      prntf (1, NULL, "**********************************************");
-      prntf (1, NULL, "Program name: %s %s", myself->progname, pidbuf);
       prntf (1, NULL, "App version:  %d.%d, api: %d.%d",
 	     user_data->dll_major, user_data->dll_minor,
 	     user_data->api_major, user_data->api_minor);
@@ -63,18 +78,14 @@ strace::hello ()
 	     cygwin_version.dll_major, cygwin_version.dll_minor,
 	     cygwin_version.api_major, cygwin_version.api_minor);
       prntf (1, NULL, "DLL build:    %s", cygwin_version.dll_build_date);
-      prntf (1, NULL, "OS version:   Windows %s", wincap.osname ());
-      if (cygheap)
-	prntf (1, NULL, "Heap size:    %u", cygheap->user_heap.chunk);
-      prntf (1, NULL, "**********************************************");
     }
 }
 
 int
 strace::microseconds ()
 {
-  static hires_us now;
-  return (int) now.usecs (true);
+  static hires_ns now;
+  return (int) now.usecs ();
 }
 
 static int __stdcall
@@ -117,7 +128,7 @@ mypid (char *buf)
   if (myself && myself->pid)
     __small_sprintf (buf, "%d", myself->pid);
   else
-    __small_sprintf (buf, "(%d)", cygwin_pid (GetCurrentProcessId ()));
+    __small_sprintf (buf, "(%d)", GetCurrentProcessId ());
   return buf;
 }
 
@@ -134,7 +145,7 @@ strace::vsprntf (char *buf, const char *func, const char *infmt, va_list ap)
   int microsec = microseconds ();
   lmicrosec = microsec;
 
-  __small_sprintf (fmt, "%7d [%s] %s ", microsec, tn, "%s %s%s");
+  __small_sprintf (fmt, "%7d [%s] %s ", microsec, tn, "%W %s%s");
 
   SetLastError (err);
 
@@ -142,34 +153,32 @@ strace::vsprntf (char *buf, const char *func, const char *infmt, va_list ap)
     count = 0;
   else
     {
-      char *pn;
+      PWCHAR pn = NULL;
+      WCHAR progname[NT_MAX_PATH];
       if (!cygwin_finished_initializing)
-	pn = myself ? myself->progname : NULL;
+	pn = (myself) ? myself->progname : NULL;
       else if (__progname)
-	pn = __progname;
-      else
-	pn = NULL;
+	sys_mbstowcs(pn = progname, NT_MAX_PATH, __progname);
 
-      char *p;
-      char progname[NT_MAX_PATH];
+      PWCHAR p;
       if (!pn)
-	GetModuleFileName (NULL, pn = progname, sizeof (progname));
+	GetModuleFileNameW (NULL, pn = progname, sizeof (progname));
       if (!pn)
 	/* hmm */;
-      else if ((p = strrchr (pn, '\\')) != NULL)
+      else if ((p = wcsrchr (pn, L'\\')) != NULL)
 	p++;
-      else if ((p = strrchr (pn, '/')) != NULL)
+      else if ((p = wcsrchr (pn, L'/')) != NULL)
 	p++;
       else
 	p = pn;
       if (p != progname)
-	strcpy (progname, p);
-      if ((p = strrchr (progname, '.')) != NULL
-	  && ascii_strcasematch (p, ".exe"))
+	wcscpy (progname, p);
+      if ((p = wcsrchr (progname, '.')) != NULL
+	  && !wcscasecmp (p, L".exe"))
 	*p = '\000';
       p = progname;
       char tmpbuf[20];
-      count = __small_sprintf (buf, fmt, p && *p ? p : "?", mypid (tmpbuf),
+      count = __small_sprintf (buf, fmt, *p ? p : L"?", mypid (tmpbuf),
 			       execing ? "!" : "");
       if (func)
 	count += getfunc (buf + count, func);
@@ -216,13 +225,12 @@ strace::write (unsigned category, const char *buf, int count)
 }
 
 void
-strace::write_childpid (child_info& ch, DWORD pid)
+strace::write_childpid (DWORD pid)
 {
   char buf[30];
 
   if (!attached () || !being_debugged ())
     return;
-  WaitForSingleObject (ch.subproc_ready, 30000);
   __small_sprintf (buf, "cYg%8x %x", _STRACE_CHILD_PID, pid);
   OutputDebugString (buf);
 }
@@ -252,11 +260,13 @@ strace::vprntf (unsigned category, const char *func, const char *fmt, va_list ap
       if (GetFileType (GetStdHandle (STD_ERROR_HANDLE)) != FILE_TYPE_CHAR)
 	{
 	  HANDLE h = CreateFile ("CONOUT$", GENERIC_READ | GENERIC_WRITE,
-				 FILE_SHARE_WRITE | FILE_SHARE_WRITE,
+				 FILE_SHARE_READ | FILE_SHARE_WRITE,
 				 &sec_none, OPEN_EXISTING, 0, 0);
 	  if (h != INVALID_HANDLE_VALUE)
-	    WriteFile (h, buf, len, &done, 0);
-	  CloseHandle (h);
+	    {
+	      WriteFile (h, buf, len, &done, 0);
+	      CloseHandle (h);
+	    }
 	}
     }
 

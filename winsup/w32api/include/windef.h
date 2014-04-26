@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 #ifndef WINVER
-#define WINVER 0x0400
+#define WINVER 0x0500
 /*
  * If you need Win32 API features newer the Win95 and WinNT then you must
  * define WINVER before including windows.h or any other method of including
@@ -68,7 +68,6 @@ extern "C" {
 #endif
 
 #ifdef __GNUC__
-#define PACKED __attribute__((packed))
 #ifndef _fastcall
 #define _fastcall __attribute__((fastcall))
 #endif
@@ -93,10 +92,7 @@ extern "C" {
 #ifndef _declspec
 #define _declspec(e) __attribute__((e))
 #endif
-#elif defined(__WATCOMC__)
-#define PACKED
 #else
-#define PACKED
 #define _cdecl
 #define __cdecl
 #endif
@@ -262,6 +258,7 @@ typedef LONG HRESULT;
 #ifndef XFree86Server
 typedef WORD ATOM;
 #endif /* XFree86Server */
+typedef HANDLE HHOOK;
 typedef HANDLE HGLOBAL;
 typedef HANDLE HLOCAL;
 typedef HANDLE GLOBALHANDLE;

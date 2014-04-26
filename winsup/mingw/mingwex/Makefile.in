@@ -346,4 +346,4 @@ dist:
 		cp -p $(srcdir)/gdtoa/$$i $(distdir)/mingwex/gdtoa/$$i ; \
 	done
 
-# $RCSfile: Makefile.in,v $: end of file
+# $RCSfile$: end of file

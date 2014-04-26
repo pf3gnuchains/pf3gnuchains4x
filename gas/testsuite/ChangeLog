@@ -1,58 +1,108 @@
-2010-01-15  Sebastian Pop  <sebastian.pop@amd.com>
+2012-01-20  H.J. Lu  <hongjiu.lu@intel.com>
 
-	* gas/i386/x86-64-xop.d: Add missing patterns.
-	* gas/i386/x86-64-xop.s: Same.
-	* gas/i386/xop.d: Same.
-	* gas/i386/xop.s: Same.
+	* gas/i386/disp32.s: Add tests for .d8 suffix.
+	* gas/i386/x86-64-disp32.s: Likewise.
 
-2010-01-13  Daniel Jacobowitz  <dan@codesourcery.com>
+	* gas/i386/disp32.d: Updated.
+	* gas/i386/x86-64-disp32.d: Likewise.
 
-	* gas/arm/thumb-nop.s: Add .syntax unified.
+2012-01-17  Andreas Schwab  <schwab@linux-m68k.org>
 
-2010-01-13  Daniel Jacobowitz  <dan@codesourcery.com>
+	* gas/m68k/pmove.s, gas/m68k/pmove.d: New test.
+	* gas/m68k/all.exp: Run it.
 
-	* gas/arm/thumb-nop.d, gas/arm/thumb-nop.s: New test.
-	* gas/arm/relax_branch_align.d: Expect a default NOP instruction.
-	* gas/arm/vfp1_t2.d, gas/arm/vfp1xD_t2.d: Specify a CPU with
-	Thumb-2.
+2012-01-13  H.J. Lu  <hongjiu.lu@intel.com>
 
-2010-01-13  Nick Clifton  <nickc@redhat.com>
+	* gas/i386/i386.exp: Run vmfunc and x86-64-vmfunc.
 
-	* gas/elf/section0.d: Skip this test for the h8300.
-	* gas/elf/section1.d: Likewise.
-	* gas/elf/section6.d: Likewise.
-	* gas/elf/elf.exp: Skip section2 and section5 tests when the
-	target is the h8300.
+	* gas/i386/vmfunc.d: New.
+	* gas/i386/vmfunc.s: Likewise.
+	* gas/i386/x86-64-vmfunc.d: Likewise.
 
-2010-01-06  Quentin Neill  <quentin.neill@amd.com>
+2012-01-13  Iain Sandoe  <idsandoe@googlemail.com>
 
-	* gas/i386/i386.exp: Add new amdfam15 test cases.
-	* gas/i386/nops-1-amdfam15.d: New.
-	* gas/i386/x86-64-nops-1-amdfam15.d: New.
+	* gas/all/redef2.d: Skip for Darwin.
+	* gas/all/redef3.d: Likewise.
+	* gas/all/weakref1.d: Likewise.
+	* gas/macros/irp.d: Likewise.
+	* gas/macros/repeat.d: Likewise.
+	* gas/macros/rept.d: Likewise.
+	* gas/macros/test2.d: Likewise.
+	* gas/macros/vararg.d: Likewise.
+	* gas/mach-o/macro-irp.d: New.
+	* gas/mach-o/macro-repeat.d: New.
+	* gas/mach-o/macro-rept.d: New.
+	* gas/mach-o/macro-test2.d: New.
+	* gas/mach-o/macro-vararg.d: New.
+	* gas/mach-o/redef2.d: New.
+	* gas/mach-o/redef3.d: New.
 
-2010-01-06  Daniel Gutson  <dgutson@codesourcery.com>
+2012-01-13  Iain Sandoe  <idsandoe@googlemail.com>
 
-	* gas/arm/dis-data.d: New test case.
-	* gas/arm/dis-data.s: New file.
+	* gas/mach-o/dysymtab-3.d: New.
+	* gas/mach-o/symbols-7.s: New.
 
-2010-01-04  Daniel Gutson  <dgutson@codesourcery.com>
+2012-01-13  Iain Sandoe  <idsandoe@googlemail.com>
 
-	* gas/arm/neon-logic.d: New test case.
-	* gas/arm/neon-logic.s: New file.
+	* gas/mach-o/dysymtab-2.d: Update to include the set VMA.
+	* gas/mach-o/symbols-1-64.d: Likewise.
+	* gas/mach-o/symbols-1.d: Likewise.
+	* gas/mach-o/symbols-6.d: Likewise.
+	* gas/mach-o/zerofill-1.d: Likewise.
+	* gas/mach-o/zerofill-2.d: Likewise.
 
-2010-01-04  Daniel Gutson  <dgutson@codesourcery.com>
+2012-01-12  Iain Sandoe  <idsandoe@googlemail.com>
 
-	* gas/arm/neon-addressing-bad.d: New test case.
-	* gas/arm/neon-addressing-bad.s: New file.
-	* gas/arm/neon-addressing-bad.l: New file.
+	* gas/mach-o/dysymtab-2.d: New.
+	* gas/mach-o/err-syms-4.s: New.
+	* gas/mach-o/err-syms-5.s: New.
+	* gas/mach-o/err-syms-6.s: New.
+	* gas/mach-o/symbols-6-64.d: New.
+	* gas/mach-o/symbols-6-64.s: New.
+	* gas/mach-o/symbols-6.d: New.
+	* gas/mach-o/symbols-6.s: New.
 
-2010-01-03  Daniel Gutson  <dgutson@codesourcery.com>
+2012-01-09  Iain Sandoe  <idsandoe@googlemail.com>
 
-	* gas/arm/neon-suffix-bad.d: New test case.
-	* gas/arm/neon-suffix-bad.s: New file.
-	* gas/arm/neon-suffix-bad.l: New file.
+	* gas/mach-o/err-syms-1.s: New.
+	* gas/mach-o/err-syms-2.s: New.
+	* gas/mach-o/err-syms-3.s: New.
+	* gas/mach-o/symbols-2.d: New.
+	* gas/mach-o/symbols-2.s: New.
+	* gas/mach-o/symbols-3.s: New.
+	* gas/mach-o/symbols-4.s: New.
+	* gas/mach-o/symbols-5.d: New.
+	* gas/mach-o/symbols-5.s: New.
 
-For older changes see ChangeLog-2009
+2012-01-08  Richard Sandiford  <rdsandiford@googlemail.com>
+
+	* gas/mips/tls-relw.s, gas/mips/tls-relw.d: New test.
+	* gas/mips/mips.exp: Run it.
+
+2012-01-08  Richard Sandiford  <rdsandiford@googlemail.com>
+
+	* gas/mips/align3.s, gas/mips/align3.d: New testcase.
+	* gas/mips/mips.exp: Run it.
+
+2012-01-04  Iain Sandoe  <idsandoe@googlemail.com>
+
+	* gas/mach-o/zerofill-2.d: New.
+
+2012-01-04  Iain Sandoe  <idsandoe@googlemail.com>
+
+	* gas/mach-o/zerofill-1.d: New.
+	* gas/mach-o/zerofill-1.s: New.
+
+2012-01-03  Iain Sandoe  <idsandoe@googlemail.com>
+
+	* gas/mach-o/dysymtab-1-64.d: New.
+	* gas/mach-o/dysymtab-1.d: New.
+	* gas/mach-o/symbols-1-64.d: New.
+	* gas/mach-o/symbols-1.d: New.
+	* gas/mach-o/symbols-base-64.s: New.
+	* gas/mach-o/symbols-base.s: New.
+
+For older changes see ChangeLog-2011
 
 Local Variables:
 mode: change-log

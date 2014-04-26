@@ -1,8 +1,6 @@
 /* sync.h: Header file for cygwin synchronization primitives.
 
-   Copyright 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006 Red Hat, Inc.
-
-   Written by Christopher Faylor <cgf@cygnus.com>
+   Copyright 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -19,7 +17,6 @@ class muto
 public:
   const char *name;
 private:
-  static DWORD exiting_thread;
   LONG sync;	/* Used to serialize access to this class. */
   LONG waiters;	/* Number of threads waiting for lock. */
   HANDLE bruteforce; /* event handle used to control waiting for lock. */
@@ -41,7 +38,6 @@ public:
   void upforgrabs () {tls = this;}  // just set to an invalid address
   void grab () __attribute__ ((regparm (1)));
   operator int () const {return !!name;}
-  static void set_exiting_thread () {exiting_thread = GetCurrentThreadId ();}
 };
 
 class lock_process
@@ -56,10 +52,7 @@ public:
     locker.acquire ();
     skip_unlock = exiting;
     if (exiting && exit_state < ES_PROCESS_LOCKED)
-      {
-	exit_state = ES_PROCESS_LOCKED;
-	muto::set_exiting_thread ();
-      }
+      exit_state = ES_PROCESS_LOCKED;
   }
   ~lock_process ()
   {

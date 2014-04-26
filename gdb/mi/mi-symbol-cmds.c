@@ -1,5 +1,5 @@
 /* MI Command Set - symbol commands.
-   Copyright (C) 2003, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2003, 2007-2012 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -36,15 +36,16 @@ mi_cmd_symbol_list_lines (char *command, char **argv, int argc)
   struct symtab *s;
   int i;
   struct cleanup *cleanup_stack, *cleanup_tuple;
+  struct ui_out *uiout = current_uiout;
 
   if (argc != 1)
-    error (_("mi_cmd_symbol_list_lines: Usage: SOURCE_FILENAME"));
+    error (_("-symbol-list-lines: Usage: SOURCE_FILENAME"));
 
   filename = argv[0];
   s = lookup_symtab (filename);
 
   if (s == NULL)
-    error (_("mi_cmd_symbol_list_lines: Unknown source file name."));
+    error (_("-symbol-list-lines: Unknown source file name."));
 
   /* Now, dump the associated line table.  The pc addresses are already
      sorted by increasing values in the symbol table, so no need to

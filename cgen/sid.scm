@@ -870,7 +870,7 @@
 	 (error "hw-index:cxmake-get: result needs a mode" self))
      (cx:make (if (mode:host? mode)
 		  ; FIXME: Temporary hack to generate same code as before.
-		  (let ((xmode (object-copy-top mode)))
+		  (let ((xmode (object-copy mode)))
 		    (obj-cons-attr! xmode (bool-attr-make 'FORCE-C #t))
 		    xmode)
 		  mode)
@@ -1095,7 +1095,7 @@
    (if (op:setter op)
        (let ((args (car (op:setter op)))
 	     (expr (cadr (op:setter op))))
-	 (rtl-c 'VOID
+	 (rtl-c VOID
 		(obj-isa-list op)
 		(if (= (length args) 0)
 		    (list (list 'newval mode "opval"))
@@ -1871,7 +1871,7 @@
 (define (/decode-split-insn-1 insn dspec)
   (let ((f-name (decode-split-name dspec))
 	(values (decode-split-values dspec)))
-    (let ((result (map object-copy-top (make-list (length values) insn))))
+    (let ((result (map object-copy (make-list (length values) insn))))
       (for-each (lambda (insn-copy value)
 		  (obj-set-name! insn-copy
 				 (symbol-append (obj:name insn-copy)

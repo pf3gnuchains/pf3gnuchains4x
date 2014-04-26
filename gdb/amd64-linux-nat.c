@@ -1,7 +1,6 @@
 /* Native-dependent code for GNU/Linux x86-64.
 
-   Copyright (C) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2001-2012 Free Software Foundation, Inc.
    Contributed by Jiri Smid, SuSE Labs.
 
    This file is part of GDB.
@@ -23,11 +22,14 @@
 #include "inferior.h"
 #include "gdbcore.h"
 #include "regcache.h"
+#include "regset.h"
 #include "linux-nat.h"
 #include "amd64-linux-tdep.h"
 
 #include "gdb_assert.h"
 #include "gdb_string.h"
+#include "elf/common.h"
+#include <sys/uio.h>
 #include <sys/ptrace.h>
 #include <sys/debugreg.h>
 #include <sys/syscall.h>
@@ -37,7 +39,7 @@
    <asm/ptrace.h> because the latter redefines FS and GS for no apparent
    reason, and those definitions don't match the ones that libpthread_db
    uses, which come from <sys/reg.h>.  */
-/* ezannoni-2003-07-09: I think this is fixed. The extraneous defs have
+/* ezannoni-2003-07-09: I think this is fixed.  The extraneous defs have
    been removed from ptrace.h in the kernel.  However, better safe than
    sorry.  */
 #include <asm/ptrace.h>
@@ -51,31 +53,26 @@
 #include "i386-linux-tdep.h"
 #include "amd64-nat.h"
 #include "i386-nat.h"
+#include "i386-xstate.h"
 
-/* Mapping between the general-purpose registers in GNU/Linux x86-64
-   `struct user' format and GDB's register cache layout.  */
+#ifndef PTRACE_GETREGSET
+#define PTRACE_GETREGSET	0x4204
+#endif
 
-static int amd64_linux_gregset64_reg_offset[] =
+#ifndef PTRACE_SETREGSET
+#define PTRACE_SETREGSET	0x4205
+#endif
+
+/* Per-thread arch-specific data we want to keep.  */
+
+struct arch_lwp_info
 {
-  RAX * 8, RBX * 8,		/* %rax, %rbx */
-  RCX * 8, RDX * 8,		/* %rcx, %rdx */
-  RSI * 8, RDI * 8,		/* %rsi, %rdi */
-  RBP * 8, RSP * 8,		/* %rbp, %rsp */
-  R8 * 8, R9 * 8,		/* %r8 ... */
-  R10 * 8, R11 * 8,
-  R12 * 8, R13 * 8,
-  R14 * 8, R15 * 8,		/* ... %r15 */
-  RIP * 8, EFLAGS * 8,		/* %rip, %eflags */
-  CS * 8, SS * 8,		/* %cs, %ss */
-  DS * 8, ES * 8,		/* %ds, %es */
-  FS * 8, GS * 8,		/* %fs, %gs */
-  -1, -1, -1, -1, -1, -1, -1, -1,
-  -1, -1, -1, -1, -1, -1, -1, -1,
-  -1, -1, -1, -1, -1, -1, -1, -1,
-  -1, -1, -1, -1, -1, -1, -1, -1, -1,
-  ORIG_RAX * 8
+  /* Non-zero if our copy differs from what's recorded in the thread.  */
+  int debug_registers_changed;
 };
-
+
+/* Does the current host support PTRACE_GETREGSET?  */
+static int have_ptrace_getregset = -1;
 
 /* Mapping between the general-purpose registers in GNU/Linux x86-64
    `struct user' format and GDB's register cache layout for GNU/Linux
@@ -99,6 +96,7 @@ static int amd64_linux_gregset32_reg_offset[] =
   -1, -1, -1, -1, -1, -1, -1, -1,
   -1, -1, -1, -1, -1, -1, -1, -1,
   -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1,
   ORIG_RAX * 8			/* "orig_eax" */
 };
 
@@ -183,10 +181,26 @@ amd64_linux_fetch_inferior_registers (struct target_ops *ops,
     {
       elf_fpregset_t fpregs;
 
-      if (ptrace (PTRACE_GETFPREGS, tid, 0, (long) &fpregs) < 0)
-	perror_with_name (_("Couldn't get floating point status"));
+      if (have_ptrace_getregset)
+	{
+	  char xstateregs[I386_XSTATE_MAX_SIZE];
+	  struct iovec iov;
 
-      amd64_supply_fxsave (regcache, -1, &fpregs);
+	  iov.iov_base = xstateregs;
+	  iov.iov_len = sizeof (xstateregs);
+	  if (ptrace (PTRACE_GETREGSET, tid,
+		      (unsigned int) NT_X86_XSTATE, (long) &iov) < 0)
+	    perror_with_name (_("Couldn't get extended state status"));
+
+	  amd64_supply_xsave (regcache, -1, xstateregs);
+	}
+      else
+	{
+	  if (ptrace (PTRACE_GETFPREGS, tid, 0, (long) &fpregs) < 0)
+	    perror_with_name (_("Couldn't get floating point status"));
+
+	  amd64_supply_fxsave (regcache, -1, &fpregs);
+	}
     }
 }
 
@@ -226,21 +240,37 @@ amd64_linux_store_inferior_registers (struct target_ops *ops,
     {
       elf_fpregset_t fpregs;
 
-      if (ptrace (PTRACE_GETFPREGS, tid, 0, (long) &fpregs) < 0)
-	perror_with_name (_("Couldn't get floating point status"));
+      if (have_ptrace_getregset)
+	{
+	  char xstateregs[I386_XSTATE_MAX_SIZE];
+	  struct iovec iov;
 
-      amd64_collect_fxsave (regcache, regnum, &fpregs);
+	  iov.iov_base = xstateregs;
+	  iov.iov_len = sizeof (xstateregs);
+	  if (ptrace (PTRACE_GETREGSET, tid,
+		      (unsigned int) NT_X86_XSTATE, (long) &iov) < 0)
+	    perror_with_name (_("Couldn't get extended state status"));
 
-      if (ptrace (PTRACE_SETFPREGS, tid, 0, (long) &fpregs) < 0)
-	perror_with_name (_("Couldn't write floating point status"));
+	  amd64_collect_xsave (regcache, regnum, xstateregs, 0);
 
-      return;
+	  if (ptrace (PTRACE_SETREGSET, tid,
+		      (unsigned int) NT_X86_XSTATE, (long) &iov) < 0)
+	    perror_with_name (_("Couldn't write extended state status"));
+	}
+      else
+	{
+	  if (ptrace (PTRACE_GETFPREGS, tid, 0, (long) &fpregs) < 0)
+	    perror_with_name (_("Couldn't get floating point status"));
+
+	  amd64_collect_fxsave (regcache, regnum, &fpregs);
+
+	  if (ptrace (PTRACE_SETFPREGS, tid, 0, (long) &fpregs) < 0)
+	    perror_with_name (_("Couldn't write floating point status"));
+	}
     }
 }
 
 /* Support for debug registers.  */
-
-static unsigned long amd64_linux_dr[DR_CONTROL + 1];
 
 static unsigned long
 amd64_linux_dr_get (ptid_t ptid, int regnum)
@@ -252,20 +282,11 @@ amd64_linux_dr_get (ptid_t ptid, int regnum)
   if (tid == 0)
     tid = PIDGET (ptid);
 
-  /* FIXME: kettenis/2001-03-27: Calling perror_with_name if the
-     ptrace call fails breaks debugging remote targets.  The correct
-     way to fix this is to add the hardware breakpoint and watchpoint
-     stuff to the target vector.  For now, just return zero if the
-     ptrace call fails.  */
   errno = 0;
   value = ptrace (PTRACE_PEEKUSER, tid,
 		  offsetof (struct user, u_debugreg[regnum]), 0);
   if (errno != 0)
-#if 0
     perror_with_name (_("Couldn't read debug register"));
-#else
-    return 0;
-#endif
 
   return value;
 }
@@ -288,40 +309,23 @@ amd64_linux_dr_set (ptid_t ptid, int regnum, unsigned long value)
     perror_with_name (_("Couldn't write debug register"));
 }
 
-/* Set DR_CONTROL to ADDR in all LWPs of LWP_LIST.  */
+/* Return the inferior's debug register REGNUM.  */
 
-static void
-amd64_linux_dr_set_control (unsigned long control)
+static CORE_ADDR
+amd64_linux_dr_get_addr (int regnum)
 {
-  struct lwp_info *lp;
-  ptid_t ptid;
+  /* DR6 and DR7 are retrieved with some other way.  */
+  gdb_assert (DR_FIRSTADDR <= regnum && regnum <= DR_LASTADDR);
 
-  amd64_linux_dr[DR_CONTROL] = control;
-  ALL_LWPS (lp, ptid)
-    amd64_linux_dr_set (ptid, DR_CONTROL, control);
+  return amd64_linux_dr_get (inferior_ptid, regnum);
 }
 
-/* Set address REGNUM (zero based) to ADDR in all LWPs of LWP_LIST.  */
+/* Return the inferior's DR7 debug control register.  */
 
-static void
-amd64_linux_dr_set_addr (int regnum, CORE_ADDR addr)
+static unsigned long
+amd64_linux_dr_get_control (void)
 {
-  struct lwp_info *lp;
-  ptid_t ptid;
-
-  gdb_assert (regnum >= 0 && regnum <= DR_LASTADDR - DR_FIRSTADDR);
-
-  amd64_linux_dr[DR_FIRSTADDR + regnum] = addr;
-  ALL_LWPS (lp, ptid)
-    amd64_linux_dr_set (ptid, DR_FIRSTADDR + regnum, addr);
-}
-
-/* Set address REGNUM (zero based) to zero in all LWPs of LWP_LIST.  */
-
-static void
-amd64_linux_dr_reset_addr (int regnum)
-{
-  amd64_linux_dr_set_addr (regnum, 0);
+  return amd64_linux_dr_get (inferior_ptid, DR_CONTROL);
 }
 
 /* Get DR_STATUS from only the one LWP of INFERIOR_PTID.  */
@@ -332,34 +336,99 @@ amd64_linux_dr_get_status (void)
   return amd64_linux_dr_get (inferior_ptid, DR_STATUS);
 }
 
-/* Unset MASK bits in DR_STATUS in all LWPs of LWP_LIST.  */
+/* Callback for iterate_over_lwps.  Update the debug registers of
+   LWP.  */
 
-static void
-amd64_linux_dr_unset_status (unsigned long mask)
+static int
+update_debug_registers_callback (struct lwp_info *lwp, void *arg)
 {
-  struct lwp_info *lp;
-  ptid_t ptid;
+  if (lwp->arch_private == NULL)
+    lwp->arch_private = XCNEW (struct arch_lwp_info);
 
-  ALL_LWPS (lp, ptid)
-    {
-      unsigned long value;
-      
-      value = amd64_linux_dr_get (ptid, DR_STATUS);
-      value &= ~mask;
-      amd64_linux_dr_set (ptid, DR_STATUS, value);
-    }
+  /* The actual update is done later just before resuming the lwp, we
+     just mark that the registers need updating.  */
+  lwp->arch_private->debug_registers_changed = 1;
+
+  /* If the lwp isn't stopped, force it to momentarily pause, so we
+     can update its debug registers.  */
+  if (!lwp->stopped)
+    linux_stop_lwp (lwp);
+
+  /* Continue the iteration.  */
+  return 0;
 }
 
+/* Set DR_CONTROL to CONTROL in all LWPs of the current inferior.  */
 
 static void
-amd64_linux_new_thread (ptid_t ptid)
+amd64_linux_dr_set_control (unsigned long control)
 {
-  int i;
+  ptid_t pid_ptid = pid_to_ptid (ptid_get_pid (inferior_ptid));
 
-  for (i = DR_FIRSTADDR; i <= DR_LASTADDR; i++)
-    amd64_linux_dr_set (ptid, i, amd64_linux_dr[i]);
+  iterate_over_lwps (pid_ptid, update_debug_registers_callback, NULL);
+}
 
-  amd64_linux_dr_set (ptid, DR_CONTROL, amd64_linux_dr[DR_CONTROL]);
+/* Set address REGNUM (zero based) to ADDR in all LWPs of the current
+   inferior.  */
+
+static void
+amd64_linux_dr_set_addr (int regnum, CORE_ADDR addr)
+{
+  ptid_t pid_ptid = pid_to_ptid (ptid_get_pid (inferior_ptid));
+
+  gdb_assert (regnum >= 0 && regnum <= DR_LASTADDR - DR_FIRSTADDR);
+
+  iterate_over_lwps (pid_ptid, update_debug_registers_callback, NULL);
+}
+
+/* Called when resuming a thread.
+   If the debug regs have changed, update the thread's copies.  */
+
+static void
+amd64_linux_prepare_to_resume (struct lwp_info *lwp)
+{
+  int clear_status = 0;
+
+  /* NULL means this is the main thread still going through the shell,
+     or, no watchpoint has been set yet.  In that case, there's
+     nothing to do.  */
+  if (lwp->arch_private == NULL)
+    return;
+
+  if (lwp->arch_private->debug_registers_changed)
+    {
+      struct i386_debug_reg_state *state = i386_debug_reg_state ();
+      int i;
+
+      for (i = DR_FIRSTADDR; i <= DR_LASTADDR; i++)
+	if (state->dr_ref_count[i] > 0)
+	  {
+	    amd64_linux_dr_set (lwp->ptid, i, state->dr_mirror[i]);
+
+	    /* If we're setting a watchpoint, any change the inferior
+	       had done itself to the debug registers needs to be
+	       discarded, otherwise, i386_stopped_data_address can get
+	       confused.  */
+	    clear_status = 1;
+	  }
+
+      amd64_linux_dr_set (lwp->ptid, DR_CONTROL, state->dr_control_mirror);
+
+      lwp->arch_private->debug_registers_changed = 0;
+    }
+
+  if (clear_status || lwp->stopped_by_watchpoint)
+    amd64_linux_dr_set (lwp->ptid, DR_STATUS, 0);
+}
+
+static void
+amd64_linux_new_thread (struct lwp_info *lp)
+{
+  struct arch_lwp_info *info = XCNEW (struct arch_lwp_info);
+
+  info->debug_registers_changed = 1;
+
+  lp->arch_private = info;
 }
 
 
@@ -549,8 +618,10 @@ compat_siginfo_from_siginfo (compat_siginfo_t *to, siginfo_t *from)
   to->si_errno = from->si_errno;
   to->si_code = from->si_code;
 
-  if (to->si_code < 0)
+  if (to->si_code == SI_TIMER)
     {
+      to->cpt_si_timerid = from->si_timerid;
+      to->cpt_si_overrun = from->si_overrun;
       to->cpt_si_ptr = (intptr_t) from->si_ptr;
     }
   else if (to->si_code == SI_USER)
@@ -558,10 +629,10 @@ compat_siginfo_from_siginfo (compat_siginfo_t *to, siginfo_t *from)
       to->cpt_si_pid = from->si_pid;
       to->cpt_si_uid = from->si_uid;
     }
-  else if (to->si_code == SI_TIMER)
+  else if (to->si_code < 0)
     {
-      to->cpt_si_timerid = from->si_timerid;
-      to->cpt_si_overrun = from->si_overrun;
+      to->cpt_si_pid = from->si_pid;
+      to->cpt_si_uid = from->si_uid;
       to->cpt_si_ptr = (intptr_t) from->si_ptr;
     }
   else
@@ -603,8 +674,10 @@ siginfo_from_compat_siginfo (siginfo_t *to, compat_siginfo_t *from)
   to->si_errno = from->si_errno;
   to->si_code = from->si_code;
 
-  if (to->si_code < 0)
+  if (to->si_code == SI_TIMER)
     {
+      to->si_timerid = from->cpt_si_timerid;
+      to->si_overrun = from->cpt_si_overrun;
       to->si_ptr = (void *) (intptr_t) from->cpt_si_ptr;
     }
   else if (to->si_code == SI_USER)
@@ -612,10 +685,10 @@ siginfo_from_compat_siginfo (siginfo_t *to, compat_siginfo_t *from)
       to->si_pid = from->cpt_si_pid;
       to->si_uid = from->cpt_si_uid;
     }
-  else if (to->si_code == SI_TIMER)
+  if (to->si_code < 0)
     {
-      to->si_timerid = from->cpt_si_timerid;
-      to->si_overrun = from->cpt_si_overrun;
+      to->si_pid = from->cpt_si_pid;
+      to->si_uid = from->cpt_si_uid;
       to->si_ptr = (void *) (intptr_t) from->cpt_si_ptr;
     }
   else
@@ -674,6 +747,77 @@ amd64_linux_siginfo_fixup (struct siginfo *native, gdb_byte *inf, int direction)
     return 0;
 }
 
+/* Get Linux/x86 target description from running target.
+
+   Value of CS segment register:
+     1. 64bit process: 0x33.
+     2. 32bit process: 0x23.
+ */
+
+#define AMD64_LINUX_USER64_CS	0x33
+
+static const struct target_desc *
+amd64_linux_read_description (struct target_ops *ops)
+{
+  unsigned long cs;
+  int tid;
+  int is_64bit;
+  static uint64_t xcr0;
+
+  /* GNU/Linux LWP ID's are process ID's.  */
+  tid = TIDGET (inferior_ptid);
+  if (tid == 0)
+    tid = PIDGET (inferior_ptid); /* Not a threaded program.  */
+
+  /* Get CS register.  */
+  errno = 0;
+  cs = ptrace (PTRACE_PEEKUSER, tid,
+	       offsetof (struct user_regs_struct, cs), 0);
+  if (errno != 0)
+    perror_with_name (_("Couldn't get CS register"));
+
+  is_64bit = cs == AMD64_LINUX_USER64_CS;
+
+  if (have_ptrace_getregset == -1)
+    {
+      uint64_t xstateregs[(I386_XSTATE_SSE_SIZE / sizeof (uint64_t))];
+      struct iovec iov;
+
+      iov.iov_base = xstateregs;
+      iov.iov_len = sizeof (xstateregs);
+
+      /* Check if PTRACE_GETREGSET works.  */
+      if (ptrace (PTRACE_GETREGSET, tid,
+		  (unsigned int) NT_X86_XSTATE, (long) &iov) < 0)
+	have_ptrace_getregset = 0;
+      else
+	{
+	  have_ptrace_getregset = 1;
+
+	  /* Get XCR0 from XSAVE extended state.  */
+	  xcr0 = xstateregs[(I386_LINUX_XSAVE_XCR0_OFFSET
+			     / sizeof (uint64_t))];
+	}
+    }
+
+  /* Check the native XCR0 only if PTRACE_GETREGSET is available.  */
+  if (have_ptrace_getregset
+      && (xcr0 & I386_XSTATE_AVX_MASK) == I386_XSTATE_AVX_MASK)
+    {
+      if (is_64bit)
+	return tdesc_amd64_avx_linux;
+      else
+	return tdesc_i386_avx_linux;
+    }
+  else
+    {
+      if (is_64bit)
+	return tdesc_amd64_linux;
+      else
+	return tdesc_i386_linux;
+    }
+}
+
 /* Provide a prototype to silence -Wmissing-prototypes.  */
 void _initialize_amd64_linux_nat (void);
 
@@ -684,13 +828,11 @@ _initialize_amd64_linux_nat (void)
 
   amd64_native_gregset32_reg_offset = amd64_linux_gregset32_reg_offset;
   amd64_native_gregset32_num_regs = I386_LINUX_NUM_REGS;
-  amd64_native_gregset64_reg_offset = amd64_linux_gregset64_reg_offset;
+  amd64_native_gregset64_reg_offset = amd64_linux_gregset_reg_offset;
   amd64_native_gregset64_num_regs = AMD64_LINUX_NUM_REGS;
 
   gdb_assert (ARRAY_SIZE (amd64_linux_gregset32_reg_offset)
 	      == amd64_native_gregset32_num_regs);
-  gdb_assert (ARRAY_SIZE (amd64_linux_gregset64_reg_offset)
-	      == amd64_native_gregset64_num_regs);
 
   /* Fill in the generic GNU/Linux methods.  */
   t = linux_target ();
@@ -699,9 +841,9 @@ _initialize_amd64_linux_nat (void)
 
   i386_dr_low.set_control = amd64_linux_dr_set_control;
   i386_dr_low.set_addr = amd64_linux_dr_set_addr;
-  i386_dr_low.reset_addr = amd64_linux_dr_reset_addr;
+  i386_dr_low.get_addr = amd64_linux_dr_get_addr;
   i386_dr_low.get_status = amd64_linux_dr_get_status;
-  i386_dr_low.unset_status = amd64_linux_dr_unset_status;
+  i386_dr_low.get_control = amd64_linux_dr_get_control;
   i386_set_debug_register_length (8);
 
   /* Override the GNU/Linux inferior startup hook.  */
@@ -712,8 +854,11 @@ _initialize_amd64_linux_nat (void)
   t->to_fetch_registers = amd64_linux_fetch_inferior_registers;
   t->to_store_registers = amd64_linux_store_inferior_registers;
 
+  t->to_read_description = amd64_linux_read_description;
+
   /* Register the target.  */
   linux_nat_add_target (t);
   linux_nat_set_new_thread (t, amd64_linux_new_thread);
   linux_nat_set_siginfo_fixup (t, amd64_linux_siginfo_fixup);
+  linux_nat_set_prepare_to_resume (t, amd64_linux_prepare_to_resume);
 }

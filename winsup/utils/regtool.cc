@@ -1,7 +1,7 @@
 /* regtool.cc
 
    Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008,
-   2009 Red Hat Inc.
+   2009, 2010, 2011 Red Hat Inc.
 
 This file is part of Cygwin.
 
@@ -19,6 +19,8 @@ details. */
 #define WINVER 0x0502
 #include <windows.h>
 #include <sys/cygwin.h>
+#include <cygwin/version.h>
+#include "loadlib.h"
 
 #define DEFAULT_KEY_SEPARATOR '\\'
 
@@ -32,7 +34,6 @@ char key_sep = DEFAULT_KEY_SEPARATOR;
 #define LIST_VALS	0x02
 #define LIST_ALL	(LIST_KEYS | LIST_VALS)
 
-static const char version[] = "$Revision: 1.8 $";
 static char *prog_name;
 
 static struct option longopts[] =
@@ -94,12 +95,14 @@ usage (FILE *where = stderr)
 {
   fprintf (where, ""
   "Usage: %s [OPTION] ACTION KEY [data...]\n"
+  "\n"
   "View or edit the Win32 registry\n"
   "\n", prog_name);
   if (where == stdout)
     {
       fprintf (where, ""
       "Actions:\n"
+      "\n"
       " add KEY\\SUBKEY             add new SUBKEY\n"
       " check KEY                  exit 0 if KEY exists, 1 if not\n"
       " get KEY\\VALUE              prints VALUE to stdout\n"
@@ -113,16 +116,19 @@ usage (FILE *where = stderr)
       "\n");
       fprintf (where, ""
       "Options for 'list' Action:\n"
+      "\n"
       " -k, --keys           print only KEYs\n"
       " -l, --list           print only VALUEs\n"
       " -p, --postfix        like ls -p, appends '\\' postfix to KEY names\n"
       "\n"
       "Options for 'get' Action:\n"
+      "\n"
       " -b, --binary         print data as printable hex bytes\n"
       " -n, --none           print data as stream of bytes as stored in registry\n"
       " -x, --hex            print numerical data as hex numbers\n"
       "\n"
       "Options for 'set' Action:\n"
+      "\n"
       " -b, --binary         set type to REG_BINARY (hex args or '-')\n"
       " -d, --dword          set type to REG_DWORD\n"
       " -D, --dword-be       set type to REG_DWORD_BIG_ENDIAN\n"
@@ -134,9 +140,11 @@ usage (FILE *where = stderr)
       " -s, --string         set type to REG_SZ\n"
       "\n"
       "Options for 'set' and 'unset' Actions:\n"
+      "\n"
       " -K<c>, --key-separator[=]<c>  set key-value separator to <c> instead of '\\'\n"
       "\n"
       "Other Options:\n"
+      "\n"
       " -h, --help     output usage information and exit\n"
       " -q, --quiet    no error output, just nonzero return if KEY/VALUE missing\n"
       " -v, --verbose  verbose output, including VALUE contents when applicable\n"
@@ -157,37 +165,28 @@ usage (FILE *where = stderr)
       "as separator and the backslash can be used as escape character.\n");
       fprintf (where, ""
       "Example:\n"
-      "%s list '/machine/SOFTWARE/Classes/MIME/Database/Content Type/audio\\/wav'\n", prog_name);
+      "%s list '/machine/SOFTWARE/Classes/MIME/Database/Content Type/audio\\/wav'\n\n", prog_name);
     }
   if (where == stderr)
     fprintf (where,
     "ACTION is one of add, check, get, list, remove, set, unset, load, unload, save\n"
     "\n"
-    "Try '%s --help' for more information.\n", prog_name);
+    "Try `%s --help' for more information.\n", prog_name);
   exit (where == stderr ? 1 : 0);
 }
 
 static void
 print_version ()
 {
-  const char *v = strchr (version, ':');
-  int len;
-  if (!v)
-    {
-      v = "?";
-      len = 1;
-    }
-  else
-    {
-      v += 2;
-      len = strchr (v, ' ') - v;
-    }
-  printf ("\
-%s (cygwin) %.*s\n\
-Registry Tool\n\
-Copyright 2000-2009 Red Hat, Inc.\n\
-Compiled on %s\n\
-", prog_name, len, v, __DATE__);
+  printf ("regtool (cygwin) %d.%d.%d\n"
+	  "Registry tool\n"
+	  "Copyright (C) 2000 - %s Red Hat, Inc.\n"
+	  "This is free software; see the source for copying conditions.  There is NO\n"
+	  "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n",
+	  CYGWIN_VERSION_DLL_MAJOR / 1000,
+	  CYGWIN_VERSION_DLL_MAJOR % 1000,
+	  CYGWIN_VERSION_DLL_MINOR,
+	  strrchr (__DATE__, ' ') + 1);
 }
 
 void
@@ -377,7 +376,7 @@ find_key (int howmanyparts, REGSAM access, int option = 0)
 	  if (value)
 	    free (value);
 	  len = mbstowcs (NULL, n, 0) + 1;
-	  value = (wchar_t *) malloc (len);
+	  value = (wchar_t *) malloc (len * sizeof (wchar_t));
 	  mbstowcs (value, n, len);
 	  return;
 	}
@@ -387,7 +386,7 @@ find_key (int howmanyparts, REGSAM access, int option = 0)
 	  if (value)
 	    free (value);
 	  len = mbstowcs (NULL, e + 1, 0) + 1;
-	  value = (wchar_t *) malloc (len);
+	  value = (wchar_t *) malloc (len * sizeof (wchar_t));
 	  mbstowcs (value, e + 1, len);
 	}
     }
@@ -421,18 +420,18 @@ find_key (int howmanyparts, REGSAM access, int option = 0)
 	      if (RegCreateKeyExW (base, name, 0, NULL, option, access | wow64,
 				  NULL, &key2, NULL)
 		  == ERROR_SUCCESS)
-	        {
+		{
 		  if (rv == ERROR_SUCCESS)
 		    RegCloseKey (key);
 		  key = key2;
 		  rv = ERROR_SUCCESS;
-	        }
+		}
 	    }
 	  if (rv != ERROR_SUCCESS)
 	    Fail (rv);
 	}
       else if (argv[1])
-	{ 
+	{
 	  ssize_t len = cygwin_conv_path (CCP_POSIX_TO_WIN_W, argv[1], NULL, 0);
 	  wchar_t win32_path[len];
 	  cygwin_conv_path (CCP_POSIX_TO_WIN_W, argv[1], win32_path, len);
@@ -443,7 +442,7 @@ find_key (int howmanyparts, REGSAM access, int option = 0)
 	    printf ("key %ls loaded from file %ls\n", name, win32_path);
 	}
       else
-	{ 
+	{
 	  rv = RegUnLoadKeyW (base, name);
 	  if (rv != ERROR_SUCCESS)
 	    Fail (rv);
@@ -588,7 +587,7 @@ cmd_remove ()
     {
       HMODULE mod = LoadLibrary ("advapi32.dll");
       if (mod)
-        regDeleteKeyEx = (WINADVAPI LONG WINAPI (*)(HKEY, LPCWSTR, REGSAM, DWORD)) GetProcAddress (mod, "RegDeleteKeyExW");
+	regDeleteKeyEx = (WINADVAPI LONG WINAPI (*)(HKEY, LPCWSTR, REGSAM, DWORD)) GetProcAddress (mod, "RegDeleteKeyExW");
     }
   if (regDeleteKeyEx)
     rv = (*regDeleteKeyEx) (key, value, wow64, 0);
@@ -640,7 +639,7 @@ cmd_set ()
     case REG_NONE:
     case REG_BINARY:
       for (n = 0; argv[n+1]; n++)
-        ;
+	;
       if (n == 1 && strcmp (argv[1], "-") == 0)
 	{ /* read from stdin */
 	  i = n = 0;
@@ -696,11 +695,13 @@ cmd_set ()
       break;
     case REG_SZ:
     case REG_EXPAND_SZ:
-      n = mbstowcs (NULL, a, 0);
-      wchar_t w[n + 1];
-      mbstowcs (w, a, n + 1);
-      rv = RegSetValueExW (key, value, 0, value_type,
-			   (const BYTE *) w, (n + 1) * sizeof (wchar_t));
+      {
+	n = mbstowcs (NULL, a, 0);
+	wchar_t w[n + 1];
+	mbstowcs (w, a, n + 1);
+	rv = RegSetValueExW (key, value, 0, value_type,
+			     (const BYTE *) w, (n + 1) * sizeof (wchar_t));
+      }
       break;
     case REG_MULTI_SZ:
       for (i = 1, max_n = 1; argv[i]; i++)
@@ -710,7 +711,7 @@ cmd_set ()
 	n += mbstowcs ((wchar_t *) data + n, argv[i], max_n - n) + 1;
       ((wchar_t *)data)[n] = L'\0';
       rv = RegSetValueExW (key, value, 0, REG_MULTI_SZ, (const BYTE *) data,
-			   (max_n + 1) * sizeof (wchar_t));
+			   (n + 1) * sizeof (wchar_t));
       break;
     case REG_AUTO:
       rv = ERROR_SUCCESS;
@@ -719,7 +720,7 @@ cmd_set ()
       rv = ERROR_INVALID_CATEGORY;
       break;
     }
- 
+
   if (data)
     free(data);
 
@@ -904,13 +905,8 @@ main (int argc, char **_argv)
   int g;
 
   setlocale (LC_ALL, "");
-  prog_name = strrchr (_argv[0], '/');
-  if (prog_name == NULL)
-    prog_name = strrchr (_argv[0], '\\');
-  if (prog_name == NULL)
-    prog_name = _argv[0];
-  else
-    prog_name++;
+
+  prog_name = program_invocation_short_name;
 
   while ((g = getopt_long (argc, _argv, opts, longopts, NULL)) != EOF)
     switch (g)
@@ -975,7 +971,9 @@ main (int argc, char **_argv)
 	  key_sep = *optarg;
 	  break;
 	default :
-	  usage ();
+	  fprintf (stderr, "Try `%s --help' for more information.\n",
+		   prog_name);
+	  return 1;
 	}
 
   if ((_argv[optind] == NULL) || (_argv[optind+1] == NULL))

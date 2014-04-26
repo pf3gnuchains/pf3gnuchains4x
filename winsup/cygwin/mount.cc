@@ -1,7 +1,7 @@
 /* mount.cc: mount handling.
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
+   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -105,6 +105,64 @@ struct smb_extended_info {
 };
 #pragma pack(pop)
 
+#define MAX_FS_INFO_CNT 32
+class fs_info_cache
+{
+  static muto fsi_lock;
+  uint32_t count;
+  struct {
+    fs_info fsi;
+    uint32_t hash;
+  } entry[MAX_FS_INFO_CNT];
+
+  uint32_t genhash (PFILE_FS_VOLUME_INFORMATION);
+
+public:
+  fs_info_cache () : count (0) { fsi_lock.init ("fsi_lock"); }
+  fs_info *search (PFILE_FS_VOLUME_INFORMATION, uint32_t &);
+  void add (uint32_t, fs_info *);
+};
+
+static fs_info_cache fsi_cache;
+muto NO_COPY fs_info_cache::fsi_lock;
+
+uint32_t
+fs_info_cache::genhash (PFILE_FS_VOLUME_INFORMATION pffvi)
+{
+  uint32_t hash = 0;
+  const uint16_t *p = (const uint16_t *) pffvi;
+  const uint16_t *end = (const uint16_t *)
+			((const uint8_t *) p + sizeof *pffvi
+			 + pffvi->VolumeLabelLength  - sizeof (WCHAR));
+  pffvi->__dummy = 0;	/* This member can have random values! */
+  while (p < end)
+    hash = *p++ + (hash << 6) + (hash << 16) - hash;
+  return hash;
+}
+
+fs_info *
+fs_info_cache::search (PFILE_FS_VOLUME_INFORMATION pffvi, uint32_t &hash)
+{
+  hash = genhash (pffvi);
+  for (uint32_t i = 0; i < count; ++i)
+    if (entry[i].hash == hash)
+      return &entry[i].fsi;
+  return NULL;
+}
+
+void
+fs_info_cache::add (uint32_t hashval, fs_info *new_fsi)
+{
+  fsi_lock.acquire ();
+  if (count < MAX_FS_INFO_CNT)
+    {
+      entry[count].fsi = *new_fsi;
+      entry[count].hash = hashval;
+      ++count;
+    }
+  fsi_lock.release ();
+}
+
 bool
 fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 {
@@ -135,14 +193,14 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
       InitializeObjectAttributes (&attr, upath, OBJ_CASE_INSENSITIVE, NULL,
 				  NULL);
       /* Note: Don't use the FILE_OPEN_REPARSE_POINT flag here.  The reason
-         is that symlink_info::check relies on being able to open a handle
+	 is that symlink_info::check relies on being able to open a handle
 	 to the target of a volume mount point. */
       status = NtOpenFile (&vol, access, &attr, &io, FILE_SHARE_VALID_FLAGS,
 			   FILE_OPEN_FOR_BACKUP_INTENT);
       /* At least one filesystem (HGFS, VMware shared folders) doesn't like
-         to be opened with access set to just READ_CONTROL. */
+	 to be opened with access set to just READ_CONTROL. */
       if (status == STATUS_INVALID_PARAMETER)
-      	{
+	{
 	  access |= FILE_READ_DATA;
 	  status = NtOpenFile (&vol, access, &attr, &io, FILE_SHARE_VALID_FLAGS,
 			       FILE_OPEN_FOR_BACKUP_INTENT);
@@ -168,15 +226,26 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 	{
 	  debug_printf ("Cannot access path %S, status %08lx",
 			attr.ObjectName, status);
-	  NtClose (vol);
 	  return false;
 	}
     }
-
+  sernum = 0;
   status = NtQueryVolumeInformationFile (vol, &io, &ffvi_buf.ffvi,
 					 sizeof ffvi_buf,
 					 FileFsVolumeInformation);
-  sernum = NT_SUCCESS (status) ? ffvi_buf.ffvi.VolumeSerialNumber : 0;
+  uint32_t hash = 0;
+  if (NT_SUCCESS (status))
+    {
+      fs_info *fsi = fsi_cache.search (&ffvi_buf.ffvi, hash);
+      if (fsi)
+	{
+	  *this = *fsi;
+	  if (!in_vol)
+	    NtClose (vol);
+	  return true;
+	}
+      sernum = ffvi_buf.ffvi.VolumeSerialNumber;
+    }
   status = NtQueryVolumeInformationFile (vol, &io, &ffdi, sizeof ffdi,
 					 FileFsDeviceInformation);
   if (!NT_SUCCESS (status))
@@ -208,10 +277,17 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 /* Should be reevaluated for each new OS.  Right now this mask is valid up
    to Vista.  The important point here is to test only flags indicating
    capabilities and to ignore flags indicating a specific state of this
-   volume.  At present these flags to ignore are FILE_VOLUME_IS_COMPRESSED
-   and FILE_READ_ONLY_VOLUME. */
-#define GETVOLINFO_VALID_MASK (0x003701ffUL)
+   volume.  At present these flags to ignore are FILE_VOLUME_IS_COMPRESSED,
+   FILE_READ_ONLY_VOLUME, and FILE_SEQUENTIAL_WRITE_ONCE.  The additional
+   filesystem flags supported since Windows 7 are also ignored for now.
+   They add information, but only on W7 and later, and only for filesystems
+   also supporting these flags, right now only NTFS. */
+#define GETVOLINFO_VALID_MASK (0x002701ffUL)
 #define TEST_GVI(f,m) (((f) & GETVOLINFO_VALID_MASK) == (m))
+
+/* FIXME: This flag twist is getting awkward.  There should really be some
+   other method.  Maybe we need mount flags to allow the user to fix file
+   system problems without having to wait for a Cygwin fix. */
 
 /* Volume quotas are potentially supported since Samba 3.0, object ids and
    the unicode on disk flag since Samba 3.2. */
@@ -222,12 +298,13 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 			     FILE_CASE_SENSITIVE_SEARCH \
 			     | FILE_CASE_PRESERVED_NAMES \
 			     | FILE_PERSISTENT_ACLS)
-/* Netapp DataOnTap.  TODO: Find out if that's the only flag combination. */
-#define FS_IS_NETAPP_DATAONTAP TEST_GVI(flags (), \
+/* Netapp DataOnTap. */
+#define NETAPP_IGNORE (FILE_SUPPORTS_SPARSE_FILES \
+		       | FILE_PERSISTENT_ACLS)
+#define FS_IS_NETAPP_DATAONTAP TEST_GVI(flags () & ~NETAPP_IGNORE, \
 			     FILE_CASE_SENSITIVE_SEARCH \
 			     | FILE_CASE_PRESERVED_NAMES \
 			     | FILE_UNICODE_ON_DISK \
-			     | FILE_PERSISTENT_ACLS \
 			     | FILE_NAMED_STREAMS)
 /* These are the minimal flags supported by NTFS since NT4.  Every filesystem
    not supporting these flags is not a native NTFS.  We subsume them under
@@ -239,10 +316,15 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 				| FILE_FILE_COMPRESSION)
 #define FS_IS_WINDOWS_NTFS TEST_GVI(flags () & MINIMAL_WIN_NTFS_FLAGS, \
 				    MINIMAL_WIN_NTFS_FLAGS)
-      /* This always fails on NT4. */
-      status = NtQueryVolumeInformationFile (vol, &io, &ffoi, sizeof ffoi,
-					     FileFsObjectIdInformation);
-      if (NT_SUCCESS (status))
+/* These are the exact flags of a real Windows FAT/FAT32 filesystem.
+   Anything else is a filesystem faking to be FAT. */
+#define WIN_FAT_FLAGS (FILE_CASE_PRESERVED_NAMES | FILE_UNICODE_ON_DISK)
+#define FS_IS_WINDOWS_FAT  TEST_GVI(flags (), WIN_FAT_FLAGS)
+
+      if ((flags () & FILE_SUPPORTS_OBJECT_IDS)
+	  && NT_SUCCESS (NtQueryVolumeInformationFile (vol, &io, &ffoi,
+						   sizeof ffoi,
+						   FileFsObjectIdInformation)))
 	{
 	  smb_extended_info *extended_info = (smb_extended_info *)
 					     &ffoi.ExtendedInfo;
@@ -252,15 +334,23 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 	      samba_version (extended_info->samba_version);
 	    }
 	}
-      /* First check the remote filesystems faking to be NTFS. */
-      if (!got_fs () && RtlEqualUnicodeString (&fsname, &ro_u_ntfs, FALSE)
-	  /* Test for Samba on NT4 or for older Samba releases not supporting
-	     extended info. */
+      /* First check the remote filesystems claiming to be NTFS. */
+      if (!got_fs ()
+	  && is_ntfs (RtlEqualUnicodeString (&fsname, &ro_u_ntfs, FALSE))
+	  /* Test for older Samba releases not supporting extended info. */
 	  && !is_samba (FS_IS_SAMBA)
-	  /* Netapp inode info is unusable. */
+	  /* Netapp inode info is unusable, can't handle trailing dots and
+	     spaces, has a bug in "move and delete" semantics. */
 	  && !is_netapp (FS_IS_NETAPP_DATAONTAP))
 	/* Any other remote FS faking to be NTFS. */
 	is_cifs (!FS_IS_WINDOWS_NTFS);
+      /* Then check remote filesystems claiming to be FAT.  Except for real
+	 FAT and Netapp, all of them are subsumed under the "CIFS" filesystem
+	 type for now. */
+      if (!got_fs ()
+	  && is_fat (RtlEqualUnicodePathPrefix (&fsname, &ro_u_fat, TRUE))
+	  && !is_netapp (FS_IS_NETAPP_DATAONTAP))
+	is_cifs (!FS_IS_WINDOWS_FAT);
       /* Then check remote filesystems honest about their name. */
       if (!got_fs ()
 	  /* Microsoft NFS needs distinct access methods for metadata. */
@@ -269,33 +359,56 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 	     drawbacks, like not supporting DOS attributes other than R/O
 	     and stuff like that. */
 	  && !is_mvfs (RtlEqualUnicodePathPrefix (&fsname, &ro_u_mvfs, FALSE))
-	  /* Known remote file system which can't handle calls to
-	     NtQueryDirectoryFile(FileIdBothDirectoryInformation) */
+	  /* NWFS == Novell Netware FS.  Broken info class, see below. */
+	  /* NcFsd == Novell Netware FS via own driver since Windows Vista. */
+	  && !is_nwfs (RtlEqualUnicodeString (&fsname, &ro_u_nwfs, FALSE))
+	  && !is_ncfsd (RtlEqualUnicodeString (&fsname, &ro_u_ncfsd, FALSE))
+	  /* UNIXFS == TotalNet Advanced Server (TAS).  Doesn't support
+	     FileIdBothDirectoryInformation.  See below. */
 	  && !is_unixfs (RtlEqualUnicodeString (&fsname, &ro_u_unixfs, FALSE)))
-	/* Known remote file system with buggy open calls.  Further
-	   explanation in fhandler.cc (fhandler_disk_file::open). */
 	{
+	  /* Known remote file system with buggy open calls.  Further
+	     explanation in fhandler.cc (fhandler_disk_file::open_fs). */
 	  is_sunwnfs (RtlEqualUnicodeString (&fsname, &ro_u_sunwnfs, FALSE));
 	  has_buggy_open (is_sunwnfs ());
 	}
-      /* Not only UNIXFS is known to choke on FileIdBothDirectoryInformation.
-	 Some other CIFS servers have problems with this call as well.
-	 Know example: EMC NS-702.  We just don't use that info class on
-	 any remote CIFS.  */
       if (got_fs ())
-	has_buggy_fileid_dirinfo (is_cifs () || is_unixfs ());
+	{
+	  /* UNIXFS is known to choke on FileIdBothDirectoryInformation.
+	     Some other CIFS servers have problems with this call as well.
+	     Know example: EMC NS-702.  We just don't use that info class on
+	     any remote CIFS.  */
+	  has_buggy_fileid_dirinfo (is_cifs () || is_unixfs ());
+	  /* NWFS is known to have a broken FileBasicInformation info
+	     class.  It can't be used to fetch information, only to set
+	     information.  Therefore, for NWFS we have to fallback to the
+	     FileNetworkOpenInformation info class.  Unfortunately we can't
+	     use FileNetworkOpenInformation all the time since that fails on
+	     other filesystems like NFS.
+	     UNUSED, but keep in for information purposes. */
+	  has_buggy_basic_info (is_nwfs ());
+	  /* Netapp and NWFS/NcFsd are too dumb to allow non-DOS filenames
+	     containing trailing dots and spaces when accessed from Windows
+	     clients.  We subsume CIFS into this class of filesystems right
+	     away since at least some of them are not capable either. */
+	  has_dos_filenames_only (is_netapp () || is_nwfs ()
+				  || is_ncfsd () || is_cifs ());
+	  /* Netapp and NWFS don't grok re-opening a file by handle.  They
+	     only support this if the filename is non-null and the handle is
+	     the handle to a directory. NcFsd IR10 is supposed to be ok. */
+	  has_buggy_reopen (is_netapp () || is_nwfs ());
+	}
     }
   if (!got_fs ()
       && !is_ntfs (RtlEqualUnicodeString (&fsname, &ro_u_ntfs, FALSE))
       && !is_fat (RtlEqualUnicodePathPrefix (&fsname, &ro_u_fat, TRUE))
       && !is_csc_cache (RtlEqualUnicodeString (&fsname, &ro_u_csc, FALSE))
-      && !is_nwfs (RtlEqualUnicodeString (&fsname, &ro_u_nwfs, FALSE))
       && is_cdrom (ffdi.DeviceType == FILE_DEVICE_CD_ROM))
     is_udf (RtlEqualUnicodeString (&fsname, &ro_u_udf, FALSE));
   if (!got_fs ())
     {
       /* The filesystem name is only used in fillout_mntent and only if
-         the filesystem isn't one of the well-known filesystems anyway. */
+	 the filesystem isn't one of the well-known filesystems anyway. */
       sys_wcstombs (fsn, sizeof fsn, ffai_buf.ffai.FileSystemName,
 		    ffai_buf.ffai.FileSystemNameLength / sizeof (WCHAR));
       strlwr (fsn);
@@ -303,12 +416,6 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
   has_acls (flags () & FS_PERSISTENT_ACLS);
   /* Netapp inode numbers are fly-by-night. */
   hasgood_inode ((has_acls () && !is_netapp ()) || is_nfs ());
-  /* NWFS is known to have a broken FileBasicInformation info class.  It
-     can't be used to fetch information, only to set information.  Therefore,
-     for NWFS we have to fallback to the FileNetworkOpenInformation info
-     class.  Unfortunately we can't use FileNetworkOpenInformation all the
-     time since that fails on other filesystems like NFS. */
-  has_buggy_basic_info (is_nwfs ());
   /* Case sensitivity is supported if FILE_CASE_SENSITIVE_SEARCH is set,
      except on Samba which handles Windows clients case insensitive.
 
@@ -328,6 +435,7 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 
   if (!in_vol)
     NtClose (vol);
+  fsi_cache.add (hash, this);
   return true;
 }
 
@@ -338,8 +446,11 @@ mount_info::create_root_entry (const PWCHAR root)
     The entry is immutable, unless the "override" option is given in /etc/fstab. */
   char native_root[PATH_MAX];
   sys_wcstombs (native_root, PATH_MAX, root);
-  mount_table->add_item (native_root, "/",
-			 MOUNT_SYSTEM | MOUNT_BINARY | MOUNT_IMMUTABLE | MOUNT_AUTOMATIC);
+  assert (*native_root != '\0');
+  if (add_item (native_root, "/",
+		MOUNT_SYSTEM | MOUNT_BINARY | MOUNT_IMMUTABLE | MOUNT_AUTOMATIC)
+      < 0)
+    api_fatal ("add_item (\"%W\", \"/\", ...) failed, errno %d", native_root, errno);
   /* Create a default cygdrive entry.  Note that this is a user entry.
      This allows to override it with mount, unless the sysadmin created
      a cygdrive entry in /etc/fstab. */
@@ -353,7 +464,6 @@ mount_info::create_root_entry (const PWCHAR root)
 void
 mount_info::init ()
 {
-  nmounts = 0;
   PWCHAR pathend;
   WCHAR path[PATH_MAX];
 
@@ -367,19 +477,20 @@ mount_info::init ()
   if (!got_usr_bin || !got_usr_lib)
     {
       char native[PATH_MAX];
-      assert (root_idx != -1);
+      if (root_idx < 0)
+	api_fatal ("root_idx %d, user_shared magic %p, nmounts %d", root_idx, user_shared->version, nmounts);
       char *p = stpcpy (native, mount[root_idx].native_path);
       if (!got_usr_bin)
       {
 	stpcpy (p, "\\bin");
-	mount_table->add_item (native, "/usr/bin",
-			       MOUNT_SYSTEM | MOUNT_BINARY | MOUNT_AUTOMATIC);
+	add_item (native, "/usr/bin",
+		  MOUNT_SYSTEM | MOUNT_BINARY | MOUNT_AUTOMATIC);
       }
       if (!got_usr_lib)
       {
 	stpcpy (p, "\\lib");
-	mount_table->add_item (native, "/usr/lib",
-			       MOUNT_SYSTEM | MOUNT_BINARY | MOUNT_AUTOMATIC);
+	add_item (native, "/usr/lib",
+		  MOUNT_SYSTEM | MOUNT_BINARY | MOUNT_AUTOMATIC);
       }
     }
 }
@@ -450,15 +561,10 @@ mount_info::conv_to_win32_path (const char *src_path, char *dst, device& dev,
 				unsigned *flags)
 {
   bool chroot_ok = !cygheap->root.exists ();
-  while (sys_mount_table_counter < cygwin_shared->sys_mount_table_counter)
-    {
-      int current = cygwin_shared->sys_mount_table_counter;
-      init ();
-      sys_mount_table_counter = current;
-    }
+
   MALLOC_CHECK;
 
-  dev.devn = FH_FS;
+  dev = FH_FS;
 
   *flags = 0;
   debug_printf ("conv_to_win32_path (%s)", src_path);
@@ -490,7 +596,7 @@ mount_info::conv_to_win32_path (const char *src_path, char *dst, device& dev,
     }
 
   MALLOC_CHECK;
-  /* If the path is on a network drive or a //./ resp.//?/ path prefix,
+  /* If the path is on a network drive or a //./ resp. //?/ path prefix,
      bypass the mount table.  If it's // or //MACHINE, use the netdrive
      device. */
   if (src_path[1] == '/')
@@ -500,6 +606,15 @@ mount_info::conv_to_win32_path (const char *src_path, char *dst, device& dev,
 	  dev = *netdrive_dev;
 	  set_flags (flags, PATH_BINARY);
 	}
+      else
+	{
+	  /* For UNC paths, use the cygdrive prefix flags as default setting.
+	     This is more natural since UNC paths, just like cygdrive paths,
+	     are rather (warning, poetic description ahead) windows into the
+	     native Win32 world.  This also gives the user an elegant way to
+	     change the settings for those paths in a central place. */
+	  set_flags (flags, (unsigned) cygdrive_flags);
+	}
       backslashify (src_path, dst, 0);
       /* Go through chroot check */
       goto out;
@@ -507,11 +622,20 @@ mount_info::conv_to_win32_path (const char *src_path, char *dst, device& dev,
   if (isproc (src_path))
     {
       dev = *proc_dev;
-      dev.devn = fhandler_proc::get_proc_fhandler (src_path);
-      if (dev.devn == FH_BAD)
+      dev = fhandler_proc::get_proc_fhandler (src_path);
+      if (dev == FH_NADA)
 	return ENOENT;
       set_flags (flags, PATH_BINARY);
-      strcpy (dst, src_path);
+      if (isprocsys_dev (dev))
+	{
+	  if (src_path[procsys_len])
+	    backslashify (src_path + procsys_len, dst, 0);
+	  else	/* Avoid empty NT path. */
+	    stpcpy (dst, "\\");
+	  set_flags (flags, (unsigned) cygdrive_flags);
+	}
+      else
+	strcpy (dst, src_path);
       goto out;
     }
   /* Check if the cygdrive prefix was specified.  If so, just strip
@@ -757,7 +881,7 @@ mount_info::conv_to_posix_path (const char *src_path, char *posix_path,
   int rc = normalize_win32_path (src_path, pathbuf, tail);
   if (rc != 0)
     {
-      debug_printf ("%d = conv_to_posix_path (%s)", rc, src_path);
+      debug_printf ("%d = conv_to_posix_path(%s)", rc, src_path);
       return rc;
     }
 
@@ -892,8 +1016,11 @@ struct opt
   {"acl", MOUNT_NOACL, 1},
   {"auto", 0, 0},
   {"binary", MOUNT_BINARY, 0},
+  {"bind", MOUNT_BIND, 0},
   {"cygexec", MOUNT_CYGWIN_EXEC, 0},
+  {"dos", MOUNT_DOS, 0},
   {"exec", MOUNT_EXEC, 0},
+  {"ihash", MOUNT_IHASH, 0},
   {"noacl", MOUNT_NOACL, 0},
   {"nosuid", 0, 0},
   {"notexec", MOUNT_NOTEXEC, 0},
@@ -905,35 +1032,67 @@ struct opt
   {"user", MOUNT_SYSTEM, 1}
 };
 
-static bool
-read_flags (char *options, unsigned &flags)
+static int
+compare_flags (const void *a, const void *b)
 {
-  while (*options)
+  const opt *oa = (const opt *) a;
+  const opt *ob = (const opt *) b;
+
+  return strcmp (oa->name, ob->name);
+}
+
+extern "C" bool
+fstab_read_flags (char **options, unsigned &flags, bool external)
+{
+  opt key;
+
+  while (**options)
     {
-      char *p = strchr (options, ',');
+      char *p = strchr (*options, ',');
       if (p)
 	*p++ = '\0';
       else
-	p = strchr (options, '\0');
+	p = strchr (*options, '\0');
 
-      for (opt *o = oopts;
-	   o < (oopts + (sizeof (oopts) / sizeof (oopts[0])));
-	   o++)
-	if (strcmp (options, o->name) == 0)
-	  {
-	    if (o->clear)
-	      flags &= ~o->val;
-	    else
-	      flags |= o->val;
-	    goto gotit;
-	  }
-      system_printf ("invalid fstab option - '%s'", options);
-      return false;
-
-    gotit:
-      options = p;
+      key.name = *options;
+      opt *o = (opt *) bsearch (&key, oopts,
+				sizeof oopts / sizeof (opt),
+				sizeof (opt), compare_flags);
+      if (!o)
+	{
+	  if (!external)
+	    system_printf ("invalid fstab option - '%s'", *options);
+	  return false;
+	}
+      if (o->clear)
+	flags &= ~o->val;
+      else
+	flags |= o->val;
+      *options = p;
     }
   return true;
+}
+
+extern "C" char *
+fstab_list_flags ()
+{
+  size_t len = 0;
+  opt *o;
+
+  for (o = oopts; o < (oopts + (sizeof (oopts) / sizeof (oopts[0]))); o++)
+    len += strlen (o->name) + 1;
+  char *buf = (char *) malloc (len);
+  if (buf)
+    {
+      char *bp = buf;
+      for (o = oopts; o < (oopts + (sizeof (oopts) / sizeof (oopts[0]))); o++)
+	{
+	  bp = stpcpy (bp, o->name);
+	  *bp++ = ',';
+	}
+      *--bp = '\0';
+    }
+  return buf;
 }
 
 bool
@@ -974,8 +1133,22 @@ mount_info::from_fstab_line (char *line, bool user)
   unsigned mount_flags = MOUNT_SYSTEM | MOUNT_BINARY;
   if (!strcmp (fs_type, "cygdrive"))
     mount_flags |= MOUNT_NOPOSIX;
-  if (!read_flags (c, mount_flags))
+  if (!fstab_read_flags (&c, mount_flags, false))
     return true;
+  if (mount_flags & MOUNT_BIND)
+    {
+      /* Prepend root path to bound path. */
+      char *bound_path = native_path;
+      device dev;
+      unsigned flags = 0;
+      native_path = (char *) alloca (PATH_MAX);
+      int error = conv_to_win32_path (bound_path, native_path, dev, &flags);
+      if (error || strlen (native_path) >= MAX_PATH)
+	return true;
+      if ((mount_flags & ~MOUNT_SYSTEM) == (MOUNT_BIND | MOUNT_BINARY))
+	mount_flags = (MOUNT_BIND | flags)
+		      & ~(MOUNT_IMMUTABLE | MOUNT_AUTOMATIC);
+    }
   if (user)
     mount_flags &= ~MOUNT_SYSTEM;
   if (!strcmp (fs_type, "cygdrive"))
@@ -1276,7 +1449,7 @@ mount_info::add_item (const char *native, const char *posix,
 
   if (nativeerr || posixerr)
     {
-      set_errno (nativeerr?:posixerr);
+      set_errno (nativeerr ?: posixerr);
       return -1;
     }
 
@@ -1399,6 +1572,25 @@ mount_info::del_item (const char *path, unsigned flags)
 
 /************************* mount_item class ****************************/
 
+/* Order must be identical to mount.h, enum fs_info_type. */
+fs_names_t fs_names[] = {
+    { "none", false },
+    { "vfat", true },
+    { "ntfs", true },
+    { "smbfs", false },
+    { "nfs", false },
+    { "netapp", false },
+    { "iso9660", true },
+    { "udf", true },
+    { "csc-cache", false },
+    { "sunwnfs", false },
+    { "unixfs", false },
+    { "mvfs", false },
+    { "cifs", false },
+    { "nwfs", false },
+    { "ncfsd", false }
+};
+
 static mntent *
 fillout_mntent (const char *native_path, const char *posix_path, unsigned flags)
 {
@@ -1431,31 +1623,13 @@ fillout_mntent (const char *native_path, const char *posix_path, unsigned flags)
   tmp_pathbuf tp;
   UNICODE_STRING unat;
   tp.u_get (&unat);
-  get_nt_native_path (native_path, unat);
+  get_nt_native_path (native_path, unat, false);
   if (append_bs)
     RtlAppendUnicodeToString (&unat, L"\\");
   mntinfo.update (&unat, NULL);
 
-  /* Order must be identical to mount.h, enum fs_info_type. */
-  const char *fs_names[] = {
-    "none",
-    "vfat",
-    "ntfs",
-    "smbfs",
-    "nfs",
-    "netapp",
-    "iso9660",
-    "udf",
-    "csc-cache",
-    "sunwnfs",
-    "unixfs",
-    "mvfs",
-    "cifs",
-    "nwfs"
-  };
-
   if (mntinfo.what_fs () > 0 && mntinfo.what_fs () < max_fs_type)
-    strcpy (_my_tls.locals.mnt_type, fs_names[mntinfo.what_fs ()]);
+    strcpy (_my_tls.locals.mnt_type, fs_names[mntinfo.what_fs ()].name);
   else
     strcpy (_my_tls.locals.mnt_type, mntinfo.fsname ());
 
@@ -1482,6 +1656,12 @@ fillout_mntent (const char *native_path, const char *posix_path, unsigned flags)
   if (flags & MOUNT_NOACL)
     strcat (_my_tls.locals.mnt_opts, (char *) ",noacl");
 
+  if (flags & MOUNT_DOS)
+    strcat (_my_tls.locals.mnt_opts, (char *) ",dos");
+
+  if (flags & MOUNT_IHASH)
+    strcat (_my_tls.locals.mnt_opts, (char *) ",ihash");
+
   if (flags & MOUNT_NOPOSIX)
     strcat (_my_tls.locals.mnt_opts, (char *) ",posix=0");
 
@@ -1493,6 +1673,9 @@ fillout_mntent (const char *native_path, const char *posix_path, unsigned flags)
 
   if (flags & (MOUNT_AUTOMATIC | MOUNT_CYGDRIVE))
     strcat (_my_tls.locals.mnt_opts, (char *) ",auto");
+
+  if (flags & (MOUNT_BIND))
+    strcat (_my_tls.locals.mnt_opts, (char *) ",bind");
 
   ret.mnt_opts = _my_tls.locals.mnt_opts;
 
@@ -1593,9 +1776,32 @@ mount (const char *win32_path, const char *posix_path, unsigned flags)
   else if (!*win32_path)
     set_errno (EINVAL);
   else
-    res = mount_table->add_item (win32_path, posix_path, flags);
+    {
+      char *w32_path = (char *) win32_path;
+      if (flags & MOUNT_BIND)
+	{
+	  /* Prepend root path to bound path. */
+	  tmp_pathbuf tp;
+	  device dev;
 
-  syscall_printf ("%d = mount (%s, %s, %p)", res, win32_path, posix_path, flags);
+	  unsigned conv_flags = 0;
+	  const char *bound_path = w32_path;
+
+	  w32_path = tp.c_get ();
+	  int error = mount_table->conv_to_win32_path (bound_path, w32_path,
+						       dev, &conv_flags);
+	  if (error || strlen (w32_path) >= MAX_PATH)
+	    return true;
+	  if ((flags & ~MOUNT_SYSTEM) == (MOUNT_BIND | MOUNT_BINARY))
+	    flags = (MOUNT_BIND | conv_flags)
+		    & ~(MOUNT_IMMUTABLE | MOUNT_AUTOMATIC);
+	}
+      /* Make sure all mounts are user mounts, even those added via mount -a. */
+      flags &= ~MOUNT_SYSTEM;
+      res = mount_table->add_item (w32_path, posix_path, flags);
+    }
+
+  syscall_printf ("%R = mount(%s, %s, %p)", res, win32_path, posix_path, flags);
   return res;
 }
 
@@ -1630,7 +1836,7 @@ cygwin_umount (const char *path, unsigned flags)
   if (!(flags & MOUNT_CYGDRIVE))
     res = mount_table->del_item (path, flags & ~MOUNT_SYSTEM);
 
-  syscall_printf ("%d = cygwin_umount (%s, %d)", res,  path, flags);
+  syscall_printf ("%R = cygwin_umount(%s, %d)", res,  path, flags);
   return res;
 }
 
@@ -1666,4 +1872,155 @@ extern "C" int
 endmntent (FILE *)
 {
   return 1;
+}
+
+static bool
+get_volume_path_names_for_volume_name (LPCWSTR vol, LPWSTR mounts)
+{
+  DWORD len;
+  if (GetVolumePathNamesForVolumeNameW (vol, mounts, NT_MAX_PATH, &len))
+    return true;
+
+  /* Windows 2000 doesn't have GetVolumePathNamesForVolumeNameW.
+     Just assume that mount points are not longer than MAX_PATH. */
+  WCHAR drives[MAX_PATH], dvol[MAX_PATH], mp[MAX_PATH + 3];
+  if (!GetLogicalDriveStringsW (MAX_PATH, drives))
+    return false;
+  for (PWCHAR drive = drives; *drive; drive = wcschr (drive, '\0') + 1)
+    {
+      if (!GetVolumeNameForVolumeMountPointW (drive, dvol, MAX_PATH))
+	continue;
+      if (!wcscasecmp (vol, dvol))
+	mounts = wcpcpy (mounts, drive) + 1;
+      wcscpy (mp, drive);
+      HANDLE h = FindFirstVolumeMountPointW (dvol, mp + 3, MAX_PATH);
+      if (h == INVALID_HANDLE_VALUE)
+	continue;
+      do
+	{
+	  if (GetVolumeNameForVolumeMountPointW (mp, dvol, MAX_PATH))
+	    if (!wcscasecmp (vol, dvol))
+	      mounts = wcpcpy (mounts, drive) + 1;
+	}
+      while (FindNextVolumeMountPointW (h, mp, MAX_PATH));
+      FindVolumeMountPointClose (h);
+    }
+  *mounts = L'\0';
+  return true;
+}
+
+dos_drive_mappings::dos_drive_mappings ()
+: mappings(0)
+{
+  tmp_pathbuf tp;
+  wchar_t vol[64]; /* Long enough for Volume GUID string */
+  wchar_t *devpath = tp.w_get ();
+  wchar_t *mounts = tp.w_get ();
+
+  /* Iterate over all volumes, fetch the first path from the list of
+     DOS paths the volume is mounted to, or use the GUID volume path
+     otherwise. */
+  HANDLE sh = FindFirstVolumeW (vol, 64);
+  if (sh == INVALID_HANDLE_VALUE)
+    debug_printf ("FindFirstVolumeW, %E");
+  else
+    do
+      {
+	/* Skip drives which are not mounted. */
+	if (!get_volume_path_names_for_volume_name (vol, mounts)
+	    || mounts[0] == L'\0')
+	  continue;
+	*wcsrchr (vol, L'\\') = L'\0';
+	if (QueryDosDeviceW (vol + 4, devpath, NT_MAX_PATH))
+	  {
+	    /* The DOS drive mapping can be another symbolic link.  If so,
+	       the mapping won't work since the section name is the name
+	       after resolving all symlinks.  Resolve symlinks here, too. */
+	    for (int syml_cnt = 0; syml_cnt < SYMLOOP_MAX; ++syml_cnt)
+	      {
+		UNICODE_STRING upath;
+		OBJECT_ATTRIBUTES attr;
+		NTSTATUS status;
+		HANDLE h;
+
+		RtlInitUnicodeString (&upath, devpath);
+		InitializeObjectAttributes (&attr, &upath,
+					    OBJ_CASE_INSENSITIVE, NULL, NULL);
+		status = NtOpenSymbolicLinkObject (&h, SYMBOLIC_LINK_QUERY,
+						   &attr);
+		if (!NT_SUCCESS (status))
+		  break;
+		RtlInitEmptyUnicodeString (&upath, devpath, (NT_MAX_PATH - 1)
+							    * sizeof (WCHAR));
+		status = NtQuerySymbolicLinkObject (h, &upath, NULL);
+		NtClose (h);
+		if (!NT_SUCCESS (status))
+		  break;
+		devpath[upath.Length / sizeof (WCHAR)] = L'\0';
+	      }
+	    mapping *m = new mapping ();
+	    if (m)
+	      {
+		m->dospath = wcsdup (mounts);
+		m->ntdevpath = wcsdup (devpath);
+		if (!m->dospath || !m->ntdevpath)
+		  {
+		    free (m->dospath);
+		    free (m->ntdevpath);
+		    delete m;
+		    continue;
+		  }
+		m->doslen = wcslen (m->dospath);
+		m->dospath[--m->doslen] = L'\0'; /* Drop trailing backslash */
+		m->ntlen = wcslen (m->ntdevpath);
+		m->next = mappings;
+		mappings = m;
+	      }
+	  }
+	else
+	  debug_printf ("Unable to determine the native mapping for %ls "
+			"(error %lu)", vol, GetLastError ());
+      }
+    while (FindNextVolumeW (sh, vol, 64));
+    FindVolumeClose (sh);
+}
+
+wchar_t *
+dos_drive_mappings::fixup_if_match (wchar_t *path)
+{
+  /* Check for network drive first. */
+  if (!wcsncmp (path, L"\\Device\\Mup\\", 12))
+    {
+      path += 10;
+      path[0] = L'\\';
+      return path;
+    }
+  /* Then test local drives. */
+  for (mapping *m = mappings; m; m = m->next)
+    if (!wcsncmp (m->ntdevpath, path, m->ntlen))
+      {
+	wchar_t *tmppath;
+
+	if (m->ntlen > m->doslen)
+	  wcsncpy (path += m->ntlen - m->doslen, m->dospath, m->doslen);
+	else if ((tmppath = wcsdup (path + m->ntlen)) != NULL)
+	  {
+	    wcpcpy (wcpcpy (path, m->dospath), tmppath);
+	    free (tmppath);
+	  }
+	break;
+      }
+  return path;
+}
+
+dos_drive_mappings::~dos_drive_mappings ()
+{
+  mapping *n = 0;
+  for (mapping *m = mappings; m; m = n)
+    {
+      n = m->next;
+      free (m->dospath);
+      free (m->ntdevpath);
+      delete m;
+    }
 }

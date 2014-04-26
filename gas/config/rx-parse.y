@@ -331,7 +331,7 @@ statement :
 	      { B2 (0x60, 0); FE ($3, 8, 4); F ($5, 12, 4); }
 	    else
 	      /* This is really an add, but we negate the immediate.  */
-	      { B2 (0x38, 0); F ($5, 8, 4); F ($5, 12, 4); NIMM ($3, 6); } } /* ? */
+	      { B2 (0x70, 0); F ($5, 8, 4); F ($5, 12, 4); NIMM ($3, 6); } }
 
 	| CMP '#' EXPR ',' REG
 	  { if (rx_uintop ($3, 4))
@@ -1170,6 +1170,8 @@ rx_lex (void)
     return 0;
 
   if (ISALPHA (*rx_lex_start)
+      || (rx_pid_register != -1 && memcmp (rx_lex_start, "%pidreg", 7) == 0)
+      || (rx_gp_register != -1 && memcmp (rx_lex_start, "%gpreg", 6) == 0)
       || (*rx_lex_start == '.' && ISALPHA (rx_lex_start[1])))
     {
       unsigned int i;
@@ -1182,6 +1184,28 @@ rx_lex (void)
 	;
       save = *e;
       *e = 0;
+
+      if (strcmp (rx_lex_start, "%pidreg") == 0)
+	{
+	  {
+	    rx_lval.regno = rx_pid_register;
+	    *e = save;
+	    rx_lex_start = e;
+	    rx_last_token = REG;
+	    return REG;
+	  }
+	}
+
+      if (strcmp (rx_lex_start, "%gpreg") == 0)
+	{
+	  {
+	    rx_lval.regno = rx_gp_register;
+	    *e = save;
+	    rx_lex_start = e;
+	    rx_last_token = REG;
+	    return REG;
+	  }
+	}
 
       if (rx_last_token == 0)
 	for (ci = 0; ci < NUM_CONDITION_OPCODES; ci ++)
@@ -1253,7 +1277,7 @@ rx_lex (void)
 }
 
 int
-rx_error (char * str)
+rx_error (const char * str)
 {
   int len;
 
@@ -1480,6 +1504,13 @@ displacement (expressionS exp, int msize)
 	  O2 (exp);
 	  return 2;
 	}
+    }
+
+  if (exp.X_op == O_subtract)
+    {
+      exp.X_md = BFD_RELOC_RX_DIFF;
+      O2 (exp);
+      return 2;
     }
 
   if (exp.X_op != O_constant)

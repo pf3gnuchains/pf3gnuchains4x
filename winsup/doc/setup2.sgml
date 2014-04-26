@@ -1,36 +1,34 @@
 <sect1 id="setup-env"><title>Environment Variables</title>
 
-<para>
-You may wish to specify settings of several important environment
-variables that affect Cygwin's operation.  Some of these settings need
-to be in effect prior to launching the initial Cygwin session (before
-starting your bash shell, for instance).  They should therefore be set
-in the Windows environment; all Windows environment variables are
-imported when Cygwin starts.  Such settings can be
-placed in a .bat file.  An initial file is named Cygwin.bat and is created
-in the Cygwin root directory that you specified during setup.  Note that
-the "Cygwin" option of the Start Menu points to Cygwin.bat.  Edit
-Cygwin.bat to your liking or create your own .bat files to start
-Cygwin processes.</para>
+<sect2 id="setup-env-ov"><title>Overview</title>
 
 <para>
-The <envar>CYGWIN</envar> variable is used to configure many global
-settings for the Cygwin runtime system.  Initially you can leave
-<envar>CYGWIN</envar> unset or set it to <literal>tty</literal> (e.g.
-to support job control with ^Z etc...) using a syntax like this in the
-DOS shell, before launching bash.</para>
+All Windows environment variables are imported when Cygwin starts.
+Apart from that, you may wish to specify settings of several important
+environment variables that affect Cygwin's operation.</para>
+
+<para>
+The <envar>CYGWIN</envar> variable is used to configure a few global
+settings for the Cygwin runtime system.  Typically you can leave
+<envar>CYGWIN</envar> unset, but if you want to set one ore more
+options, you can set it using a syntax like this, depending on the shell
+in which you're setting it.  Here is an example in CMD syntax:</para>
 
 <screen>
-<prompt>C:\&gt;</prompt> <userinput>set CYGWIN=tty notitle glob</userinput>
+<prompt>C:\&gt;</prompt> <userinput>set CYGWIN=error_start:C:\cygwin\bin\gdb.exe glob</userinput>
 </screen>
 
 <para>
+This is, of course, just an example.  For the recognized settings of the
+<envar>CYGWIN</envar> environment variable, see
+<xref linkend="using-cygwinenv"></xref>.
+</para>
+
+<para>
 Locale support is controlled by the <envar>LANG</envar> and
-<envar>LC_xxx</envar> environment variables.  You can set all of them
-but Cygwin itself only honors the variables <envar>LC_ALL</envar>,
-<envar>LC_CTYPE</envar>, and <envar>LANG</envar>, in this order, according
-to the POSIX standard.  The first one found rules.  For a more detailed
-description see <xref linkend="setup-locale"></xref>.
+<envar>LC_xxx</envar> environment variables.  Since Cygwin 1.7.2, all of
+them are honored and have a meaning.  For a more detailed description see
+<xref linkend="setup-locale"></xref>.
 </para>
 
 <para>
@@ -96,6 +94,34 @@ export TEMP=/tmp
 </screen>
 </para>
 
+</sect2>
+
+<sect2 id="setup-env-win32"><title>Restricted Win32 environment</title>
+
+<para>There is a restriction when calling Win32 API functions which
+require a fully set up application environment.  Cygwin maintains its own
+environment in POSIX style.  The Win32 environment is usually stripped
+to a bare minimum and not at all kept in sync with the Cygwin POSIX
+environment.</para>
+
+<para>If you need the full Win32 environment set up in a Cygwin process,
+you have to call</para>
+
+<screen>
+#include &lt;sys/cygwin.h&gt;
+
+cygwin_internal (CW_SYNC_WINENV);
+</screen>
+
+<para>to synchronize the Win32 environment with the Cygwin environment.
+Note that this only synchronizes the Win32 environment once with the
+Cygwin environment.  Later changes using the <function>setenv</function>
+or <function>putenv</function> calls are not reflected in the Win32
+environment.  In these cases, you have to call the aforementioned
+<function>cygwin_internal</function> call again.</para>
+
+</sect2>
+
 </sect1>
 
 <sect1 id="setup-maxmem"><title>Changing Cygwin's Maximum Memory</title>
@@ -104,65 +130,60 @@ export TEMP=/tmp
 Cygwin's heap is extensible.  However, it does start out at a fixed size
 and attempts to extend it may run into memory which has been previously
 allocated by Windows.  In some cases, this problem can be solved by
-adding an entry in the either the <literal>HKEY_LOCAL_MACHINE</literal>
-(to change the limit for all users) or
-<literal>HKEY_CURRENT_USER</literal> (for just the current user) section
-of the registry.  </para>
+changing a field in the file header which is utilized by Cygwin since
+version 1.7.10 to keep the initial size of the application heap.  If the
+field contains 0, which is the default, the application heap defaults to
+a size of 384 Megabyte.  If the field is set to any other value between 4 and
+2048, Cygwin tries to reserve as much Megabytes for the application heap.
+The field used for this is the "LoaderFlags" field in the NT-specific
+PE header structure (<literal>(IMAGE_NT_HEADER)->OptionalHeader.LoaderFlags</literal>).</para>
 
 <para>
-Add the <literal>DWORD</literal> value <literal>heap_chunk_in_mb</literal> 
-and set it to the desired memory limit in decimal MB. It is preferred to do 
-this in Cygwin using the <command>regtool</command> program included in the 
-Cygwin package.
-(For more information about <command>regtool</command> or the other Cygwin 
-utilities, see <xref linkend="using-utils"></xref> or use the
-<literal>--help</literal> option of each util.)  You should always be careful 
-when using <command>regtool</command> since damaging your system registry can 
-result in an unusable system.  This example sets memory limit to 1024 MB:
+This value can be changed for any executable by using a more recent version
+of the <command>peflags</command> tool from the <literal>rebase</literal>
+Cygwin package.  Example:
 
 <screen>
-regtool -i set /HKLM/Software/Cygwin/heap_chunk_in_mb 1024
-regtool -v list /HKLM/Software/Cygwin
+$ peflags --cygwin-heap foo.exe
+foo.exe: initial Cygwin heap size: 0 (0x0) MB
+$ peflags --cygwin-heap=500 foo.exe
+foo.exe: initial Cygwin heap size: 500 (0x1f4) MB
 </screen>
 </para>
 
 <para>
-Exit all running Cygwin processes and restart them. Memory can be allocated up 
-to the size of the system swap space minus any the size of any running 
-processes. The system swap should be at least as large as the physically 
-installed RAM and can be modified under the System category of the 
-Control Panel.  
+Heap memory can be allocated up to the size of the biggest available free
+block in the processes virtual memory (VM).  By default, the VM per process
+is 2 GB for 32 processes.  To get more VM for a process, the executable
+must have the "large address aware" flag set in the file header.  You can
+use the aforementioned <command>peflags</command> tool to set this flag.
+On 64 bit systems this results in a 4 GB VM for a process started from that
+executable.  On 32 bit systems you also have to prepare the system to allow
+up to 3 GB per process.  See the Microsoft article
+<ulink url="http://msdn.microsoft.com/en-us/library/bb613473%28VS.85%29.aspx">4-Gigabyte Tuning</ulink>
+for more information.
 </para>
 
+<note>
 <para>
-Here is a small program written by DJ Delorie that tests the 
-memory allocation limit on your system:
+Older Cygwin releases only supported a global registry setting to
+change the initial heap size for all Cygwin processes.  This setting is
+not used anymore.  However, if you're running an older Cygwin release
+than 1.7.10, you can add the <literal>DWORD</literal> value
+<literal>heap_chunk_in_mb</literal> and set it to the desired memory limit
+in decimal MB.  You have to stop all Cygwin processes for this setting to
+have any effect.  It is preferred to do this in Cygwin using the
+<command>regtool</command> program included in the Cygwin package.
+(see <xref linkend="regtool"></xref>) This example sets the memory limit
+to 1024 MB for all Cygwin processes (use HKCU instead of HKLM if you
+want to set this only for the current user):
 
 <screen>
-main()
-{
-  unsigned int bit=0x40000000, sum=0;
-  char *x;
-  
-  while (bit > 4096) 
-  {
-    x = malloc(bit);
-    if (x)
-    sum += bit;
-    bit >>= 1;
-  }
-  printf("%08x bytes (%.1fMb)\n", sum, sum/1024.0/1024.0);
-  return 0;
-}
+$ regtool -i set /HKLM/Software/Cygwin/heap_chunk_in_mb 1024
+$ regtool -v list /HKLM/Software/Cygwin
 </screen>
-
-You can compile this program using:
-<screen>
-gcc max_memory.c -o max_memory.exe
-</screen>
-
-Run the program and it will output the maximum amount of allocatable memory.
 </para>
+</note>
 
 </sect1>
 
@@ -188,8 +209,8 @@ if there is no ISO 639-1 code for the language (for instance, "Lower Sorbian"),
 a three character string per ISO 639-3.</para>
 
 <para>"TERRITORY" is an uppercase two character string per ISO 3166, charset is
-one of a list of supported character sets, and the modifier doesn't matter
-here (though it might for some applications).  If you're interested in the
+one of a list of supported character sets.  The modifier doesn't matter
+here (though some are recognized, see below).  If you're interested in the
 exact description, you can find it in the online publication of the POSIX
 manual pages on the homepage of the
 <ulink url="http://www.opengroup.org/">Open Group</ulink>.</para>
@@ -202,6 +223,25 @@ manual pages on the homepage of the
   "ko_KR.eucKR"    language = korean, territory = South Korea, charset = eucKR
   "syr_SY"         language = Syriac, territory = Syria, default charset
 </screen>
+
+<para>
+If the locale specifier does not follow the above form, Cygwin checks
+if the locale is one of the locale aliases defined in the file
+<filename>/usr/share/locale/locale.alias</filename>.  If so, and if
+the replacement localename is supported by the underlying Windows,
+the locale is accepted, too.  So, given the default content of the
+<filename>/usr/share/locale/locale.alias</filename> file, the below
+examples would be valid locale specifiers as well.
+</para>
+
+<screen>
+  "catalan"        defined as "ca_ES.ISO-8859-1" in locale.alias
+  "japanese"       defined as "ja_JP.eucJP"      in locale.alias
+  "turkish"        defined as "tr_TR.ISO-8859-9" in locale.alias
+</screen>
+
+<para>The file <filename>/usr/share/locale/locale.alias</filename> is
+provided by the gettext package under Cygwin.</para>
 
 <para>
 At application startup, the application's locale is set to the default
@@ -255,35 +295,65 @@ charset.  The Cygwin DLL itself, however, will nevertheless use the locale
 set in the environment (or the "C.UTF-8" default locale) for converting
 filenames etc.</para>
 
-<para>When the locale set in the environment specifies an ASCII charset,
+<para>When the locale in the environment specifies an ASCII charset,
 for example "C" or "en_US.ASCII", Cygwin will still use UTF-8
 under the hood to translate filenames.  This allows for easier
 interoperability with applications running in the default "C.UTF-8" locale.
 </para>
 
 <para>
-Right now the language and territory, as well as the modifier, are not
-important to Cygwin, except to fix a single problem.  There's a class of
-characters in the Unicode character set, called the "CJK Ambiguous Width
-Character set".  For these characters the width returned by the
-wcwidth/wcswidth function is usually 1.  This is often a problem in
-East-Asian languages, which historically use character sets in which
-these characters have a width of 2.  Kind of explains why they are
-called "ambiguous"...</para>
+Starting with Cygwin 1.7.2, the language and territory are used to
+fetch locale-dependent information from Windows.  If the language and
+territory are not known to Windows, the <function>setlocale</function>
+function fails.</para>
 
-<para>
-The problem has been fixed like this.  wcwidth/wcswidth usually
-return 1 as the width of these characters.  However, if the language is
-specifed as "ja" (Japanese), "ko" (Korean), or "zh" (Chinese), wcwidth
-returns 2 for these characters.  Unfortunately this isn't correct in
-all circumstances, so the user can specify the modifier "@cjknarrow",
-which modifies the behaviour of wcwidth/wcswidth to return 1 for the
-ambiguous width characters to return 1 even in those languages.</para>
+<para>The following modifiers are recognized.  Any other modifier is simply
+ignored for now.</para>
 
-<para>
-Other than that, the only important part so far is the character set.
+<itemizedlist mark="bullet">
 
-How does that work?</para>
+<listitem><para>
+For locales which use the Euro (EUR) as currency, the modifier "@euro"
+can be added to enforce usage of the ISO-8859-15 character set, which
+includes a character for the "Euro" currency sign.
+</para></listitem>
+
+<listitem><para>
+The default script used for all Serbian language locales (sr_BA, sr_ME, sr_RS,
+and the deprecated sr_CS and sr_SP) is cyrillic.  With the "@latin" modifier
+it gets switched to the latin script with the respective collation behaviour.
+</para></listitem>
+
+<listitem><para>
+The default charset of the "be_BY" locale (Belarusian/Belarus) is CP1251.
+With the "@latin" modifier it's UTF-8.
+</para></listitem>
+
+<listitem><para>
+The default charset of the "tt_RU" locale (Tatar/Russia) is ISO-8859-5.
+With the "@iqtelif" modifier it's UTF-8.
+</para></listitem>
+
+<listitem><para>
+The default charset of the "uz_UZ" locale (Uzbek/Uzbekistan) is ISO-8859-1.
+With the "@cyrillic" modifier it's UTF-8.
+</para></listitem>
+
+<listitem><para>
+There's a class of characters in the Unicode character set, called the
+"CJK Ambiguous Width" characters.  For these characters, the width
+returned by the wcwidth/wcswidth functions is usually 1.  This can be a
+problem with East-Asian languages, which historically use character sets
+where these characters have a width of 2.  Therefore, wcwidth/wcswidth
+return 2 as the width of these characters when an East-Asian charset such
+as GBK or SJIS is selected, or when UTF-8 is selected and the language is
+specified as "zh" (Chinese), "ja" (Japanese), or "ko" (Korean).  This is
+not correct in all circumstances, hence the locale modifier "@cjknarrow"
+can be used to force wcwidth/wcswidth to return 1 for the ambiguous width
+characters.
+</para></listitem>
+
+</itemizedlist>
 
 </sect2>
 
@@ -296,32 +366,48 @@ Assume that you've set one of the aforementioned environment variables to some
 valid POSIX locale value, other than "C" and "POSIX".  Assume further that
 you're living in Japan.  You might want to use the language code "ja" and the
 territory "JP", thus setting, say, <envar>LANG</envar> to "ja_JP".  You didn't
-set a character set, so what will Cygwin use now?  Easy!  It will use the
-default Windows ANSI codepage of your system, if it's supported by Cygwin.
-Hopefully Cygwin supports all relevant default ANSI codepages...</para>
+set a character set, so what will Cygwin use now?  Starting with Cygwin 1.7.2,
+the default character set is determined by the default Windows ANSI codepage
+for this language and territory.  Cygwin uses a character set which is the
+typical Unix-equivalent to the Windows ANSI codepage.  For instance:</para>
 
-<note><para>For a list of supported character sets, see
-<xref linkend="setup-locale-charsetlist"></xref>
-</para></note>
+<screen>
+  "en_US"		ISO-8859-1
+  "el_GR"		ISO-8859-7
+  "pl_PL"		ISO-8859-2
+  "pl_PL@euro"		ISO-8859-15
+  "ja_JP"		EUCJP
+  "ko_KR"		EUCKR
+  "te_IN"		UTF-8
+</screen>
 </listitem>
 
 <listitem><para>
-You don't want to use the default Windows codepage as character set?
-In that case you have to specify the charset explicitly.  For instance,
-assume you're from Italy and don't want to use the Italian default Windows
-ANSI codepage 1252, but the more portable ISO-8859-15 character set.
-What you can do, for instance, is to set the <envar>LANG</envar> variable
-in the <filename>C:\cygwin\Cygwin.bat</filename> file which is the batch file
-to start a Cygwin session from the "Cygwin" desktop shortcut.</para>
+You don't want to use the default character set?  In that case you have to
+specify the charset explicitly.  For instance, assume you're from Japan and
+don't want to use the japanese default charset EUC-JP, but the Windows
+default charset SJIS.  What you can do, for instance, is to set the
+<envar>LANG</envar> variable in the <command>mintty</command> Cygwin Terminal
+in the "Text" section of its "Options" dialog.  If you're starting your
+Cygwin session via a batch file or a shortcut to a batch file, you can also
+just set LANG there:</para>
 
 <screen>
   @echo off
 
   C:
   chdir C:\cygwin\bin
-  set LANG=it_IT.ISO-8859-15
+  set LANG=ja_JP.SJIS
   bash --login -i
 </screen>
+
+<note><para>For a list of locales supported by your Windows machine, use the new
+<command>locale -a</command> command, which is part of the Cygwin package.
+For a description see <xref linkend="locale"></xref></para></note>
+
+<note><para>For a list of supported character sets, see
+<xref linkend="setup-locale-charsetlist"></xref>
+</para></note>
 </listitem>
 
 <listitem><para>
@@ -350,19 +436,19 @@ every Unicode character.</emphasis></para>
 
 <sect2 id="setup-locale-console"><title>The Windows Console character set</title>
 
-<para>Most of the time the Windows console is used to run Cygwin applications.
-While terminal emulations like <command>xterm</command> or
-<command>mintty</command> have a distinct way to set the character set
+<para>Sometimes the Windows console is used to run Cygwin applications.
+While terminal emulations like the Cygwin Terminal <command>mintty</command>
+or <command>xterm</command> have a distinct way to set the character set
 used for in- and output, the Windows console hasn't such a way, since it's
 not an application in its own right.</para>
 
 <para>This problem is solved in Cygwin as follows.  When a Cygwin
 process is started in a Windows console (either explicitly from cmd.exe,
-or implicitly by, for instance, clicking on the Cygwin desktop icon, or
-running the Cygwin.bat file), the Console character set is determined by the
-setting of the aforementioned internationalization environment variables,
-the same way as described in <xref linkend="setup-locale-how"></xref>.
-</para>
+or implicitly by, for instance, running the
+<filename>C:\cygwin\Cygwin.bat</filename> batch file), the Console character
+set is determined by the setting of the aforementioned
+internationalization environment variables, the same way as described in
+<xref linkend="setup-locale-how"></xref>.  </para>
 
 <para>What is that good for?  Why not switch the console character set with
 the applications requirements?  After all, the application knows if it uses
@@ -380,10 +466,10 @@ problem.</para>
 <sect2 id="setup-locale-problems"><title>Potential Problems when using Locales</title>
 
 <para>
-You can set the above internationalization variables not only in
-<filename>Cygwin.bat</filename> or in the Windows environment, but also
-in your Cygwin shell on the fly, even switch to yet another character
-set, and yet another.  In bash for instance:</para>
+You can set the above internationalization variables not only when
+starting the first Cygwin process, but also in your Cygwin shell on the
+fly, even switch to yet another character set, and yet another.  In bash
+for instance:</para>
 
 <screen>
   <prompt>bash$</prompt> export LC_CTYPE="nl_BE.UTF-8"
@@ -432,25 +518,6 @@ entries are useful to cygwin: 932/SJIS, 936/GBK, 949/EUC-KR, 950/Big5,
 
 </sect2>
 
-<sect2 id="setup-locale-missing"><title>What does not work?</title>
-
-<para>
-Except for <envar>LC_ALL</envar>, <envar>LC_CTYPE</envar>,
-and <envar>LANG</envar>, all other LC_xxx environment variables,
-<envar>LC_COLLATE</envar>, <envar>LC_MESSAGES</envar>,
-<envar>LC_MONETARY</envar>, <envar>LC_NUMERIC</envar>,
-and <envar>LC_TIME</envar>, are ignored right now.  This means, while Cygwin
-supports different character sets, it does <emphasis>not</emphasis> support
-real localization so far.  There's no support for locale-specific monetary
-symbols, for a decimalpoint other than '.', no support for native time
-formats, and no support for native language sorting orders.
-</para>
-
-<para>Cygwin's internationalization support is work in progress and we would
-be glad for coding help in this area.</para>
-
-</sect2>
- 
 <sect2 id="setup-locale-charsetlist"><title>List of supported character sets</title>
 
 <para>Last but not least, here's the list of currently supported character
@@ -486,6 +553,8 @@ of the "CPxxx" style charsets, always use them with the trailing "CP".</para>
 
 <screen>
     Charset               Codepage
+    -------------------   -------------------------------------------
+    ASCII                 20127 (US_ASCII)
 
     CP437                   437 (OEM United States)
     CP720                   720 (DOS Arabic)
@@ -499,6 +568,7 @@ of the "CPxxx" style charsets, always use them with the trailing "CP".</para>
     CP862                   862 (OEM Hebrew)
     CP866                   866 (OEM Russian)
     CP874                   874 (ANSI/OEM Thai)
+    CP932		    932 (Shift_JIS, not exactly identical to SJIS)
     CP1125                 1125 (OEM Ukraine)
     CP1250                 1250 (ANSI Central European)
     CP1251                 1251 (ANSI Cyrillic)
@@ -526,15 +596,20 @@ of the "CPxxx" style charsets, always use them with the trailing "CP".</para>
     ISO-8859-15           28605 (ISO-8859-15)
     ISO-8859-16             -   (not available)
 
+    Big5                    950 (ANSI/OEM Traditional Chinese)
+    EUCCN or euc-CN         936 (ANSI/OEM Simplified Chinese)
+    EUCJP or euc-JP       20932 (EUC Japanese)
+    EUCKR or euc-KR         949 (EUC Korean)
+    GB2312                  936 (ANSI/OEM Simplified Chinese)
+    GBK                     936 (ANSI/OEM Simplified Chinese)
+    GEORGIAN-PS             -   (not available)
     KOI8-R                20866 (KOI8-R Russian Cyrillic)
     KOI8-U                21866 (KOI8-U Ukrainian Cyrillic)
-    SJIS                    932 (ANSI/OEM Japanese)
-    GBK                     936 (ANSI/OEM Simplified Chinese)
-    Big5                    950 (ANSI/OEM Traditional Chinese)
-    eucJP                 20932 (EUC Japanese)
-    eucKR                   949 (EUC Korean)
+    PT154                   -   (not available)
+    SJIS                    -   (not available, almost, but not exactly CP932)
+    TIS620 or TIS-620       874 (ANSI/OEM Thai)
 
-    UTF-8 or UTF8         65001 (UTF-8)
+    UTF-8 or utf8         65001 (UTF-8)
 </screen>
 
 </sect2>

@@ -25,6 +25,7 @@ Usage: cygcheck [-v] [-h] PROGRAM
        cygcheck --disable-unique-object-names Cygwin-DLL
        cygcheck --show-unique-object-names Cygwin-DLL
        cygcheck -h
+
 List system information, check installed packages, or query package database.
 
 At least one command option or a PROGRAM is required, as shown above.
@@ -270,16 +271,20 @@ Usage: cygpath (-d|-m|-u|-w|-t TYPE) [-f FILE] [OPTION]... NAME...
        cygpath [-c HANDLE] 
        cygpath [-ADHOPSW] 
        cygpath [-F ID] 
+
 Convert Unix and Windows format paths, or output system path information
 
 Output type options:
+
   -d, --dos             print DOS (short) form of NAMEs (C:\PROGRA~1\)
   -m, --mixed           like --windows, but with regular slashes (C:/WINNT)
   -M, --mode            report on mode of file (currently binmode or textmode)
   -u, --unix            (default) print Unix form of NAMEs (/cygdrive/c/winnt)
   -w, --windows         print Windows form of NAMEs (C:\WINNT)
   -t, --type TYPE       print TYPE form: 'dos', 'mixed', 'unix', or 'windows'
+
 Path conversion options:
+
   -a, --absolute        output absolute path
   -l, --long-name       print Windows long form of NAMEs (with -w, -m only)
   -p, --path            NAME is a PATH list (i.e., '/bin:/usr/bin')
@@ -289,7 +294,9 @@ Path conversion options:
                         or one of the reserved words ANSI, OEM, or UTF8.
                         If this option is missing, cygpath defaults to the
                         character set defined by the current locale.
+
 System information:
+
   -A, --allusers        use `All Users' instead of current user for -D, -P
   -D, --desktop         output `Desktop' directory and exit
   -H, --homeroot        output `Profiles' directory (home root) and exit
@@ -298,13 +305,15 @@ System information:
   -S, --sysdir          output system directory and exit
   -W, --windir          output `Windows' directory and exit
   -F, --folder ID       output special folder with numeric ID and exit
+
 Other options:
+
   -f, --file FILE       read FILE for input; use - to read from STDIN
   -o, --option          read options from FILE as well (for use with --file)
   -c, --close HANDLE    close HANDLE (for use in captured process)
   -i, --ignore          ignore missing argument
   -h, --help            output usage information and exit
-  -v, --version         output version information and exit
+  -V, --version         output version information and exit
 </screen>
 
 <para>The <command>cygpath</command> program is a utility that
@@ -410,12 +419,13 @@ other formats.</para>
 
 <screen>
 Usage: dumper [OPTION] FILENAME WIN32PID
+
 Dump core from WIN32PID to FILENAME.core
 
 -d, --verbose  be verbose while dumping
 -h, --help     output help information and exit
 -q, --quiet    be quiet while dumping (default)
--v, --version  output version information and exit
+-V, --version  output version information and exit
 </screen>
 
 <para>The <command>dumper</command> utility can be used to create a
@@ -454,10 +464,59 @@ the same directories as on the machine where the core dump was created.
 
 </sect2>
 
+<sect2 id="getconf"><title>getconf</title>
+
+<screen>
+Usage: getconf [-v specification] variable_name [pathname]
+       getconf -a [pathname]
+
+Get configuration values
+
+  -v specification     Indicate specific version for which configuration
+                       values shall be fetched.
+  -a, --all            Print all known configuration values
+
+Other options:
+
+  -h, --help           This text
+  -V, --version        Print program version and exit
+</screen>
+
+<para>The <command>getconf</command> utility prints the value of the
+configuration variable specified by <literal>variable_name</literal>.
+If no <literal>pathname</literal> is given, <command>getconf</command>
+serves as a wrapper for the <literal>confstr</literal> and
+<literal>sysconf</literal> functions, supporting the symbolic constants
+defined in the <literal>limits.h</literal> and <literal>unistd.h</literal>
+headers, without their respective <literal>_CS_</literal> or
+<literal>_SC_</literal> prefixes.
+</para>
+
+<para>If <literal>pathname</literal> is given, <command>getconf</command>
+prints the value of the configuration variable for the specified pathname.
+In this form, <command>getconf</command> serves as a wrapper for the
+<literal>pathconf</literal> function, supporting the symbolic constants defined
+in the <literal>unistd.h</literal> header, without the <literal>_PC_</literal> 
+prefix. </para>
+
+<para>If you specify the <literal>-v</literal> option, the parameter
+denotes a specification for which the value of the configuration variable
+should be printed. Note that the only specifications supported by Cygwin
+are <literal>POSIX_V7_ILP32_OFFBIG</literal> and the legacy
+<literal>POSIX_V6_ILP32_OFFBIG</literal> and
+<literal>XBS5_ILP32_OFFBIG</literal> equivalents.</para>
+
+<para>Use the <literal>-a</literal> option to print a list of all available
+configuration variables for the system, or given <literal>pathname</literal>,
+and their values.</para>
+
+</sect2>
+
 <sect2 id="getfacl"><title>getfacl</title>
 
 <screen>
 Usage: getfacl [-adn] FILE [FILE2...]
+
 Display file and directory access control lists (ACLs).
 
   -a, --all      display the filename, the owner, the group, and
@@ -466,7 +525,7 @@ Display file and directory access control lists (ACLs).
                  the default ACL of the directory, if it exists
   -h, --help     output usage information and exit
   -n, --noname   display user and group IDs instead of names
-  -v, --version  output version information and exit
+  -V, --version  output version information and exit
 
 When multiple files are specified on the command line, a blank
 line separates the ACLs for each file.
@@ -506,13 +565,14 @@ The format for ACL output is as follows:
 <screen>
 Usage: kill [-f] [-signal] [-s signal] pid1 [pid2 ...]
        kill -l [signal]
+
 Send signals to processes
 
  -f, --force     force, using win32 interface if necessary
  -l, --list      print a list of signal names
  -s, --signal    send signal (use kill --list for a list)
  -h, --help      output usage information and exit
- -v, --version   output version information and exit
+ -V, --version   output version information and exit
 </screen>
 
 <para>The <command>kill</command> program allows you to send arbitrary
@@ -585,8 +645,10 @@ SIGSTOP     17    sendable stop signal not from tty
 SIGTSTP     18    stop signal from tty
 SIGCONT     19    continue a stopped process
 SIGCHLD     20    to parent on child stop or exit
+SIGCLD      20    System V name for SIGCHLD
 SIGTTIN     21    to readers pgrp upon background tty read
 SIGTTOU     22    like TTIN for output if (tp-&gt;t_local&amp;LTOSTOP)
+SIGIO       23    input/output possible
 SIGPOLL     23    System V name for SIGIO
 SIGXCPU     24    exceeded CPU time limit
 SIGXFSZ     25    exceeded file size limit
@@ -594,8 +656,179 @@ SIGVTALRM   26    virtual time alarm
 SIGPROF     27    profiling time alarm
 SIGWINCH    28    window changed
 SIGLOST     29    resource lost (eg, record-lock lost)
+SIGPWR      29    power failure
 SIGUSR1     30    user defined signal 1
 SIGUSR2     31    user defined signal 2
+</screen>
+
+</sect2>
+
+<sect2 id="ldd"><title>ldd</title>
+
+<screen>
+Usage: ldd [OPTION]... FILE...
+
+Print shared library dependencies
+
+  -h, --help              print this help and exit
+  -V, --version           print version information and exit
+  -r, --function-relocs   process data and function relocations
+                          (currently unimplemented)
+  -u, --unused            print unused direct dependencies
+                          (currently unimplemented)
+  -v, --verbose           print all information
+                          (currently unimplemented)
+</screen>
+
+<para><command>ldd</command> prints the shared libraries (DLLs) an executable
+or DLL is linked against.  No modifying option is implemented yet.</para>
+
+</sect2>
+
+<sect2 id="locale"><title>locale</title>
+
+<screen>
+Usage: locale [-amvhV]
+   or: locale [-ck] NAME
+   or: locale [-usfnU]
+
+Get locale-specific information.
+
+System information:
+
+  -a, --all-locales    List all available supported locales
+  -m, --charmaps       List all available character maps
+  -v, --verbose        More verbose output
+
+Modify output format:
+
+  -c, --category-name  List information about given category NAME
+  -k, --keyword-name   Print information about given keyword NAME
+
+Default locale information:
+
+  -u, --user           Print locale of user's default UI language
+  -s, --system         Print locale of system default UI language
+  -f, --format         Print locale of user's regional format settings
+                       (time, numeric &amp; monetary)
+  -n, --no-unicode     Print system default locale for non-Unicode programs
+  -U, --utf            Attach \".UTF-8\" to the result
+
+Other options:
+
+  -h, --help           This text
+  -V, --version        Print program version and exit
+</screen>
+
+<para><command>locale</command> without parameters prints information about
+the current locale environment settings.</para>
+
+<para>The <literal>-u</literal>, <literal>-s</literal>, <literal>-f</literal>,
+and <literal>-n</literal> options can be used to request the various Windows
+locale settings.  The purpose is to use this command in scripts to set the
+POSIX locale variables.</para>
+
+<para>The <literal>-u</literal> option prints the current user's Windows
+UI locale to stdout.  In Windows Vista and Windows 7 this setting is called
+the "Display Language"; there was no corresponding user setting in Windows XP.
+The <literal>-s</literal> option prints the systems default instead.
+The <literal>-f</literal> option prints the user's setting for time, date,
+number and currency.  That's equivalent to the setting in the "Formats" or
+"Regional Options" tab in the "Region and Language" or "Regional and Language
+Options" dialog.  With the <literal>-U</literal> option
+<command>locale</command> appends a ".UTF-8".</para>
+
+<para>Usage example:</para>
+
+<screen>
+bash$ export LANG=$(locale -uU)
+bash$ echo $LANG
+en_US.UTF-8
+bash$ export LC_TIME=$(locale -fU)
+bash$ echo $LC_TIME
+de_DE.UTF-8
+</screen>
+
+<para>The <literal>-a</literal> option is helpful to learn which locales
+are supported by your Windows machine.  It prints all available locales
+and the allowed modifiers.  Example:</para>
+
+<screen>
+bash$ locale -a
+C
+C.utf8
+POSIX
+af_ZA
+af_ZA.utf8
+am_ET
+am_ET.utf8
+...
+be_BY
+be_BY.utf8
+be_BY@latin
+...
+ca_ES
+ca_ES.utf8
+ca_ES@euro
+catalan
+...
+</screen>
+
+<para>The <literal>-v</literal> option prints more detailed information about
+each available locale.  Example:</para>
+
+<screen>
+bash$ locale -av
+locale: af_ZA           archive: /cygdrive/c/Windows/system32/kernel32.dll
+-------------------------------------------------------------------------------
+ language | Afrikaans
+territory | South Africa
+  codeset | ISO-8859-1
+
+locale: af_ZA.utf8      archive: /cygdrive/c/Windows/system32/kernel32.dll
+-------------------------------------------------------------------------------
+ language | Afrikaans
+territory | South Africa
+  codeset | UTF-8
+
+...
+
+locale: ca_ES@euro      archive: /cygdrive/c/Windows/system32/kernel32.dll
+-------------------------------------------------------------------------------
+ language | Catalan
+territory | Spain
+  codeset | ISO-8859-15
+
+locale: catalan         archive: /usr/share/locale/locale.alias
+-------------------------------------------------------------------------------
+ language | Catalan
+territory | Spain
+  codeset | ISO-8859-1
+
+...
+</screen>
+
+<para>The <literal>-m</literal> option prints the names of the available
+charmaps supported by Cygwin to stdout.</para>
+
+<para>Otherwise, if arguments are given, <command>locale</command> prints
+the values assigned to these arguments.  Arguments can be names of locale
+categories (for instance: LC_CTYPE, LC_MONETARY), or names of keywords
+supported in the locale categories (for instance: thousands_sep, charmap).
+The <literal>-c</literal> option prints additionally the name of the category.
+The <literal>-k</literal> option prints additionally the name of the keyword.
+Example:</para>
+
+<screen>
+bash$ locale -ck LC_MESSAGES
+LC_MESSAGES
+yesexpr="^[yY]"
+noexpr="^[nN]"
+yesstr="yes"
+nostr="no"
+messages-codeset="UTF-8"
+bash$ locale noexpr
+^[nN]
 </screen>
 
 </sect2>
@@ -604,9 +837,11 @@ SIGUSR2     31    user defined signal 2
 
 <screen>
 Usage: mkgroup [OPTION]...
+
 Print /etc/group file to stdout
 
 Options:
+
    -l,--local [machine[,offset]]
                            print local groups with gid offset offset
                            (from local machine if no machine specified)
@@ -635,7 +870,7 @@ Options:
    -s,--no-sids            (ignored)
    -u,--users              (ignored)
    -h,--help               print this message
-   -v,--version            print version information and exit
+   -V,--version            print version information and exit
 
 Default is to print local groups on stand-alone machines, plus domain
 groups on domain controllers and domain member machines.
@@ -699,9 +934,11 @@ up as a group in <command>ls -l</command> output.
 
 <screen>
 Usage: mkpasswd [OPTIONS]...
+
 Print /etc/passwd file to stdout
 
 Options:
+
    -l,--local [machine[,offset]]
                            print local user accounts with uid offset offset
                            (from local machine if no machine specified)
@@ -723,16 +960,16 @@ Options:
                            one of -l, -L, -d, -D must be specified, too
    -p,--path-to-home path  use specified path instead of user account home dir
                            or /home prefix
-   -m,--no-mount           don't use mount points for home dir
    -U,--unix userlist      additionally print UNIX users when using -l or -L\
                            on a UNIX Samba server
                            userlist is a comma-separated list of usernames
                            or uid ranges (root,-25,50-100).
                            (enumerating large ranges can take a long time!)
    -s,--no-sids            (ignored)
+   -m,--no-mount           (ignored)
    -g,--local-groups       (ignored)
    -h,--help               displays this message
-   -v,--version            version information and exit
+   -V,--version            version information and exit
 
 Default is to print local accounts on stand-alone machines, domain accounts
 on domain controllers and domain member machines.
@@ -776,11 +1013,7 @@ domain/group separator, you can specify another separator using the
 <literal>-S</literal> option, similar to the <command>mkgroup</command>.
 The <literal>-o</literal> option allows for special cases
 (such as multiple domains) where the UIDs might match otherwise.
-The <literal>-m</literal> option bypasses the current
-mount table so that, for example, two users who have a Windows home 
-directory of H: could mount them differently.  For more information on
-SIDs, see <xref linkend="ntsec"></xref> in the Cygwin User's Guide.  The
-<literal>-p</literal> option causes <command>mkpasswd</command> to
+The <literal>-p</literal> option causes <command>mkpasswd</command> to
 use the specified prefix instead of the account home dir or <literal>/home/
 </literal>. For example, this command:
 
@@ -808,6 +1041,7 @@ up as file owners in <command>ls -l</command> output.
 Usage: mount [OPTION] [&lt;win32path&gt; &lt;posixpath&gt;]
        mount -a
        mount &lt;posixpath&gt;
+
 Display information about mounted filesystems, or mount a filesystem
 
   -a, --all                     mount all filesystems mentioned in fstab
@@ -819,7 +1053,7 @@ Display information about mounted filesystems, or mount a filesystem
                                 and cygdrive prefixes
   -o, --options X[,X...]        specify mount options
   -p, --show-cygdrive-prefix    show user and/or system cygdrive path prefix
-  -v, --version                 output version information and exit
+  -V, --version                 output version information and exit
 </screen>
 
 <para>The <command>mount</command> program is used to map your drives
@@ -841,22 +1075,22 @@ will display the current mount table for you.</para>
 <title>Displaying the current set of mount points</title>
 <screen>
 <prompt>$</prompt> <userinput>mount</userinput>
-c:\cygwin\bin on /usr/bin type ntfs (binary)
-c:\cygwin\lib on /usr/lib type ntfs (binary)
-c:\cygwin on / type ntfs (binary)
-c: on /c type ntfs (binary,user,noumount)
-d: on /d type fat (binary,user,noumount)
+C:/cygwin/bin on /usr/bin type ntfs (binary)
+C:/cygwin/lib on /usr/lib type ntfs (binary)
+C:/cygwin on / type ntfs (binary)
+C: on /mnt/c type ntfs (binary,user,noumount)
+D: on /mnt/d type fat (binary,user,noumount)
 </screen>
 </example>
 
-<para>In this example, c:\cygwin is the POSIX root and D drive is mapped to
-<filename>/d</filename>.  Note that in this case, the root mount is a
-system-wide mount point that is visible to all users running Cygwin
-programs, whereas the <filename>/d</filename> mount is only visible
-to the current user.</para>
+<para>In this example, c:/cygwin is the POSIX root and the D drive is
+mapped to <filename>/mnt/d</filename>.  Note that in this case, the root
+mount is a system-wide mount point that is visible to all users running
+Cygwin programs, whereas the <filename>/mnt/d</filename> mount is only
+visible to the current user.</para>
 
 <para>The <command>mount</command> utility is also the mechanism for
-adding new mounts to the mount table.  The following example
+adding new mounts to the mount table in memory.  The following example
 demonstrates how to mount the directory
 <filename>//pollux/home/joe/data</filename> to <filename>/data</filename>
 for the duration of the current session.
@@ -871,11 +1105,11 @@ ls: /data: No such file or directory
 mount: warning - /data does not exist!
 <prompt>$</prompt> <userinput>mount</userinput>
 //pollux/home/joe/data on /data type smbfs (binary)
-c:/cygwin/bin on /usr/bin type ntfs (binary)
-c:/cygwin/lib on /usr/lib type ntfs (binary)
-c:/cygwin on / type ntfs (binary)
-c: on /c type ntfs (binary,user,noumount)
-d: on /d type fat (binary,user,noumount)
+C:/cygwin/bin on /usr/bin type ntfs (binary)
+C:/cygwin/lib on /usr/lib type ntfs (binary)
+C:/cygwin on / type ntfs (binary)
+C: on /c type ntfs (binary,user,noumount)
+D: on /d type fat (binary,user,noumount)
 </screen>
 </example>
 
@@ -896,8 +1130,23 @@ most of the options are duplicates of other mount flags):</para>
   acl        - Use the filesystem's access control lists (ACLs) to
                implement real POSIX permissions (default).
   binary     - Files default to binary mode (default).
+  bind       - Allows to remount part of the file hierarchy somewhere else.
+               Different from other mount calls, the first argument 
+	       specifies an absolute POSIX path, rather than a Win32 path.
+	       This POSIX path is remounted to the POSIX path specified as
+	       the second parameter.  The conversion to a Win32 path is done
+	       within Cygwin immediately at the time of the call.  Note that
+	       symlinks are ignored while performing this path conversion.
   cygexec    - Treat all files below mount point as cygwin executables.
+  dos        - Always convert leading spaces and trailing dots and spaces to
+	       characters in the UNICODE private use area.  This allows to use
+	       broken filesystems which only allow DOS filenames, even if they
+	       are not recognized as such by Cygwin.
   exec       - Treat all files below mount point as executable.
+  ihash      - Always fake inode numbers rather than using the ones returned
+	       by the filesystem.  This allows to use broken filesystems which
+	       don't return unambiguous inode numbers, even if they are not
+	       recognized as such by Cygwin.
   noacl      - Ignore ACLs and fake POSIX permissions.
   nosuid     - No suid files are allowed (currently unimplemented)
   notexec    - Treat all files below mount point as not executable.
@@ -939,6 +1188,16 @@ the mount point first, before you can add it again.  Please note that
 all such added mount points are added as user mount points, and that the
 rule that system mount points can't be removed or replaced in a running
 session still applies.</para>
+
+<para>To bind a POSIX path to another POSIX path, use the
+<literal>bind</literal> mount flag.</para>
+
+<screen>
+<prompt>$</prompt> <userinput>mount -o bind /var /usr/var</userinput>
+</screen>
+
+<para>This command makes the file hirarchy under <filename>/var</filename>
+additionally available under <filename>/usr/var</filename>.</para>
 
 <para>
 The <literal>-m</literal> option causes the <command>mount</command> utility
@@ -991,9 +1250,10 @@ automounted filesystems default to this set of options.  For instance
 
 <sect3 id="utils-limitations"><title>Limitations</title>
 
-<para>Limitations: there is a hard-coded limit of 30 mount
-points.  Also, although you can mount to pathnames that do not start
-with "/", there is no way to make use of such mount points.</para>
+<para>Limitations: there is a hard-coded limit of 64 mount points
+(up to Cygwin 1.7.9: 30 mount points).  Also, although you can mount
+to pathnames that do not start with "/", there is no way to make use
+of such mount points.</para>
 
 <para>Normally the POSIX mount point in Cygwin is an existing empty
 directory, as in standard UNIX. If this is the case, or if there is a
@@ -1029,6 +1289,7 @@ find <filename>mtpt</filename>.
 
 <screen>
 Usage: passwd [OPTION] [USER]
+
 Change USER's password or password attributes.
 
 User operations:
@@ -1060,7 +1321,7 @@ Other options:
   -S, --status             display password status for USER (locked, expired,
                            etc.) plus global system password settings.
   -h, --help               output usage information and exit.
-  -v, --version            output version information and exit.
+  -V, --version            output version information and exit.
 
 If no option is given, change USER's password.  If no user name is given,
 operate on current user.  System operations must not be mixed with user
@@ -1159,12 +1420,14 @@ drawbacks security-wise.  This is explained in more detail in
 
 <para>Please note that storing passwords in that registry area is a
 privileged operation which only administrative accounts are allowed to
-do.  If normal, non-admin users should be allowed to enter their
-passwords using <command>passwd -R</command>, it's required to run
-<command>cygserver</command> as a service under the LocalSystem account
-before running <command>passwd -R</command>.  This only affects storing
-passwords.  Using passwords in privileged processes does not require
-<command>cygserver</command> to run.</para>
+do.  Administrators can enter the password for other user accounts into
+the registry by specifying the username on the commandline.  If normal,
+non-admin users should be allowed to enter their passwords using
+<command>passwd -R</command>, it's required to run <command>cygserver</command>
+as a service under the LocalSystem account before running
+<command>passwd -R</command>.  This only affects storing passwords.  Using
+passwords in privileged processes does not require <command>cygserver</command>
+to run.</para>
 
 <para>Limitations: Users may not be able to change their password on
 some systems.</para>
@@ -1175,6 +1438,7 @@ some systems.</para>
 
 <screen>
 Usage: ps [-aefls] [-u UID]
+
 Report process status
 
  -a, --all       show processes of all users
@@ -1185,7 +1449,7 @@ Report process status
  -p, --process   show information for specified PID
  -s, --summary   show process summary
  -u, --user      list processes owned by UID
- -v, --version   output version information and exit
+ -V, --version   output version information and exit
  -W, --windows   show windows as well as cygwin processes
 With no options, ps outputs the long format by default
 </screen>
@@ -1236,9 +1500,11 @@ option.
 
 <screen>
 Usage: regtool [OPTION] (add|check|get|list|remove|unset|load|unload|save) KEY
+
 View or edit the Win32 registry
 
 Actions:
+
  add KEY\SUBKEY             add new SUBKEY
  check KEY                  exit 0 if KEY exists, 1 if not
  get KEY\VALUE              prints VALUE to stdout
@@ -1251,16 +1517,19 @@ Actions:
  save KEY\SUBKEY PATH       save SUBKEY into new hive PATH
 
 Options for 'list' Action:
+
  -k, --keys           print only KEYs
  -l, --list           print only VALUEs
  -p, --postfix        like ls -p, appends '\' postfix to KEY names
 
 Options for 'get' Action:
+
  -b, --binary         print REG_BINARY data as hex bytes
  -n, --none           print data as stream of bytes as stored in registry
  -x, --hex            print numerical data as hex numbers
 
 Options for 'set' Action:
+
  -b, --binary         set type to REG_BINARY (hex args or '-')
  -D, --dword-be       set type to REG_DWORD_BIG_ENDIAN
  -e, --expand-string  set type to REG_EXPAND_SZ
@@ -1271,9 +1540,11 @@ Options for 'set' Action:
  -s, --string         set type to REG_SZ
 
 Options for 'set' and 'unset' Actions:
+
  -K&lt;c&gt;, --key-separator[=]&lt;c&gt;  set key separator to &lt;c&gt; instead of '\'
 
 Other Options:
+
  -h, --help     output usage information and exit
  -q, --quiet    no error output, just nonzero return if KEY/VALUE missing
  -v, --verbose  verbose output, including VALUE contents when applicable
@@ -1402,6 +1673,7 @@ an alternate key/value separator character.
 <screen>
 Usage: setfacl [-r] (-f ACL_FILE | -s acl_entries) FILE...
        setfacl [-r] ([-d acl_entries] [-m acl_entries]) FILE...
+
 Modify file and directory access control lists (ACLs)
 
   -d, --delete     delete one or more specified ACL entries
@@ -1413,7 +1685,7 @@ Modify file and directory access control lists (ACLs)
   -s, --substitute substitute specified ACL entries for the
                    ACL of FILE
   -h, --help       output usage information and exit
-  -v, --version    output version information and exit
+  -V, --version    output version information and exit
 
 At least one of (-d, -f, -m, -s) must be specified
 </screen>
@@ -1547,10 +1819,33 @@ account currently.
 
 </sect2>
 
+<sect2 id="setmetamode"><title>setmetamode</title>
+
+<screen>
+Usage: setmetamode [metabit|escprefix]
+
+Get or set keyboard meta mode
+
+  Without argument, it shows the current meta key mode.
+  metabit|meta|bit     The meta key sets the top bit of the character.
+  escprefix|esc|prefix The meta key sends an escape prefix.
+
+Other options:
+
+  -h, --help           This text
+  -V, --version        Print program version and exit
+</screen>
+
+<para><command>setmetamode</command> can be used to determine and set the
+key code sent by the meta (aka <literal>Alt</literal>) key.</para>
+
+</sect2>
+
 <sect2 id="ssp"><title>ssp</title>
 
 <screen>
 Usage: ssp [options] low_pc high_pc command...
+
 Single-step profile COMMAND
 
  -c, --console-trace  trace every EIP value to the console. *Lots* slower.
@@ -1748,6 +2043,7 @@ $ ssp <literal>-v</literal> <literal>-s</literal> <literal>-l</literal> <literal
 <screen>
 Usage: strace.exe [OPTIONS] &lt;command-line&gt;
 Usage: strace.exe [OPTIONS] -p &lt;pid&gt;
+
 Trace system calls and signals
 
   -b, --buffer-size=SIZE       set size of output file buffer
@@ -1765,9 +2061,9 @@ Trace system calls and signals
   -t, --timestamp              use an absolute hh:mm:ss timestamp insted of 
                                the default microsecond timestamp.  Implies -d
   -T, --toggle                 toggle tracing in a process already being
-  -u, --usecs                  toggle printing of microseconds timestamp
                                traced. Requires -p &lt;pid&gt;
-  -v, --version                output version information and exit
+  -u, --usecs                  toggle printing of microseconds timestamp
+  -V, --version                output version information and exit
   -w, --new-window             spawn program under test in a new window
 
     MASK can be any combination of the following mnemonics and/or hex values
@@ -1777,24 +2073,27 @@ Trace system calls and signals
 
     Mnemonic Hex     Corresponding Def  Description
     =========================================================================
-    all      0x00001 (_STRACE_ALL)      All strace messages.
-    flush    0x00002 (_STRACE_FLUSH)    Flush output buffer after each message.
-    inherit  0x00004 (_STRACE_INHERIT)  Children inherit mask from parent.
-    uhoh     0x00008 (_STRACE_UHOH)     Unusual or weird phenomenon.
-    syscall  0x00010 (_STRACE_SYSCALL)  System calls.
-    startup  0x00020 (_STRACE_STARTUP)  argc/envp printout at startup.
-    debug    0x00040 (_STRACE_DEBUG)    Info to help debugging. 
-    paranoid 0x00080 (_STRACE_PARANOID) Paranoid info.
-    termios  0x00100 (_STRACE_TERMIOS)  Info for debugging termios stuff.
-    select   0x00200 (_STRACE_SELECT)   Info on ugly select internals.
-    wm       0x00400 (_STRACE_WM)       Trace Windows msgs (enable _strace_wm).
-    sigp     0x00800 (_STRACE_SIGP)     Trace signal and process handling.
-    minimal  0x01000 (_STRACE_MINIMAL)  Very minimal strace output.
-    exitdump 0x04000 (_STRACE_EXITDUMP) Dump strace cache on exit.
-    system   0x08000 (_STRACE_SYSTEM)   Serious error; goes to console and log.
-    nomutex  0x10000 (_STRACE_NOMUTEX)  Don't use mutex for synchronization.
-    malloc   0x20000 (_STRACE_MALLOC)   Trace malloc calls.
-    thread   0x40000 (_STRACE_THREAD)   Thread-locking calls.
+    all      0x000001 (_STRACE_ALL)      All strace messages.
+    flush    0x000002 (_STRACE_FLUSH)    Flush output buffer after each message.
+    inherit  0x000004 (_STRACE_INHERIT)  Children inherit mask from parent.
+    uhoh     0x000008 (_STRACE_UHOH)     Unusual or weird phenomenon.
+    syscall  0x000010 (_STRACE_SYSCALL)  System calls.
+    startup  0x000020 (_STRACE_STARTUP)  argc/envp printout at startup.
+    debug    0x000040 (_STRACE_DEBUG)    Info to help debugging. 
+    paranoid 0x000080 (_STRACE_PARANOID) Paranoid info.
+    termios  0x000100 (_STRACE_TERMIOS)  Info for debugging termios stuff.
+    select   0x000200 (_STRACE_SELECT)   Info on ugly select internals.
+    wm       0x000400 (_STRACE_WM)       Trace Windows msgs (enable _strace_wm).
+    sigp     0x000800 (_STRACE_SIGP)     Trace signal and process handling.
+    minimal  0x001000 (_STRACE_MINIMAL)  Very minimal strace output.
+    pthread  0x002000 (_STRACE_PTHREAD)	Pthread calls.
+    exitdump 0x004000 (_STRACE_EXITDUMP) Dump strace cache on exit.
+    system   0x008000 (_STRACE_SYSTEM)   Serious error; goes to console and log.
+    nomutex  0x010000 (_STRACE_NOMUTEX)  Don't use mutex for synchronization.
+    malloc   0x020000 (_STRACE_MALLOC)   Trace malloc calls.
+    thread   0x040000 (_STRACE_THREAD)   Thread-locking calls.
+    special  0x100000 (_STRACE_SPECIAL)  Special debugging printfs for
+                                         non-checked-in code
 </screen>
 
 <para>The <command>strace</command> program executes a program, and
@@ -1822,11 +2121,12 @@ This program is mainly useful for debugging the Cygwin DLL itself.</para>
 
 <screen>
 Usage: umount.exe [OPTION] [&lt;posixpath&gt;]
+
 Unmount filesystems
 
   -h, --help                    output usage information and exit
   -U, --remove-user-mounts      remove all user mounts
-  -v, --version                 output version information and exit
+  -V, --version                 output version information and exit
 </screen>
 
 <para>The <command>umount</command> program removes mounts from the

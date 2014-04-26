@@ -1,7 +1,7 @@
 /* signal.cc
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
    Written by Steve Chamberlain of Cygnus Support, sac@cygnus.com
    Significant changes by Sergey Okhapkin <sos@prospect.com.ru>
@@ -23,31 +23,12 @@ details. */
 #include "dtable.h"
 #include "cygheap.h"
 
-int sigcatchers;	/* FIXME: Not thread safe. */
-
 #define _SA_NORESTART	0x8000
 
-static int sigaction_worker (int, const struct sigaction *, struct sigaction *, bool)
+static int sigaction_worker (int, const struct sigaction *, struct sigaction *, bool, const char *)
   __attribute__ ((regparm (3)));
 
 #define sigtrapped(func) ((func) != SIG_IGN && (func) != SIG_DFL)
-
-static inline void
-set_sigcatchers (void (*oldsig) (int), void (*cursig) (int))
-{
-#ifdef DEBUGGING
-  int last_sigcatchers = sigcatchers;
-#endif
-  if (!sigtrapped (oldsig) && sigtrapped (cursig))
-    sigcatchers++;
-  else if (sigtrapped (oldsig) && !sigtrapped (cursig))
-    sigcatchers--;
-#ifdef DEBUGGING
-  if (last_sigcatchers != sigcatchers)
-    sigproc_printf ("last %d, old %d, cur %p, cur %p", last_sigcatchers,
-		    sigcatchers, oldsig, cursig);
-#endif
-}
 
 extern "C" _sig_func_ptr
 signal (int sig, _sig_func_ptr func)
@@ -74,80 +55,100 @@ signal (int sig, _sig_func_ptr func)
   gs.sa_handler = func;
   gs.sa_flags &= ~SA_SIGINFO;
 
-  set_sigcatchers (prev, func);
-
   syscall_printf ("%p = signal (%d, %p)", prev, sig, func);
   return prev;
 }
 
 extern "C" int
-nanosleep (const struct timespec *rqtp, struct timespec *rmtp)
+clock_nanosleep (clockid_t clk_id, int flags, const struct timespec *rqtp,
+		 struct timespec *rmtp)
 {
+  const bool abstime = (flags & TIMER_ABSTIME) ? true : false;
   int res = 0;
   sig_dispatch_pending ();
   pthread_testcancel ();
 
-  if ((unsigned int) rqtp->tv_nsec > 999999999)
+  if (rqtp->tv_sec < 0 || rqtp->tv_nsec < 0 || rqtp->tv_nsec > 999999999L)
+    return EINVAL;
+
+  /* Explicitly disallowed by POSIX. Needs to be checked first to avoid
+     being caught by the following test. */
+  if (clk_id == CLOCK_THREAD_CPUTIME_ID)
+    return EINVAL;
+
+  /* support for CPU-time clocks is optional */
+  if (CLOCKID_IS_PROCESS (clk_id) || CLOCKID_IS_THREAD (clk_id))
+    return ENOTSUP;
+
+  switch (clk_id)
     {
-      set_errno (EINVAL);
+    case CLOCK_REALTIME:
+    case CLOCK_MONOTONIC:
+      break;
+    default:
+      /* unknown or illegal clock ID */
+      return EINVAL;
+    }
+
+  LARGE_INTEGER timeout;
+
+  timeout.QuadPart = (LONGLONG) rqtp->tv_sec * NSPERSEC
+		     + ((LONGLONG) rqtp->tv_nsec + 99LL) / 100LL;
+
+  if (abstime)
+    {
+      struct timespec tp;
+
+      clock_gettime (clk_id, &tp);
+      /* Check for immediate timeout */
+      if (tp.tv_sec > rqtp->tv_sec
+	  || (tp.tv_sec == rqtp->tv_sec && tp.tv_nsec > rqtp->tv_nsec))
+	return 0;
+
+      if (clk_id == CLOCK_REALTIME)
+	timeout.QuadPart += FACTOR;
+      else
+	{
+	  /* other clocks need to be handled with a relative timeout */
+	  timeout.QuadPart -= tp.tv_sec * NSPERSEC + tp.tv_nsec / 100LL;
+	  timeout.QuadPart *= -1LL;
+	}
+    }
+  else /* !abstime */
+    timeout.QuadPart *= -1LL;
+
+  syscall_printf ("clock_nanosleep (%ld.%09ld)", rqtp->tv_sec, rqtp->tv_nsec);
+
+  int rc = cancelable_wait (signal_arrived, &timeout);
+  if (rc == WAIT_OBJECT_0)
+    {
+      _my_tls.call_signal_handler ();
+      res = EINTR;
+    }
+
+  /* according to POSIX, rmtp is used only if !abstime */
+  if (rmtp && !abstime)
+    {
+      rmtp->tv_sec = (time_t) (timeout.QuadPart / NSPERSEC);
+      rmtp->tv_nsec = (long) ((timeout.QuadPart % NSPERSEC) * 100LL);
+    }
+
+  syscall_printf ("%d = clock_nanosleep(%lu, %d, %ld.%09ld, %ld.%09.ld)",
+		  res, clk_id, flags, rqtp->tv_sec, rqtp->tv_nsec,
+		  rmtp ? rmtp->tv_sec : 0, rmtp ? rmtp->tv_nsec : 0);
+  return res;
+}
+
+extern "C" int
+nanosleep (const struct timespec *rqtp, struct timespec *rmtp)
+{
+  int res = clock_nanosleep (CLOCK_REALTIME, 0, rqtp, rmtp);
+  if (res != 0)
+    {
+      set_errno (res);
       return -1;
     }
-  unsigned int sec = rqtp->tv_sec;
-  DWORD resolution = gtod.resolution ();
-  bool done = false;
-  DWORD req;
-  DWORD rem;
-
-  while (!done)
-    {
-      /* Divide user's input into transactions no larger than 49.7
-         days at a time.  */
-      if (sec > HIRES_DELAY_MAX / 1000)
-        {
-          req = ((HIRES_DELAY_MAX + resolution - 1)
-                 / resolution * resolution);
-          sec -= HIRES_DELAY_MAX / 1000;
-        }
-      else
-        {
-          req = ((sec * 1000 + (rqtp->tv_nsec + 999999) / 1000000
-                  + resolution - 1) / resolution) * resolution;
-          sec = 0;
-          done = true;
-        }
-
-      DWORD end_time = gtod.dmsecs () + req;
-      syscall_printf ("nanosleep (%ld)", req);
-
-      int rc = cancelable_wait (signal_arrived, req);
-      if ((rem = end_time - gtod.dmsecs ()) > HIRES_DELAY_MAX)
-        rem = 0;
-      if (rc == WAIT_OBJECT_0)
-        {
-          _my_tls.call_signal_handler ();
-          set_errno (EINTR);
-          res = -1;
-          break;
-        }
-    }
-
-  if (rmtp)
-    {
-      rmtp->tv_sec = sec + rem / 1000;
-      rmtp->tv_nsec = (rem % 1000) * 1000000;
-      if (sec)
-        {
-          rmtp->tv_nsec += rqtp->tv_nsec;
-          if (rmtp->tv_nsec >= 1000000000)
-            {
-              rmtp->tv_nsec -= 1000000000;
-              rmtp->tv_sec++;
-            }
-        }
-    }
-
-  syscall_printf ("%d = nanosleep (%ld, %ld)", res, req, rem);
-  return res;
+  return 0;
 }
 
 extern "C" unsigned int
@@ -156,7 +157,7 @@ sleep (unsigned int seconds)
   struct timespec req, rem;
   req.tv_sec = seconds;
   req.tv_nsec = 0;
-  if (nanosleep (&req, &rem))
+  if (clock_nanosleep (CLOCK_REALTIME, 0, &req, &rem))
     return rem.tv_sec + (rem.tv_nsec > 0);
   return 0;
 }
@@ -167,14 +168,26 @@ usleep (useconds_t useconds)
   struct timespec req;
   req.tv_sec = useconds / 1000000;
   req.tv_nsec = (useconds % 1000000) * 1000;
-  int res = nanosleep (&req, NULL);
-  return res;
+  int res = clock_nanosleep (CLOCK_REALTIME, 0, &req, NULL);
+  if (res != 0)
+    {
+      set_errno (res);
+      return -1;
+    }
+  return 0;
 }
 
 extern "C" int
 sigprocmask (int how, const sigset_t *set, sigset_t *oldset)
 {
-  return handle_sigprocmask (how, set, oldset, _my_tls.sigmask);
+  int res = handle_sigprocmask (how, set, oldset, _my_tls.sigmask);
+  if (res)
+    {
+      set_errno (res);
+      res = -1;
+    }
+  syscall_printf ("%R = sigprocmask (%d, %p, %p)", res, set, oldset);
+  return res;
 }
 
 int __stdcall
@@ -184,13 +197,12 @@ handle_sigprocmask (int how, const sigset_t *set, sigset_t *oldset, sigset_t& op
   if (how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK)
     {
       syscall_printf ("Invalid how value %d", how);
-      set_errno (EINVAL);
-      return -1;
+      return EINVAL;
     }
 
   myfault efault;
   if (efault.faulted (EFAULT))
-    return -1;
+    return EFAULT;
 
   if (oldset)
     *oldset = opmask;
@@ -221,38 +233,51 @@ handle_sigprocmask (int how, const sigset_t *set, sigset_t *oldset, sigset_t& op
 int __stdcall
 _pinfo::kill (siginfo_t& si)
 {
+  int res;
+  DWORD this_process_state;
+  pid_t this_pid;
+
   sig_dispatch_pending ();
 
-  int res = 0;
-  bool sendSIGCONT;
+  if (exists ())
+    {
+      bool sendSIGCONT;
+      this_process_state = process_state;
+      if ((sendSIGCONT = (si.si_signo < 0)))
+	si.si_signo = -si.si_signo;
 
-  if (!exists ())
+      if (si.si_signo == 0)
+	res = 0;
+      else if ((res = sig_send (this, si)))
+	{
+	  sigproc_printf ("%d = sig_send, %E ", res);
+	  res = -1;
+	}
+      else if (sendSIGCONT)
+	{
+	  siginfo_t si2 = {0};
+	  si2.si_signo = SIGCONT;
+	  si2.si_code = SI_KERNEL;
+	  sig_send (this, si2);
+	}
+      this_pid = pid;
+    }
+  else if (si.si_signo == 0 && this && process_state == PID_EXITED)
+    {
+      this_process_state = process_state;
+      this_pid = pid;
+      res = 0;
+    }
+  else
     {
       set_errno (ESRCH);
-      return -1;
-    }
-
-  if ((sendSIGCONT = (si.si_signo < 0)))
-    si.si_signo = -si.si_signo;
-
-  DWORD this_process_state = process_state;
-  if (si.si_signo == 0)
-    /* ok */;
-  else if ((res = sig_send (this, si)))
-    {
-      sigproc_printf ("%d = sig_send, %E ", res);
+      this_process_state = 0;
+      this_pid = 0;
       res = -1;
     }
-  else if (sendSIGCONT)
-    {
-      siginfo_t si2 = {0};
-      si2.si_signo = SIGCONT;
-      si2.si_code = SI_KERNEL;
-      sig_send (this, si2);
-    }
 
-  syscall_printf ("%d = _pinfo::kill (%d, %d), process_state %p", res, pid,
-		  si.si_signo, this_process_state);
+  syscall_printf ("%d = _pinfo::kill (%d), pid %d, process_state %p", res,
+		  si.si_signo, this_pid, this_process_state);
   return res;
 }
 
@@ -273,12 +298,6 @@ kill0 (pid_t pid, siginfo_t& si)
       syscall_printf ("signal %d out of range", si.si_signo);
       return -1;
     }
-
-  /* Silently ignore stop signals from a member of orphaned process group.
-     FIXME: Why??? */
-  if (ISSTATE (myself, PID_ORPHANED) &&
-      (si.si_signo == SIGTSTP || si.si_signo == SIGTTIN || si.si_signo == SIGTTOU))
-    si.si_signo = 0;
 
   return (pid > 0) ? pinfo (pid)->kill (si) : kill_pgrp (-pid, si);
 }
@@ -340,7 +359,7 @@ kill_pgrp (pid_t pid, siginfo_t& si)
       set_errno (ESRCH);
       res = -1;
     }
-  syscall_printf ("%d = kill (%d, %d)", res, pid, si.si_signo);
+  syscall_printf ("%R = kill(%d, %d)", res, pid, si.si_signo);
   return res;
 }
 
@@ -371,63 +390,68 @@ abort (void)
 }
 
 static int
-sigaction_worker (int sig, const struct sigaction *newact, struct sigaction *oldact, bool isinternal)
+sigaction_worker (int sig, const struct sigaction *newact,
+		  struct sigaction *oldact, bool isinternal, const char *fnname)
 {
-  sig_dispatch_pending ();
-  /* check that sig is in right range */
-  if (sig < 0 || sig >= NSIG)
+  int res = -1;
+  myfault efault;
+  if (!efault.faulted (EFAULT))
     {
-      set_errno (EINVAL);
-      sigproc_printf ("signal %d, newact %p, oldact %p", sig, newact, oldact);
-      syscall_printf ("SIG_ERR = sigaction signal %d out of range", sig);
-      return -1;
-    }
-
-  struct sigaction oa = global_sigs[sig];
-
-  if (!newact)
-    sigproc_printf ("signal %d, newact %p, oa %p", sig, newact, oa, oa.sa_handler);
-  else
-    {
-      sigproc_printf ("signal %d, newact %p (handler %p), oa %p", sig, newact, newact->sa_handler, oa, oa.sa_handler);
-      if (sig == SIGKILL || sig == SIGSTOP)
+      sig_dispatch_pending ();
+      /* check that sig is in right range */
+      if (sig < 0 || sig >= NSIG)
+	set_errno (EINVAL);
+      else
 	{
-	  set_errno (EINVAL);
-	  return -1;
-	}
-      struct sigaction na = *newact;
-      struct sigaction& gs = global_sigs[sig];
-      if (!isinternal)
-	na.sa_flags &= ~_SA_INTERNAL_MASK;
-      gs = na;
-      if (!(gs.sa_flags & SA_NODEFER))
-	gs.sa_mask |= SIGTOMASK(sig);
-      if (gs.sa_handler == SIG_IGN)
-	sig_clear (sig);
-      if (gs.sa_handler == SIG_DFL && sig == SIGCHLD)
-	sig_clear (sig);
-      set_sigcatchers (oa.sa_handler, gs.sa_handler);
-      if (sig == SIGCHLD)
-	{
-	  myself->process_state &= ~PID_NOCLDSTOP;
-	  if (gs.sa_flags & SA_NOCLDSTOP)
-	    myself->process_state |= PID_NOCLDSTOP;
+	  struct sigaction oa = global_sigs[sig];
+
+	  if (!newact)
+	    sigproc_printf ("signal %d, newact %p, oa %p", sig, newact, oa, oa.sa_handler);
+	  else
+	    {
+	      sigproc_printf ("signal %d, newact %p (handler %p), oa %p", sig, newact, newact->sa_handler, oa, oa.sa_handler);
+	      if (sig == SIGKILL || sig == SIGSTOP)
+		{
+		  set_errno (EINVAL);
+		  goto out;
+		}
+	      struct sigaction na = *newact;
+	      struct sigaction& gs = global_sigs[sig];
+	      if (!isinternal)
+		na.sa_flags &= ~_SA_INTERNAL_MASK;
+	      gs = na;
+	      if (!(gs.sa_flags & SA_NODEFER))
+		gs.sa_mask |= SIGTOMASK(sig);
+	      if (gs.sa_handler == SIG_IGN)
+		sig_clear (sig);
+	      if (gs.sa_handler == SIG_DFL && sig == SIGCHLD)
+		sig_clear (sig);
+	      if (sig == SIGCHLD)
+		{
+		  myself->process_state &= ~PID_NOCLDSTOP;
+		  if (gs.sa_flags & SA_NOCLDSTOP)
+		    myself->process_state |= PID_NOCLDSTOP;
+		}
+	    }
+
+	    if (oldact)
+	      {
+		*oldact = oa;
+		oa.sa_flags &= ~_SA_INTERNAL_MASK;
+	      }
+	    res = 0;
 	}
     }
 
-  if (oldact)
-    {
-      *oldact = oa;
-      oa.sa_flags &= ~_SA_INTERNAL_MASK;
-    }
-
-  return 0;
+out:
+  syscall_printf ("%R = %s(%d, %p, %p)", res, fnname, sig, newact, oldact);
+  return res;
 }
 
 extern "C" int
 sigaction (int sig, const struct sigaction *newact, struct sigaction *oldact)
 {
-  return sigaction_worker (sig, newact, oldact, false);
+  return sigaction_worker (sig, newact, oldact, false, "sigaction");
 }
 
 extern "C" int
@@ -524,7 +548,7 @@ siginterrupt (int sig, int flag)
       act.sa_flags &= ~_SA_NORESTART;
       act.sa_flags |= SA_RESTART;
     }
-  return sigaction_worker (sig, &act, NULL, true);
+  return sigaction_worker (sig, &act, NULL, true, "siginterrupt");
 }
 
 extern "C" int
@@ -572,8 +596,10 @@ sigwaitinfo (const sigset_t *set, siginfo_t *info)
       __seterrno ();
       res = -1;
     }
+
+  _my_tls.event = NULL;
   CloseHandle (h);
-  sigproc_printf ("returning sig %d", res);
+  sigproc_printf ("returning signal %d", res);
   return res;
 }
 

@@ -1,5 +1,5 @@
 ; Generate .c/.h versions of main elements of cpu description file.
-; Copyright (C) 2000, 2001, 2002, 2003, 2005, 2009 Red Hat, Inc.
+; Copyright (C) 2000, 2001, 2002, 2003, 2005, 2009, 2010 Red Hat, Inc.
 ; This file is part of CGEN.
 
 ; ISA support code.
@@ -783,11 +783,7 @@ static void
    CGEN_CPU_OPEN_END:     terminates arguments
 
    ??? Simultaneous multiple isas might not make sense, but it's not (yet)
-   precluded.
-
-   ??? We only support ISO C stdargs here, not K&R.
-   Laziness, plus experiment to see if anything requires K&R - eventually
-   K&R will no longer be supported - e.g. GDB is currently trying this.  */
+   precluded.  */
 
 CGEN_CPU_DESC
 @arch@_cgen_cpu_open (enum cgen_cpu_open_arg arg_type, ...)
@@ -976,8 +972,13 @@ init_tables (void)
    ;		  "MODEL_"
    ;		  (append (map list (map obj:name (current-model-list))) '((max))))
    ;"#define MAX_MODELS ((int) MODEL_MAX)\n\n"
-   "/* Enums.  */\n\n"
-   (string-map gen-decl (current-enum-list))
+   (let ((enums (find (lambda (obj) (not (obj-has-attr? obj 'VIRTUAL)))
+		      (current-enum-list))))
+     (if (null? enums)
+	 ""
+	 (string-list
+	  "/* Enums.  */\n\n"
+	  (string-map gen-decl enums))))
    "/* Attributes.  */\n\n"
    (string-map gen-decl (current-attr-list))
    "/* Number of architecture variants.  */\n"

@@ -1,3 +1,31 @@
+2011-12-03  Mike Frysinger  <vapier@gentoo.org>
+
+	* aclocal.m4: New file.
+	* configure: Regenerate.
+
+2011-10-17  Mike Frysinger  <vapier@gentoo.org>
+
+	* configure.ac: Change include to common/acinclude.m4.
+
+2011-10-17  Mike Frysinger  <vapier@gentoo.org>
+
+	* configure.ac: Change AC_PREREQ to 2.64.  Delete AC_CONFIG_HEADER
+	call.  Replace common.m4 include with SIM_AC_COMMON.
+	* configure: Regenerate.
+
+2010-04-14  Mike Frysinger  <vapier@gentoo.org>
+
+	* interp.c (sim_write): Add const to buffer arg.
+
+2010-02-27  Jan Kratochvil  <jan.kratochvil@redhat.com>
+
+	* interp.c (sim_create_inferior): Fix crashes on zero PROG_BFD or ARGV.
+
+2010-02-03  Anthony Green  <green@moxielogic.com>
+
+	* interp.c (sim_resume): nop is 0x0f, and 0x00 is an illegal
+	instruction.
+
 2010-01-13  Anthony Green  <green@moxielogic.com>
 
 	* interp.c (sim_open): Add period to end of sentence in comment.

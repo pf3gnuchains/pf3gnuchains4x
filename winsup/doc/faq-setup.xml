@@ -58,7 +58,7 @@ Command Line Options:
  -D --download                          Download from internet
  -d --no-desktop                        Disable creation of desktop shortcut
  -h --help                              print help
- -K --pubkey                            Path to extra public key file (gpg format)
+ -K --pubkey                            URL of extra public key file (gpg format)
  -L --local-install                     Install from local directory
  -l --local-package-dir                 Local package directory
  -n --no-shortcuts                      Disable creation of desktop and start menu
@@ -222,8 +222,8 @@ to install <emphasis>everything</emphasis>, not just what it thinks you should h
 by default.
 </para>
 </listitem>
-<listitem><para>Now click on the ``View'' button (twice) until you get the
-``Partial'' view.  This shows exactly which packages are about to be
+<listitem><para>Now click on the ``View'' button (twice) until you get to the
+``Pending'' view.  This shows exactly which packages are about to be
 downloaded and installed.
 </para>
 </listitem>
@@ -245,7 +245,7 @@ updates to what you have already installed.  Then...
 </listitem>
 <listitem><para>Run Cygwin Setup again, and apply the above technique to get all
 new packages that would not be installed by default.  You can check
-the list in the Partial View before proceeding, in case there's
+the list in the ``Pending'' view before proceeding, in case there's
 something you really <emphasis>don't</emphasis> want.
 </para>
 </listitem>
@@ -364,7 +364,7 @@ character as a word delimiter.  Under certain circumstances, it is
 possible to get around this with various shell quoting mechanisms, but
 you are much better off if you can avoid the problem entirely.
 </para>
-<para>On Windows NT/2000/XP you have two choices:
+<para>You have two choices:
 </para><orderedlist>
 <listitem><para>You can rename the user in the Windows User Manager GUI and then
 run mkpasswd.
@@ -376,10 +376,6 @@ run mkpasswd.
 </listitem>
 </orderedlist>
 
-<para>On Windows 95/98/ME you can create a new user and run mkpasswd, 
-or you can delete the offending entry from /etc/passwd. 
-Cygwin will then use the name in the default entry with uid 500.
-</para>
 </answer></qandaentry>
 
 <qandaentry id="faq.setup.home">

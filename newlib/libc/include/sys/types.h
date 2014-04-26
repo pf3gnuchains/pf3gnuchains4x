@@ -98,6 +98,7 @@ typedef	unsigned long	u_long;
 
 typedef	unsigned short	ushort;		/* System V compatibility */
 typedef	unsigned int	uint;		/* System V compatibility */
+typedef	unsigned long	ulong;		/* System V compatibility */
 # endif	/*!_POSIX_SOURCE */
 
 #ifndef __clock_t_defined
@@ -171,12 +172,16 @@ typedef signed char pid_t;
 typedef int pid_t;
 #endif
 
+#if defined(__rtems__)
+typedef _mode_t mode_t;
+#endif
+
 #ifndef __CYGWIN__
 typedef	long key_t;
 #endif
 typedef _ssize_t ssize_t;
 
-#ifndef __CYGWIN__
+#if !defined(__CYGWIN__) && !defined(__rtems__)
 #ifdef __MS_types__
 typedef	char *	addr_t;
 typedef int mode_t;
@@ -296,39 +301,6 @@ typedef __uint32_t pthread_t;            /* identify a thread */
 #define PTHREAD_CREATE_DETACHED 0
 #define PTHREAD_CREATE_JOINABLE  1
 
-#if defined(__XMK__) || defined(__rtems__)
-/* The following defines are part of the X/Open System Interface (XSI). */
-
-/* This type of mutex does not detect deadlock. A thread attempting to relock this mutex without first unlocking 
- * it shall deadlock. Attempting to unlock a mutex locked by a different thread results in undefined behavior. 
- * Attempting to unlock an unlocked mutex results in undefined behavior. 
- */
-#define PTHREAD_MUTEX_NORMAL  1
-
-/* 
- * This type of mutex provides error checking. A thread attempting to relock this mutex without first unlocking 
- * it shall return with an error. A thread attempting to unlock a mutex which another thread has locked shall return 
- * with an error. A thread attempting to unlock an unlocked mutex shall return with an error. 
- */
-#define PTHREAD_MUTEX_ERRORCHECK  2 
-
-/* A thread attempting to relock this mutex without first unlocking it shall succeed in locking the mutex. 
- * The relocking deadlock which can occur with mutexes of type PTHREAD_MUTEX_NORMAL cannot occur with this type of mutex. 
- * Multiple locks of this mutex shall require the same number of unlocks to release the mutex before another thread can 
- * acquire the mutex. A thread attempting to unlock a mutex which another thread has locked shall return with an error. 
- * A thread attempting to unlock an unlocked mutex shall return with an error. 
- */
-#define PTHREAD_MUTEX_RECURSIVE  3
-
-/* Attempting to recursively lock a mutex of this type results in undefined behavior. Attempting to unlock a 
- * mutex of this type which was not locked by the calling thread results in undefined behavior. Attempting to 
- * unlock a mutex of this type which is not locked results in undefined behavior. An implementation may map this 
- * mutex to one of the other mutex types.
- */
-#define PTHREAD_MUTEX_DEFAULT  4 
-
-#endif /* defined(__XMK__) || defined(__rtems__) */
-
 #if defined(__XMK__)
 typedef struct pthread_attr_s {
   int contentionscope;
@@ -349,7 +321,9 @@ typedef struct {
   int inheritsched;
   int schedpolicy;
   struct sched_param schedparam;
-#endif /* !defined(__XMK__) */
+#if defined(__rtems__)
+  size_t guardsize;
+#endif
 
   /* P1003.4b/D8, p. 54 adds cputime_clock_allowed attribute.  */
 #if defined(_POSIX_THREAD_CPUTIME)
@@ -358,6 +332,8 @@ typedef struct {
   int  detachstate;
 
 } pthread_attr_t;
+
+#endif /* !defined(__XMK__) */
 
 #if defined(_POSIX_THREAD_PROCESS_SHARED)
 /* NOTE: P1003.1c/D10, p. 81 defines following values for process_shared.  */
@@ -382,12 +358,49 @@ typedef struct {
 
 /* Values for mutex type */
 
+/* The following defines are part of the X/Open System Interface (XSI). */
+
+/*
+ * This type of mutex does not detect deadlock. A thread attempting to
+ * relock this mutex without first unlocking it shall deadlock. Attempting
+ * to unlock a mutex locked by a different thread results in undefined
+ * behavior.  Attempting to unlock an unlocked mutex results in undefined
+ * behavior.
+ */
 #define PTHREAD_MUTEX_NORMAL     0
+
+/*
+ * A thread attempting to relock this mutex without first unlocking
+ * it shall succeed in locking the mutex.  The relocking deadlock which
+ * can occur with mutexes of type PTHREAD_MUTEX_NORMAL cannot occur with
+ * this type of mutex.  Multiple locks of this mutex shall require the
+ * same number of unlocks to release the mutex before another thread can
+ * acquire the mutex. A thread attempting to unlock a mutex which another
+ * thread has locked shall return with an error.  A thread attempting to
+ * unlock an unlocked mutex shall return with an error.
+ */
 #define PTHREAD_MUTEX_RECURSIVE  1
+
+/* 
+ * This type of mutex provides error checking. A thread attempting
+ * to relock this mutex without first unlocking it shall return with an
+ * error. A thread attempting to unlock a mutex which another thread has
+ * locked shall return with an error. A thread attempting to unlock an
+ * unlocked mutex shall return with an error.
+ */
 #define PTHREAD_MUTEX_ERRORCHECK 2
+
+/*
+ * Attempting to recursively lock a mutex of this type results
+ * in undefined behavior. Attempting to unlock a mutex of this type
+ * which was not locked by the calling thread results in undefined
+ * behavior. Attempting to unlock a mutex of this type which is not locked
+ * results in undefined behavior. An implementation may map this mutex to
+ * one of the other mutex types.
+ */
 #define PTHREAD_MUTEX_DEFAULT    3
 
-#endif
+#endif /* !defined(_UNIX98_THREAD_MUTEX_ATTRIBUTES) */
 
 #if defined(__XMK__)
 typedef unsigned int pthread_mutex_t;    /* identify a mutex */
@@ -396,62 +409,6 @@ typedef struct {
   int type;
 } pthread_mutexattr_t;
 
-
-#if defined(__XMK__)
-/* The following defines are part of the X/Open System Interface (XSI). */
-
-/* This type of mutex does not detect deadlock. A thread attempting to 
- * relock this mutex without first unlocking it shall deadlock. Attempting 
- * to unlock a mutex locked by a different thread results in undefined 
- * behavior.  Attempting to unlock an unlocked mutex results in undefined 
- * behavior. 
- */
-#define PTHREAD_MUTEX_NORMAL  1
-
-/* 
- * This type of mutex provides error checking. A thread attempting to 
- * relock this mutex without first unlocking it shall return with an error. 
- * A thread attempting to unlock a mutex which another thread has locked 
- * shall return with an error. A thread attempting to unlock an unlocked 
- * mutex shall return with an error. 
- */
-#define PTHREAD_MUTEX_ERRORCHECK  2 
-
-/* A thread attempting to relock this mutex without first unlocking it 
- * shall succeed in locking the mutex.  The relocking deadlock which can 
- * occur with mutexes of type PTHREAD_MUTEX_NORMAL cannot occur with this 
- * type of mutex.  Multiple locks of this mutex shall require the same 
- * number of unlocks to release the mutex before another thread can 
- * acquire the mutex. A thread attempting to unlock a mutex which another 
- * thread has locked shall return with an error.  A thread attempting to 
- * unlock an unlocked mutex shall return with an error. 
- */
-#define PTHREAD_MUTEX_RECURSIVE  3
-
-/* Attempting to recursively lock a mutex of this type results in 
- * undefined behavior. Attempting to unlock a mutex of this type which was 
- * not locked by the calling thread results in undefined behavior. 
- * Attempting to unlock a mutex of this type which is not locked results 
- * in undefined behavior. An implementation may map this mutex to one of 
- * the other mutex types.
- */
-#define PTHREAD_MUTEX_DEFAULT  4 
-
-typedef struct pthread_attr_s {
-  int contentionscope;
-  struct sched_param schedparam;
-  int  detachstate;
-  void *stackaddr;
-  size_t stacksize;
-} pthread_attr_t;
-
-#define PTHREAD_STACK_MIN       200
-
-#endif /* defined(__XMK__) */
-
-typedef struct {
-    int type;
-} pthread_mutexattr_t;
 #else /* !defined(__XMK__) */
 typedef __uint32_t pthread_mutex_t;      /* identify a mutex */
 
@@ -510,13 +467,13 @@ typedef struct {
 
 /* POSIX Spin Lock Types */
 
+#if !defined (__CYGWIN__)
 #if defined(_POSIX_SPIN_LOCKS)
 typedef __uint32_t pthread_spinlock_t;        /* POSIX Spin Lock Object */
 #endif /* defined(_POSIX_SPIN_LOCKS) */
 
 /* POSIX Reader/Writer Lock Types */
 
-#if !defined (__CYGWIN__)
 #if defined(_POSIX_READER_WRITER_LOCKS)
 typedef __uint32_t pthread_rwlock_t;         /* POSIX RWLock Object */
 typedef struct {

@@ -1,7 +1,7 @@
 /* sys/termios.h
 
    Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2005, 2006,
-   2007 Red Hat, Inc.
+   2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -19,6 +19,7 @@ details. */
 #define	TIOCMBIC	0x5417
 #define	TIOCMSET	0x5418
 #define	TIOCINQ		0x541B
+#define TIOCSCTTY	0x540E
 
 /* TIOCINQ is utilized instead of FIONREAD which has been
 accupied for other purposes under CYGWIN.
@@ -317,9 +318,6 @@ struct termios
 
 #define termio termios
 
-#define cfgetospeed(tp)		((tp)->c_ospeed)
-#define cfgetispeed(tp)		((tp)->c_ispeed)
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -330,12 +328,20 @@ int tcsendbreak (int, int);
 int tcdrain (int);
 int tcflush (int, int);
 int tcflow (int, int);
+int tcgetsid (int);
 void cfmakeraw (struct termios *);
+speed_t cfgetispeed(const struct termios *);
+speed_t cfgetospeed(const struct termios *);
 int cfsetispeed (struct termios *, speed_t);
 int cfsetospeed (struct termios *, speed_t);
 
 #ifdef __cplusplus
 }
+#endif
+
+#ifndef __cplusplus
+#define cfgetispeed(tp)		((tp)->c_ispeed)
+#define cfgetospeed(tp)		((tp)->c_ospeed)
 #endif
 
 /* Extra stuff to make porting stuff easier.  */
@@ -348,5 +354,7 @@ struct winsize
 #define TIOCGWINSZ (('T' << 8) | 1)
 #define TIOCSWINSZ (('T' << 8) | 2)
 #define TIOCLINUX  (('T' << 8) | 3)
+#define TIOCGPGRP  (('T' << 8) | 0xf)
+#define TIOCSPGRP  (('T' << 8) | 0x10)
 
 #endif	/* _SYS_TERMIOS_H */

@@ -1,7 +1,7 @@
 /* sec_acl.cc: Sun compatible ACL functions.
 
    Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008,
-   2009, 2010 Red Hat, Inc.
+   2009, 2010, 2011 Red Hat, Inc.
 
    Written by Corinna Vinschen <corinna@vinschen.de>
 
@@ -21,7 +21,9 @@ details. */
 #include "fhandler.h"
 #include "dtable.h"
 #include "cygheap.h"
+#include "ntdll.h"
 #include "pwdgrp.h"
+#include "tls_pbuf.h"
 
 static int
 searchace (__aclent32_t *aclp, int nentries, int type, __uid32_t id = ILLEGAL_UID)
@@ -40,50 +42,52 @@ setacl (HANDLE handle, path_conv &pc, int nentries, __aclent32_t *aclbufp,
 	bool &writable)
 {
   security_descriptor sd_ret;
+  tmp_pathbuf tp;
 
-  if (get_file_sd (handle, pc, sd_ret))
+  if (get_file_sd (handle, pc, sd_ret, false))
     return -1;
 
-  BOOL dummy;
+  NTSTATUS status;
+  BOOLEAN dummy;
 
   /* Get owner SID. */
   PSID owner_sid;
-  if (!GetSecurityDescriptorOwner (sd_ret, &owner_sid, &dummy))
+  status = RtlGetOwnerSecurityDescriptor (sd_ret, &owner_sid, &dummy);
+  if (!NT_SUCCESS (status))
     {
-      __seterrno ();
+      __seterrno_from_nt_status (status);
       return -1;
     }
   cygsid owner (owner_sid);
 
   /* Get group SID. */
   PSID group_sid;
-  if (!GetSecurityDescriptorGroup (sd_ret, &group_sid, &dummy))
+  status = RtlGetGroupSecurityDescriptor (sd_ret, &group_sid, &dummy);
+  if (!NT_SUCCESS (status))
     {
-      __seterrno ();
+      __seterrno_from_nt_status (status);
       return -1;
     }
   cygsid group (group_sid);
 
   /* Initialize local security descriptor. */
   SECURITY_DESCRIPTOR sd;
-  if (!InitializeSecurityDescriptor (&sd, SECURITY_DESCRIPTOR_REVISION))
+  RtlCreateSecurityDescriptor (&sd, SECURITY_DESCRIPTOR_REVISION);
+  status = RtlSetOwnerSecurityDescriptor (&sd, owner, FALSE);
+  if (!NT_SUCCESS (status))
     {
-      __seterrno ();
+      __seterrno_from_nt_status (status);
       return -1;
     }
-  if (!SetSecurityDescriptorOwner (&sd, owner, FALSE))
+  status = RtlSetGroupSecurityDescriptor (&sd, group, FALSE);
+  if (!NT_SUCCESS (status))
     {
-      __seterrno ();
-      return -1;
-    }
-  if (!SetSecurityDescriptorGroup (&sd, group, FALSE))
-    {
-      __seterrno ();
+      __seterrno_from_nt_status (status);
       return -1;
     }
 
   /* Fill access control list. */
-  PACL acl = (PACL) alloca (3072);
+  PACL acl = (PACL) tp.w_get ();
   size_t acl_len = sizeof (ACL);
   int ace_off = 0;
 
@@ -92,11 +96,7 @@ setacl (HANDLE handle, path_conv &pc, int nentries, __aclent32_t *aclbufp,
   struct __group32 *gr;
   int pos;
 
-  if (!InitializeAcl (acl, 3072, ACL_REVISION))
-    {
-      __seterrno ();
-      return -1;
-    }
+  RtlCreateAcl (acl, ACL_MAXIMUM_SIZE, ACL_REVISION);
 
   writable = false;
 
@@ -203,14 +203,15 @@ setacl (HANDLE handle, path_conv &pc, int nentries, __aclent32_t *aclbufp,
   acl->AclSize = acl_len;
   debug_printf ("ACL-Size: %d", acl_len);
   /* Create DACL for local security descriptor. */
-  if (!SetSecurityDescriptorDacl (&sd, TRUE, acl, FALSE))
+  status = RtlSetDaclSecurityDescriptor (&sd, TRUE, acl, FALSE);
+  if (!NT_SUCCESS (status))
     {
-      __seterrno ();
+      __seterrno_from_nt_status (status);
       return -1;
     }
   /* Make self relative security descriptor in sd_ret. */
   DWORD sd_size = 0;
-  MakeSelfRelativeSD (&sd, sd_ret, &sd_size);
+  RtlAbsoluteToSelfRelativeSD (&sd, sd_ret, &sd_size);
   if (sd_size <= 0)
     {
       __seterrno ();
@@ -221,9 +222,10 @@ setacl (HANDLE handle, path_conv &pc, int nentries, __aclent32_t *aclbufp,
       set_errno (ENOMEM);
       return -1;
     }
-  if (!MakeSelfRelativeSD (&sd, sd_ret, &sd_size))
+  status = RtlAbsoluteToSelfRelativeSD (&sd, sd_ret, &sd_size);
+  if (!NT_SUCCESS (status))
     {
-      __seterrno ();
+      __seterrno_from_nt_status (status);
       return -1;
     }
   debug_printf ("Created SD-Size: %d", sd_ret.size ());
@@ -272,27 +274,28 @@ getacl (HANDLE handle, path_conv &pc, int nentries, __aclent32_t *aclbufp)
 {
   security_descriptor sd;
 
-  if (get_file_sd (handle, pc, sd))
+  if (get_file_sd (handle, pc, sd, false))
     return -1;
 
   cygpsid owner_sid;
   cygpsid group_sid;
-  BOOL dummy;
+  NTSTATUS status;
+  BOOLEAN dummy;
   __uid32_t uid;
   __gid32_t gid;
 
-  if (!GetSecurityDescriptorOwner (sd, (PSID *) &owner_sid, &dummy))
+  status = RtlGetOwnerSecurityDescriptor (sd, (PSID *) &owner_sid, &dummy);
+  if (!NT_SUCCESS (status))
     {
-      debug_printf ("GetSecurityDescriptorOwner %E");
-      __seterrno ();
+      __seterrno_from_nt_status (status);
       return -1;
     }
   uid = owner_sid.get_uid ();
 
-  if (!GetSecurityDescriptorGroup (sd, (PSID *) &group_sid, &dummy))
+  status = RtlGetGroupSecurityDescriptor (sd, (PSID *) &group_sid, &dummy);
+  if (!NT_SUCCESS (status))
     {
-      debug_printf ("GetSecurityDescriptorGroup %E");
-      __seterrno ();
+      __seterrno_from_nt_status (status);
       return -1;
     }
   gid = group_sid.get_gid ();
@@ -310,12 +313,12 @@ getacl (HANDLE handle, path_conv &pc, int nentries, __aclent32_t *aclbufp)
   lacl[3].a_perm = S_IROTH | S_IWOTH | S_IXOTH;
 
   PACL acl;
-  BOOL acl_exists;
+  BOOLEAN acl_exists;
 
-  if (!GetSecurityDescriptorDacl (sd, &acl_exists, &acl, &dummy))
+  status = RtlGetDaclSecurityDescriptor (sd, &acl_exists, &acl, &dummy);
+  if (!NT_SUCCESS (status))
     {
-      __seterrno ();
-      debug_printf ("GetSecurityDescriptorDacl %E");
+      __seterrno_from_nt_status (status);
       return -1;
     }
 
@@ -330,7 +333,7 @@ getacl (HANDLE handle, path_conv &pc, int nentries, __aclent32_t *aclbufp)
 	{
 	  ACCESS_ALLOWED_ACE *ace;
 
-	  if (!GetAce (acl, i, (PVOID *) &ace))
+	  if (!NT_SUCCESS (RtlGetAce (acl, i, (PVOID *) &ace)))
 	    continue;
 
 	  cygpsid ace_sid ((PSID) &ace->SidStart);
@@ -355,11 +358,13 @@ getacl (HANDLE handle, path_conv &pc, int nentries, __aclent32_t *aclbufp)
 	  else if (ace_sid == well_known_creator_group_sid)
 	    {
 	      type = GROUP_OBJ | ACL_DEFAULT;
+	      types_def |= type;
 	      id = ILLEGAL_GID;
 	    }
 	  else if (ace_sid == well_known_creator_owner_sid)
 	    {
 	      type = USER_OBJ | ACL_DEFAULT;
+	      types_def |= type;
 	      id = ILLEGAL_GID;
 	    }
 	  else
@@ -386,13 +391,38 @@ getacl (HANDLE handle, path_conv &pc, int nentries, __aclent32_t *aclbufp)
 		getace (lacl[pos], type, id, ace->Mask, ace->Header.AceType);
 	    }
 	}
-      /* Include DEF_CLASS_OBJ if any default ace exists */
-      if ((types_def & (USER|GROUP))
-	  && ((pos = searchace (lacl, MAX_ACL_ENTRIES, DEF_CLASS_OBJ)) >= 0))
+      if (types_def && (pos = searchace (lacl, MAX_ACL_ENTRIES, 0)) >= 0)
 	{
-	  lacl[pos].a_type = DEF_CLASS_OBJ;
-	  lacl[pos].a_id = ILLEGAL_GID;
-	  lacl[pos].a_perm = S_IRWXU | S_IRWXG | S_IRWXO;
+	  /* Ensure that the default acl contains at
+	     least DEF_(USER|GROUP|OTHER)_OBJ entries.  */
+	  if (!(types_def & USER_OBJ))
+	    {
+	      lacl[pos].a_type = DEF_USER_OBJ;
+	      lacl[pos].a_id = uid;
+	      lacl[pos].a_perm = lacl[0].a_perm;
+	      pos++;
+	    }
+	  if (!(types_def & GROUP_OBJ) && pos < MAX_ACL_ENTRIES)
+	    {
+	      lacl[pos].a_type = DEF_GROUP_OBJ;
+	      lacl[pos].a_id = gid;
+	      lacl[pos].a_perm = lacl[1].a_perm;
+	      pos++;
+	    }
+	  if (!(types_def & OTHER_OBJ) && pos < MAX_ACL_ENTRIES)
+	    {
+	      lacl[pos].a_type = DEF_OTHER_OBJ;
+	      lacl[pos].a_id = ILLEGAL_GID;
+	      lacl[pos].a_perm = lacl[2].a_perm;
+	      pos++;
+	    }
+	  /* Include DEF_CLASS_OBJ if any named default ace exists.  */
+	  if ((types_def & (USER|GROUP)) && pos < MAX_ACL_ENTRIES)
+	    {
+	      lacl[pos].a_type = DEF_CLASS_OBJ;
+	      lacl[pos].a_id = ILLEGAL_GID;
+	      lacl[pos].a_perm = S_IROTH | S_IWOTH | S_IXOTH;
+	    }
 	}
     }
   if ((pos = searchace (lacl, MAX_ACL_ENTRIES, 0)) < 0)
@@ -410,16 +440,17 @@ getacl (HANDLE handle, path_conv &pc, int nentries, __aclent32_t *aclbufp)
       aclbufp[i].a_perm &= ~(DENY_R | DENY_W | DENY_X);
     aclsort32 (pos, 0, aclbufp);
   }
-  syscall_printf ("%d = getacl (%S)", pos, pc.get_nt_native_path ());
+  syscall_printf ("%R = getacl(%S)", pos, pc.get_nt_native_path ());
   return pos;
 }
 
-static int
-acl_worker (const char *path, int cmd, int nentries, __aclent32_t *aclbufp,
-	    unsigned fmode)
+extern "C" int
+acl32 (const char *path, int cmd, int nentries, __aclent32_t *aclbufp)
 {
   int res = -1;
-  fhandler_base *fh = build_fh_name (path, fmode, stat_suffixes);
+
+  fhandler_base *fh = build_fh_name (path, PC_SYM_FOLLOW | PC_KEEP_HANDLE,
+				     stat_suffixes);
   if (fh->error ())
     {
       debug_printf ("got %d error from build_fh_name", fh->error ());
@@ -431,20 +462,16 @@ acl_worker (const char *path, int cmd, int nentries, __aclent32_t *aclbufp,
     res = fh->facl (cmd, nentries, aclbufp);
 
   delete fh;
-  syscall_printf ("%d = acl (%s)", res, path);
+  syscall_printf ("%R = acl(%s)", res, path);
   return res;
-}
-
-extern "C" int
-acl32 (const char *path, int cmd, int nentries, __aclent32_t *aclbufp)
-{
-  return acl_worker (path, cmd, nentries, aclbufp, PC_SYM_FOLLOW);
 }
 
 extern "C" int
 lacl32 (const char *path, int cmd, int nentries, __aclent32_t *aclbufp)
 {
-  return acl_worker (path, cmd, nentries, aclbufp, PC_SYM_NOFOLLOW);
+  /* This call was an accident.  Make it absolutely clear. */
+  set_errno (ENOSYS);
+  return -1;
 }
 
 extern "C" int
@@ -457,7 +484,7 @@ facl32 (int fd, int cmd, int nentries, __aclent32_t *aclbufp)
       return -1;
     }
   int res = cfd->facl (cmd, nentries, aclbufp);
-  syscall_printf ("%d = facl (%s) )", res, cfd->get_name ());
+  syscall_printf ("%R = facl(%s) )", res, cfd->get_name ());
   return res;
 }
 
@@ -932,7 +959,9 @@ facl (int fd, int cmd, int nentries, __aclent16_t *aclbufp)
 extern "C" int
 lacl (const char *path, int cmd, int nentries, __aclent16_t *aclbufp)
 {
-  return lacl32 (path, cmd, nentries, acl16to32 (aclbufp, nentries));
+  /* This call was an accident.  Make it absolutely clear. */
+  set_errno (ENOSYS);
+  return -1;
 }
 
 extern "C" int

@@ -1,6 +1,7 @@
 /* heap.cc: Cygwin heap manager.
 
-   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004 Red Hat, Inc.
+   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
+   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -16,6 +17,8 @@ details. */
 #include "dtable.h"
 #include "cygheap.h"
 #include "child_info.h"
+#include "ntdll.h"
+#include <sys/param.h>
 
 #define assert(x)
 
@@ -23,47 +26,138 @@ static unsigned page_const;
 
 #define MINHEAP_SIZE (4 * 1024 * 1024)
 
+static uintptr_t
+eval_start_address ()
+{
+  /* Starting with Vista, Windows performs heap ASLR.  This spoils the entire
+     region below 0x20000000 for us, because that region is used by Windows
+     to randomize heap and stack addresses.  Therefore we put our heap into a
+     safe region starting at 0x20000000.  This should work right from the start
+     in 99% of the cases. */
+  uintptr_t start_address = 0x20000000L;
+  if ((uintptr_t) NtCurrentTeb () >= 0xbf000000L)
+    {
+      /* However, if we're running on a /3GB enabled 32 bit system or on
+	 a 64 bit system, and the executable is large address aware, then
+	 we know that we have spare 1 Gig (32 bit) or even 2 Gigs (64 bit)
+	 virtual address space.  This memory region is practically unused
+	 by Windows, only PEB and TEBs are allocated top-down here.  We use
+	 the current TEB address as very simple test that this is a large
+	 address aware executable.
+	 The above test for an address beyond 0xbf000000 is supposed to
+	 make sure that we really have 3GB on a 32 bit system.  XP and
+	 later support smaller large address regions, but then it's not
+	 that interesting for us to use it for the heap.
+	 If the region is big enough, the heap gets allocated at its
+	 start.  What we get are 0.999 or 1.999 Gigs of free contiguous
+	 memory for heap, thread stacks, and shared memory regions. */
+      start_address = 0x80000000L;
+    }
+  return start_address;
+}
+
+static unsigned
+eval_initial_heap_size ()
+{
+  PIMAGE_DOS_HEADER dosheader;
+  PIMAGE_NT_HEADERS32 ntheader;
+  unsigned size;
+
+  dosheader = (PIMAGE_DOS_HEADER) GetModuleHandle (NULL);
+  ntheader = (PIMAGE_NT_HEADERS32) ((PBYTE) dosheader + dosheader->e_lfanew);
+  /* LoaderFlags is an obsolete DWORD member of the PE/COFF file header.
+     It's value is ignored by the loader, so we're free to use it for
+     Cygwin.  If it's 0, we default to the usual 384 Megs.  Otherwise,
+     we use it as the default initial heap size in megabyte.  Valid values
+     are between 4 and 2048 Megs. */
+  size = ntheader->OptionalHeader.LoaderFlags;
+  if (size == 0)
+    size = 384;
+  else if (size < 4)
+    size = 4;
+  else if (size > 2048)
+    size = 2048;
+  return size << 20;
+}
+
 /* Initialize the heap at process start up.  */
 void
 heap_init ()
 {
   const DWORD alloctype = MEM_RESERVE;
   /* If we're the forkee, we must allocate the heap at exactly the same place
-     as our parent.  If not, we don't care where it ends up.  */
+     as our parent.  If not, we (almost) don't care where it ends up.  */
 
-  page_const = system_info.dwPageSize;
+  page_const = wincap.page_size ();
   if (!cygheap->user_heap.base)
     {
-      cygheap->user_heap.chunk = cygwin_shared->heap_chunk_size ();
-      /* For some obscure reason Vista and 2003 sometimes reserve space after
-	 calls to CreateProcess overlapping the spot where the heap has been
-	 allocated.  This apparently spoils fork.  The behaviour looks quite
-	 arbitrary.  Experiments on Vista show a memory size of 0x37e000 or
-	 0x1fd000 overlapping the usual heap by at most 0x1ed000.  So what
-	 we do here is to allocate the heap with an extra slop of (by default)
-	 0x400000 and set the appropriate pointers to the start of the heap
-	 area + slop.  A forking child then creates its heap at the new start
-	 address and without the slop factor.  Since this is not entirely
-	 foolproof we add a registry setting "heap_slop_in_mb" so the slop
-	 factor can be influenced by the user if the need arises. */
-      cygheap->user_heap.slop = cygwin_shared->heap_slop_size ();
-      while (cygheap->user_heap.chunk >= MINHEAP_SIZE)
+      uintptr_t start_address = eval_start_address ();
+      PVOID largest_found = NULL;
+      size_t largest_found_size = 0;
+      SIZE_T ret;
+      MEMORY_BASIC_INFORMATION mbi;
+
+      cygheap->user_heap.chunk = eval_initial_heap_size ();
+      do
 	{
-	  /* Initialize page mask and default heap size.  Preallocate a heap
-	   * to assure contiguous memory.  */
-	  cygheap->user_heap.base =
-	    VirtualAlloc (NULL, cygheap->user_heap.chunk
-	    			+ cygheap->user_heap.slop,
-			  alloctype, PAGE_NOACCESS);
+	  cygheap->user_heap.base = VirtualAlloc ((LPVOID) start_address,
+						  cygheap->user_heap.chunk,
+						  alloctype, PAGE_NOACCESS);
 	  if (cygheap->user_heap.base)
 	    break;
-	  cygheap->user_heap.chunk -= 1 * 1024 * 1024;
+
+	  /* Ok, so we are at the 1% which didn't work with 0x20000000 out
+	     of the box.  What we do now is to search for the next free
+	     region which matches our desired heap size.  While doing that,
+	     we keep track of the largest region we found, including the
+	     region starting at 0x20000000. */
+	  while ((ret = VirtualQuery ((LPCVOID) start_address, &mbi,
+				      sizeof mbi)) != 0)
+	    {
+	      if (mbi.State == MEM_FREE)
+		{
+		  if (mbi.RegionSize >= cygheap->user_heap.chunk)
+		    break;
+		  if (mbi.RegionSize > largest_found_size)
+		    {
+		      largest_found = mbi.BaseAddress;
+		      largest_found_size = mbi.RegionSize;
+		    }
+		}
+	      /* Since VirtualAlloc only reserves at allocation granularity
+		 boundaries, we round up here, too.  Otherwise we might end
+		 up at a bogus page-aligned address. */
+	      start_address = roundup2 (start_address + mbi.RegionSize,
+					wincap.allocation_granularity ());
+	    }
+	  if (!ret)
+	    {
+	      /* In theory this should not happen.  But if it happens, we have
+		 collected the information about the largest available region
+		 in the above loop.  So, next we squeeze the heap into that
+		 region, unless it's smaller than the minimum size. */
+	      if (largest_found_size >= MINHEAP_SIZE)
+		{
+		  cygheap->user_heap.chunk = largest_found_size;
+		  cygheap->user_heap.base =
+			VirtualAlloc (largest_found, cygheap->user_heap.chunk,
+				      alloctype, PAGE_NOACCESS);
+		}
+	      /* Last resort (but actually we are probably broken anyway):
+		 Use the minimal heap size and let the system decide. */
+	      if (!cygheap->user_heap.base)
+		{
+		  cygheap->user_heap.chunk = MINHEAP_SIZE;
+		  cygheap->user_heap.base =
+			VirtualAlloc (NULL, cygheap->user_heap.chunk,
+				      alloctype, PAGE_NOACCESS);
+		}
+	    }
 	}
+      while (!cygheap->user_heap.base && ret);
       if (cygheap->user_heap.base == NULL)
-	api_fatal ("unable to allocate heap, heap_chunk_size %p, slop %p, %E",
-		   cygheap->user_heap.chunk, cygheap->user_heap.slop);
-      cygheap->user_heap.base = (void *) ((char *) cygheap->user_heap.base
-      						   + cygheap->user_heap.slop);
+	api_fatal ("unable to allocate heap, heap_chunk_size %p, %E",
+		   cygheap->user_heap.chunk);
       cygheap->user_heap.ptr = cygheap->user_heap.top = cygheap->user_heap.base;
       cygheap->user_heap.max = (char *) cygheap->user_heap.base
 			       + cygheap->user_heap.chunk;
@@ -87,7 +181,7 @@ heap_init ()
 	  if ((reserve_size -= page_const) < allocsize)
 	    break;
 	}
-      if (!p && in_forkee && !fork_info->handle_failure (GetLastError ()))
+      if (!p && in_forkee && !fork_info->abort (NULL))
 	api_fatal ("couldn't allocate heap, %E, base %p, top %p, "
 		   "reserve_size %d, allocsize %d, page_const %d",
 		   cygheap->user_heap.base, cygheap->user_heap.top,

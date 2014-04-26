@@ -144,7 +144,7 @@ sim_read (SIM_DESC sd, SIM_ADDR mem, unsigned char *buf, int length)
 
 
 int
-sim_write (SIM_DESC sd, SIM_ADDR mem, unsigned char *buf, int length)
+sim_write (SIM_DESC sd, SIM_ADDR mem, const unsigned char *buf, int length)
 {
   int result = psim_write_memory(simulator, MAX_NR_PROCESSORS,
 				 buf, mem, length,
@@ -259,6 +259,11 @@ sim_do_command (SIM_DESC sd, char *cmd)
   }
 }
 
+char **
+sim_complete_command (SIM_DESC sd, char *text, char *word)
+{
+  return NULL;
+}
 
 /* Polling, if required */
 
@@ -389,9 +394,4 @@ zalloc(long size)
     error("xmalloc failed\n");
   memset(memory, 0, size);
   return memory;
-}
-
-void zfree(void *data)
-{
-  free(data);
 }

@@ -1,6 +1,6 @@
 /* run front end support for arm
-   Copyright (C) 1995, 1996, 1997, 2000, 2001, 2002, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 1995-1997, 2000-2002, 2007-2012 Free Software
+   Foundation, Inc.
 
    This file is part of ARM SIM.
 
@@ -158,7 +158,7 @@ int
 sim_write (sd, addr, buffer, size)
      SIM_DESC sd ATTRIBUTE_UNUSED;
      SIM_ADDR addr;
-     unsigned char * buffer;
+     const unsigned char * buffer;
      int size;
 {
   int i;
@@ -939,4 +939,10 @@ sim_set_callbacks (ptr)
      host_callback *ptr;
 {
   sim_callback = ptr;
+}
+
+char **
+sim_complete_command (SIM_DESC sd, char *text, char *word)
+{
+  return NULL;
 }

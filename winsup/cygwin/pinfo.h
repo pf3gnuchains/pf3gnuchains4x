@@ -1,6 +1,7 @@
 /* pinfo.h: process table info
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
+   2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -8,8 +9,8 @@ This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
 details. */
 
-#ifndef _PINFO_H
-#define _PINFO_H
+#pragma once
+
 #include <sys/resource.h>
 #include "thread.h"
 
@@ -31,10 +32,11 @@ enum picom
   PICOM_PIPE_FHANDLER = 6
 };
 
-#define EXITCODE_SET	0x8000000
-#define EXITCODE_NOSET	0x4000000
-#define EXITCODE_RETRY	0x2000000
-#define EXITCODE_OK	0x1000000
+#define EXITCODE_SET		0x8000000
+#define EXITCODE_NOSET		0x4000000
+#define EXITCODE_RETRY		0x2000000
+#define EXITCODE_OK		0x1000000
+#define EXITCODE_FORK_FAILED	0x0800000
 
 class fhandler_pipe;
 
@@ -63,8 +65,12 @@ public:
     signals.  */
   DWORD dwProcessId;
 
-  /* Used to spawn a child for fork(), among other things. */
-  char progname[NT_MAX_PATH];
+  /* Used to spawn a child for fork(), among other things.  The other
+     members of _pinfo take only a bit over 200 bytes.  So cut off a
+     couple of bytes from progname to allow the _pinfo structure not
+     to exceed 64K.  Otherwise it blocks another 64K block of VM for
+     the process.  */
+  WCHAR progname[NT_MAX_PATH - 512];
 
   /* User information.
      The information is derived from the GetUserName system call,
@@ -104,7 +110,7 @@ public:
   char *root (size_t &);
   char *cwd (size_t &);
   char *cmdline (size_t &);
-  void set_ctty (class tty_min *, int, class fhandler_tty_slave *);
+  bool set_ctty (class fhandler_termios *, int);
   HANDLE dup_proc_pipe (HANDLE) __attribute__ ((regparm(2)));
   void sync_proc_pipe ();
   bool alert_parent (char);
@@ -119,7 +125,7 @@ public:
 public:
   HANDLE wr_proc_pipe;
   DWORD wr_proc_pipe_owner;
-  friend class pinfo;
+  friend class pinfo_minimal;
 };
 
 DWORD WINAPI commune_process (void *);
@@ -130,24 +136,38 @@ enum parent_alerter
   __ALERT_ALIVE   =  112
 };
 
-class pinfo
+class pinfo_minimal
 {
   HANDLE h;
-  _pinfo *procinfo;
-  bool destroy;
 public:
-  HANDLE rd_proc_pipe;
   HANDLE hProcess;
+  HANDLE rd_proc_pipe;
+  pinfo_minimal (): h (NULL), hProcess (NULL), rd_proc_pipe (NULL) {}
+  friend class pinfo;
+};
+
+class pinfo: public pinfo_minimal
+{
+  bool destroy;
+  _pinfo *procinfo;
+public:
   bool waiter_ready;
   class cygthread *wait_thread;
+
   void init (pid_t, DWORD, HANDLE) __attribute__ ((regparm(3)));
-  pinfo () {}
-  pinfo (_pinfo *x): procinfo (x), hProcess (NULL) {}
-  pinfo (pid_t n) : rd_proc_pipe (NULL), hProcess (NULL) {init (n, 0, NULL);}
-  pinfo (pid_t n, DWORD flag) : rd_proc_pipe (NULL), hProcess (NULL), waiter_ready (0), wait_thread (NULL) {init (n, flag, NULL);}
+  pinfo (_pinfo *x = NULL): pinfo_minimal (), destroy (false), procinfo (x),
+		     waiter_ready (false), wait_thread (NULL) {}
+  pinfo (pid_t n, DWORD flag = 0): pinfo_minimal (), destroy (false),
+				   procinfo (NULL), waiter_ready (false),
+				   wait_thread (NULL)
+  {
+    init (n, flag, NULL);
+  }
+  pinfo (HANDLE, pinfo_minimal&, pid_t);
   void thisproc (HANDLE) __attribute__ ((regparm (2)));
+  inline void _pinfo_release ();
   void release ();
-  int wait () __attribute__ ((regparm (1)));
+  bool wait () __attribute__ ((regparm (1)));
   ~pinfo ()
   {
     if (destroy && procinfo)
@@ -165,11 +185,18 @@ public:
   int operator == (char *x) const {return (char *) procinfo == x;}
   _pinfo *operator * () const {return procinfo;}
   operator _pinfo * () const {return procinfo;}
-  // operator bool () const {return (int) h;}
   void preserve () { destroy = false; }
-#ifndef _SIGPROC_H
-  int remember () {system_printf ("remember is not here"); return 0;}
+  void allow_remove () { destroy = true; }
+#ifndef SIG_BAD_MASK		// kludge to ensure that sigproc.h included
+  // int reattach () {system_printf ("reattach is not here"); return 0;}
+  // int remember (bool) {system_printf ("remember is not here"); return 0;}
 #else
+  int reattach ()
+  {
+    int res = proc_subproc (PROC_REATTACH_CHILD, (DWORD) this);
+    destroy = res ? false : true;
+    return res;
+  }
   int remember (bool detach)
   {
     int res = proc_subproc (detach ? PROC_DETACHED_CHILD : PROC_ADDCHILD,
@@ -224,8 +251,35 @@ cygwin_pid (pid_t pid)
 void __stdcall pinfo_init (char **, int);
 extern pinfo myself;
 
+/* Helper class to allow convenient setting and unsetting a process_state
+   flag in myself.  This is used in certain fhandler read/write methods
+   to set the PID_TTYIN/PID_TTYOU flags in myself->process_state. */
+class push_process_state
+{
+private:
+  int flag;
+public:
+  push_process_state (int add_flag)
+  {
+    flag = add_flag;
+    myself->process_state |= flag;
+  }
+  void pop () { myself->process_state &= ~(flag); }
+  ~push_process_state () { pop (); }
+};
+
 #define _P_VFORK 0
 #define _P_SYSTEM 512
+/* Add this flag in calls to child_info_spawn::worker if the calling function
+   is one of 'p' type functions: execlp, execvp, spawnlp, spawnvp.  Per POSIX,
+   only these p-type functions fall back to call /bin/sh if the file is not a
+   binary.  The setting of _P_PATH_TYPE_EXEC is used as a bool value in
+   av::fixup to decide if the file should be evaluated as a script, or if
+   ENOEXEC should be returned. */
+#define _P_PATH_TYPE_EXEC	0x1000
+
+/* Helper macro to mask actual mode and drop additional flags defined above. */
+#define _P_MODE(x)		((x) & 0xfff)
 
 #define __ctty() _ctty ((char *) alloca (sizeof ("ctty /dev/tty") + 20))
 #define myctty() myself->__ctty ()
@@ -237,4 +291,3 @@ int __stdcall fixup_shms_after_fork ();
 
 void __stdcall fill_rusage (struct rusage *, HANDLE);
 void __stdcall add_rusage (struct rusage *, struct rusage *);
-#endif /*_PINFO_H*/

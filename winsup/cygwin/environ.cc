@@ -2,7 +2,7 @@
    process's environment.
 
    Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009 Red Hat, Inc.
+   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
@@ -29,15 +29,189 @@ details. */
 #include "registry.h"
 #include "environ.h"
 #include "child_info.h"
+#include "shared_info.h"
+#include "ntdll.h"
 
 extern bool dos_file_warning;
 extern bool ignore_case_with_glob;
 extern bool allow_winsymlinks;
 bool reset_com = false;
-static bool envcache = true;
-static bool create_upcaseenv = false;
 
 static char **lastenviron;
+
+/* Parse CYGWIN options */
+
+static NO_COPY bool export_settings = false;
+
+enum settings
+  {
+    justset,
+    isfunc,
+    setbit
+  };
+
+/* When BUF is:
+   null or empty: disables globbing
+   "ignorecase": enables case-insensitive globbing
+   anything else: enables case-sensitive globbing */
+static void
+glob_init (const char *buf)
+{
+  if (!buf || !*buf)
+    {
+      allow_glob = false;
+      ignore_case_with_glob = false;
+    }
+  else if (ascii_strncasematch (buf, "ignorecase", 10))
+    {
+      allow_glob = true;
+      ignore_case_with_glob = true;
+    }
+  else
+    {
+      allow_glob = true;
+      ignore_case_with_glob = false;
+    }
+}
+
+static void
+set_proc_retry (const char *buf)
+{
+  child_info::retry_count = strtoul (buf, NULL, 0);
+}
+
+static void
+tty_is_gone (const char *buf)
+{
+  if (!user_shared->warned_notty)
+    {
+      small_printf ("\"tty\" option detected in CYGWIN environment variable.\n"
+		    "CYGWIN=tty is no longer supported.  Please remove it from your\n"
+		    "CYGWIN environment variable and use a terminal emulator like mintty,\n"
+		    "xterm, or rxvt.\n");
+      user_shared->warned_notty = 1;
+    }
+}
+
+/* The structure below is used to set up an array which is used to
+   parse the CYGWIN environment variable or, if enabled, options from
+   the registry.  */
+static struct parse_thing
+  {
+    const char *name;
+    union parse_setting
+      {
+	bool *b;
+	DWORD *x;
+	int *i;
+	void (*func)(const char *);
+      } setting;
+
+    enum settings disposition;
+    char *remember;
+    union parse_values
+      {
+	DWORD i;
+	const char *s;
+      } values[2];
+  } known[] NO_COPY =
+{
+  {"dosfilewarning", {&dos_file_warning}, justset, NULL, {{false}, {true}}},
+  {"error_start", {func: error_start_init}, isfunc, NULL, {{0}, {0}}},
+  {"export", {&export_settings}, justset, NULL, {{false}, {true}}},
+  {"glob", {func: glob_init}, isfunc, NULL, {{0}, {s: "normal"}}},
+  {"proc_retry", {func: set_proc_retry}, isfunc, NULL, {{0}, {5}}},
+  {"reset_com", {&reset_com}, justset, NULL, {{false}, {true}}},
+  {"tty", {func: tty_is_gone}, isfunc, NULL, {{0}, {0}}},
+  {"winsymlinks", {&allow_winsymlinks}, justset, NULL, {{false}, {true}}},
+  {NULL, {0}, justset, 0, {{0}, {0}}}
+};
+
+/* Parse a string of the form "something=stuff somethingelse=more-stuff",
+   silently ignoring unknown "somethings".  */
+static void __stdcall
+parse_options (const char *inbuf)
+{
+  int istrue;
+  char *p, *lasts;
+  parse_thing *k;
+
+  if (inbuf == NULL)
+    {
+      tmp_pathbuf tp;
+      char *newbuf = tp.c_get ();
+      newbuf[0] = '\0';
+      for (k = known; k->name != NULL; k++)
+	if (k->remember)
+	  {
+	    strcat (strcat (newbuf, " "), k->remember);
+	    free (k->remember);
+	    k->remember = NULL;
+	  }
+
+      if (export_settings)
+	{
+	  debug_printf ("%s", newbuf + 1);
+	  setenv ("CYGWIN", newbuf + 1, 1);
+	}
+      return;
+    }
+
+  char *buf = strcpy ((char *) alloca (strlen (inbuf) + 1), inbuf);
+  for (p = strtok_r (buf, " \t", &lasts);
+       p != NULL;
+       p = strtok_r (NULL, " \t", &lasts))
+    {
+      char *keyword_here = p;
+      if (!(istrue = !ascii_strncasematch (p, "no", 2)))
+	p += 2;
+      else if (!(istrue = *p != '-'))
+	p++;
+
+      char ch, *eq;
+      if ((eq = strchr (p, '=')) != NULL || (eq = strchr (p, ':')) != NULL)
+	ch = *eq, *eq++ = '\0';
+      else
+	ch = 0;
+
+      for (parse_thing *k = known; k->name != NULL; k++)
+	if (ascii_strcasematch (p, k->name))
+	  {
+	    switch (k->disposition)
+	      {
+	      case isfunc:
+		k->setting.func ((!eq || !istrue) ?
+		  k->values[istrue].s : eq);
+		debug_printf ("%s (called func)", k->name);
+		break;
+	      case justset:
+		if (!istrue || !eq)
+		  *k->setting.x = k->values[istrue].i;
+		else
+		  *k->setting.x = strtol (eq, NULL, 0);
+		debug_printf ("%s %d", k->name, *k->setting.x);
+		break;
+	      case setbit:
+		*k->setting.x &= ~k->values[istrue].i;
+		if (istrue || (eq && strtol (eq, NULL, 0)))
+		  *k->setting.x |= k->values[istrue].i;
+		debug_printf ("%s %x", k->name, *k->setting.x);
+		break;
+	      }
+
+	    if (eq)
+	      *--eq = ch;
+
+	    int n = eq - p;
+	    p = strdup (keyword_here);
+	    if (n > 0)
+	      p[n] = ':';
+	    k->remember = p;
+	    break;
+	  }
+      }
+  debug_printf ("returning");
+}
 
 /* Helper functions for the below environment variables which have to
    be converted Win32<->POSIX. */
@@ -94,7 +268,48 @@ static win_env conv_envvars[] =
     {NULL, 0, NULL, NULL, 0, 0}
   };
 
-static unsigned char conv_start_chars[256] = {0};
+#define WC ((unsigned char) 1)
+/* Note:  You *must* fill in this array setting the ordinal value of the first
+   character of the above environment variable names to 1.
+   This table is intended to speed up lookup of these variables. */
+
+static const unsigned char conv_start_chars[256] =
+  {
+    0,        0,        0,        0,        0,        0,        0,        0,
+    0,        0,        0,        0,        0,        0,        0,        0,
+    0,        0,        0,        0,        0,        0,        0,        0,
+    0,        0,        0,        0,        0,        0,        0,        0,
+    0,        0,        0,        0,        0,        0,        0,        0,
+    0,        0,        0,        0,        0,        0,        0,        0,
+    0,        0,        0,        0,        0,        0,        0,        0,
+    0,        0,        0,        0,        0,        0,        0,        0,
+/*            A         B         C         D         E         F         G */
+    0,        0,        0,        0,        0,        0,        0,        0,
+    /*  72 */
+/*  H         I         J         K         L         M         N         O */
+    WC,       0,        0,        0,        WC,       0,        0,        0,
+    /*  80 */
+/*  P         Q         R         S         T         U         V         W */
+    WC,       0,        0,        0,        WC,       0,        0,        0,
+    /*  88 */
+/*  x         Y         Z                                                   */
+    0,        0,        0,        0,        0,        0,        0,        0,
+    /*  96 */
+/*            a         b         c         d         e         f         g */
+    0,        0,        0,        0,        0,        0,        0,        0,
+    /* 104 */
+/*  h         i         j         k         l         m         n         o */
+    WC,       0,        0,        0,        WC,       0,        0,        0,
+    /* 112 */
+/*  p         q         r         s         t         u         v         w */
+    WC,       0,        0,        0,        WC,       0,        0,        0,
+  };
+
+static inline char
+match_first_char (const char *s, unsigned char m)
+{
+  return conv_start_chars[(unsigned) *s] & m;
+}
 
 struct win_env&
 win_env::operator = (struct win_env& x)
@@ -158,7 +373,7 @@ win_env::add_cache (const char *in_posix, const char *in_native)
 win_env * __stdcall
 getwinenv (const char *env, const char *in_posix, win_env *temp)
 {
-  if (!conv_start_chars[(unsigned char)*env])
+  if (!match_first_char (env, WC))
     return NULL;
 
   for (int i = 0; conv_envvars[i].name != NULL; i++)
@@ -169,7 +384,7 @@ getwinenv (const char *env, const char *in_posix, win_env *temp)
 	if (!cur_environ () || !(val = in_posix ?: getenv (we->name)))
 	  debug_printf ("can't set native for %s since no environ yet",
 			we->name);
-	else if (!envcache || !we->posix || strcmp (val, we->posix) != 0)
+	else if (!we->posix || strcmp (val, we->posix) != 0)
 	  {
 	    if (temp)
 	      {
@@ -185,8 +400,8 @@ getwinenv (const char *env, const char *in_posix, win_env *temp)
 
 /* Convert windows path specs to POSIX, if appropriate.
  */
-static void __stdcall
-posify (char **here, const char *value, char *outenv)
+inline static void
+posify_maybe (char **here, const char *value, char *outenv)
 {
   char *src = *here;
   win_env *conv;
@@ -381,6 +596,8 @@ _addenv (const char *name, const char *value, int overwrite)
   win_env *spenv;
   if ((spenv = getwinenv (envhere)))
     spenv->add_cache (value);
+  if (strcmp (name, "CYGWIN") == 0)
+    parse_options (value);
 
   MALLOC_CHECK;
   return 0;
@@ -477,239 +694,54 @@ static struct renv {
 	{ NL("WINDIR=") }			// 22
 };
 #define RENV_SIZE (sizeof (renv_arr) / sizeof (renv_arr[0]))
+
 /* Set of first characters of the above list of variables. */
 static const char idx_arr[] = "ACHNOPSTW";
 /* Index into renv_arr at which the variables with this specific character
    starts. */
 static const int start_at[] = { 0, 1, 4, 7, 8, 9, 16, 18, 22 };
 
-/* Turn environment variable part of a=b string into uppercase.
-   Conditionally controlled by upcaseenv CYGWIN setting.  */
+/* Turn environment variable part of a=b string into uppercase - for some
+   environment variables only. */
 static __inline__ void
 ucenv (char *p, const char *eq)
 {
-  if (create_upcaseenv)
-    {
-      /* Amazingly, NT has a case sensitive environment name list,
-	 but only sometimes.
-	 It's normal to have NT set your "Path" to something.
-	 Later, you set "PATH" to something else.  This alters "Path".
-	 But if you try and do a naive getenv on "PATH" you'll get nothing.
-
-	 So we upper case the labels here to prevent confusion later but
-	 we only do it for processes that are started by non-Cygwin programs. */
-      for (; p < eq; p++)
-	if (islower (*p))
-	  *p = cyg_toupper (*p);
-    }
-  else
-    {
-      /* Hopefully as quickly as possible - only upcase specific set of important
-	 Windows variables. */
-      char first = cyg_toupper (*p);
-      const char *idx = strchr (idx_arr, first);
-      if (idx)
-	for (size_t i = start_at[idx - idx_arr];
-	     i < RENV_SIZE && renv_arr[i].name[0] == first;
-	     ++i)
-	  if (strncasematch (p, renv_arr[i].name, renv_arr[i].namelen))
-	    {
-	      strncpy (p, renv_arr[i].name, renv_arr[i].namelen);
-	      break;
-	    }
-    }
-}
-
-/* Parse CYGWIN options */
-
-static NO_COPY bool export_settings = false;
-
-enum settings
-  {
-    justset,
-    isfunc,
-    setbit,
-    set_process_state,
-  };
-
-/* When BUF is:
-   null or empty: disables globbing
-   "ignorecase": enables case-insensitive globbing
-   anything else: enables case-sensitive globbing */
-static void
-glob_init (const char *buf)
-{
-  if (!buf || !*buf)
-    {
-      allow_glob = false;
-      ignore_case_with_glob = false;
-    }
-  else if (ascii_strncasematch (buf, "ignorecase", 10))
-    {
-      allow_glob = true;
-      ignore_case_with_glob = true;
-    }
-  else
-    {
-      allow_glob = true;
-      ignore_case_with_glob = false;
-    }
-}
-
-static void
-set_chunksize (const char *buf)
-{
-  wincap.set_chunksize (strtoul (buf, NULL, 0));
-}
-
-static void
-set_proc_retry (const char *buf)
-{
-  child_info::retry_count = strtoul (buf, NULL, 0);
-}
-
-/* The structure below is used to set up an array which is used to
-   parse the CYGWIN environment variable or, if enabled, options from
-   the registry.  */
-static struct parse_thing
-  {
-    const char *name;
-    union parse_setting
-      {
-	bool *b;
-	DWORD *x;
-	int *i;
-	void (*func)(const char *);
-      } setting;
-
-    enum settings disposition;
-    char *remember;
-    union parse_values
-      {
-	DWORD i;
-	const char *s;
-      } values[2];
-  } known[] NO_COPY =
-{
-  {"dosfilewarning", {&dos_file_warning}, justset, NULL, {{false}, {true}}},
-  {"envcache", {&envcache}, justset, NULL, {{true}, {false}}},
-  {"error_start", {func: &error_start_init}, isfunc, NULL, {{0}, {0}}},
-  {"export", {&export_settings}, justset, NULL, {{false}, {true}}},
-  {"forkchunk", {func: set_chunksize}, isfunc, NULL, {{0}, {0}}},
-  {"glob", {func: &glob_init}, isfunc, NULL, {{0}, {s: "normal"}}},
-  {"proc_retry", {func: set_proc_retry}, isfunc, NULL, {{0}, {5}}},
-  {"reset_com", {&reset_com}, justset, NULL, {{false}, {true}}},
-  {"strip_title", {&strip_title_path}, justset, NULL, {{false}, {true}}},
-  {"title", {&display_title}, justset, NULL, {{false}, {true}}},
-  {"tty", {NULL}, set_process_state, NULL, {{0}, {PID_USETTY}}},
-  {"upcaseenv", {&create_upcaseenv}, justset, NULL, {{false}, {true}}},
-  {"winsymlinks", {&allow_winsymlinks}, justset, NULL, {{false}, {true}}},
-  {NULL, {0}, justset, 0, {{0}, {0}}}
-};
-
-/* Parse a string of the form "something=stuff somethingelse=more-stuff",
-   silently ignoring unknown "somethings".  */
-static void __stdcall
-parse_options (char *buf)
-{
-  int istrue;
-  char *p, *lasts;
-  parse_thing *k;
-
-  if (buf == NULL)
-    {
-      tmp_pathbuf tp;
-      char *newbuf = tp.c_get ();
-      newbuf[0] = '\0';
-      for (k = known; k->name != NULL; k++)
-	if (k->remember)
-	  {
-	    strcat (strcat (newbuf, " "), k->remember);
-	    free (k->remember);
-	    k->remember = NULL;
-	  }
-
-      if (export_settings)
+  /* Hopefully as quickly as possible - only upper case specific set of important
+     Windows variables. */
+  char first = cyg_toupper (*p);
+  const char *idx = strchr (idx_arr, first);
+  if (idx)
+    for (size_t i = start_at[idx - idx_arr];
+	 i < RENV_SIZE && renv_arr[i].name[0] == first;
+	 ++i)
+      if (strncasematch (p, renv_arr[i].name, renv_arr[i].namelen))
 	{
-	  debug_printf ("%s", newbuf + 1);
-	  setenv ("CYGWIN", newbuf + 1, 1);
+	  strncpy (p, renv_arr[i].name, renv_arr[i].namelen);
+	  break;
 	}
-      return;
-    }
-
-  buf = strcpy ((char *) alloca (strlen (buf) + 1), buf);
-  for (p = strtok_r (buf, " \t", &lasts);
-       p != NULL;
-       p = strtok_r (NULL, " \t", &lasts))
-    {
-      char *keyword_here = p;
-      if (!(istrue = !ascii_strncasematch (p, "no", 2)))
-	p += 2;
-      else if (!(istrue = *p != '-'))
-	p++;
-
-      char ch, *eq;
-      if ((eq = strchr (p, '=')) != NULL || (eq = strchr (p, ':')) != NULL)
-	ch = *eq, *eq++ = '\0';
-      else
-	ch = 0;
-
-      for (parse_thing *k = known; k->name != NULL; k++)
-	if (ascii_strcasematch (p, k->name))
-	  {
-	    switch (k->disposition)
-	      {
-	      case isfunc:
-		k->setting.func ((!eq || !istrue) ?
-		  k->values[istrue].s : eq);
-		debug_printf ("%s (called func)", k->name);
-		break;
-	      case justset:
-		if (!istrue || !eq)
-		  *k->setting.x = k->values[istrue].i;
-		else
-		  *k->setting.x = strtol (eq, NULL, 0);
-		debug_printf ("%s %d", k->name, *k->setting.x);
-		break;
-	      case set_process_state:
-		k->setting.x = &myself->process_state;
-		/* fall through */
-	      case setbit:
-		*k->setting.x &= ~k->values[istrue].i;
-		if (istrue || (eq && strtol (eq, NULL, 0)))
-		  *k->setting.x |= k->values[istrue].i;
-		debug_printf ("%s %x", k->name, *k->setting.x);
-		break;
-	      }
-
-	    if (eq)
-	      *--eq = ch;
-
-	    int n = eq - p;
-	    p = strdup (keyword_here);
-	    if (n > 0)
-	      p[n] = ':';
-	    k->remember = p;
-	    break;
-	  }
-      }
-  debug_printf ("returning");
 }
 
 /* Set options from the registry. */
 static bool __stdcall
-regopt (const char *name, char *buf)
+regopt (const WCHAR *name, char *buf)
 {
   bool parsed_something = false;
-  char lname[strlen (name) + 1];
-  strlwr (strcpy (lname, name));
+  UNICODE_STRING lname;
+  size_t len = (wcslen(name) + 1) * sizeof (WCHAR);
+  RtlInitEmptyUnicodeString(&lname, (PWCHAR) alloca (len), len);
+  wcscpy(lname.Buffer, name);
+  RtlDowncaseUnicodeString(&lname, &lname, FALSE);
 
   for (int i = 0; i < 2; i++)
     {
-      reg_key r (i, KEY_READ, CYGWIN_INFO_PROGRAM_OPTIONS_NAME, NULL);
+      reg_key r (i, KEY_READ, _WIDE (CYGWIN_INFO_PROGRAM_OPTIONS_NAME), NULL);
 
-      if (r.get_string (lname, buf, NT_MAX_PATH, "") == ERROR_SUCCESS)
+      if (NT_SUCCESS (r.get_string (lname.Buffer, (PWCHAR) buf,
+				    NT_MAX_PATH, L"")))
 	{
+	  char *newp;
+	  sys_wcstombs_alloc(&newp, HEAP_NOTHEAP, (PWCHAR) buf);
+	  strcpy(buf, newp);
 	  parse_options (buf);
 	  parsed_something = true;
 	  break;
@@ -739,15 +771,8 @@ environ_init (char **envp, int envc)
   if (efault.faulted ())
     api_fatal ("internal error reading the windows environment - too many environment variables?");
 
-  if (!conv_start_chars[0])
-    for (int i = 0; conv_envvars[i].name != NULL; i++)
-      {
-	conv_start_chars[(int) cyg_tolower (conv_envvars[i].name[0])] = 1;
-	conv_start_chars[(int) cyg_toupper (conv_envvars[i].name[0])] = 1;
-      }
-
   char *tmpbuf = tp.t_get ();
-  got_something_from_registry = regopt ("default", tmpbuf);
+  got_something_from_registry = regopt (L"default", tmpbuf);
   if (myself->progname[0])
     got_something_from_registry = regopt (myself->progname, tmpbuf)
 				  || got_something_from_registry;
@@ -779,15 +804,6 @@ environ_init (char **envp, int envc)
   /* Allocate space for environment + trailing NULL + CYGWIN env. */
   lastenviron = envp = (char **) malloc ((4 + (envc = 100)) * sizeof (char *));
 
-  /* We also need the CYGWIN variable early to know the value of the
-     CYGWIN=upcaseenv setting for the below loop. */
-  if ((i = GetEnvironmentVariableA ("CYGWIN", NULL, 0)))
-    {
-      char *buf = (char *) alloca (i);
-      GetEnvironmentVariableA ("CYGWIN", buf, i);
-      parse_options (buf);
-    }
-
   rawenv = GetEnvironmentStringsW ();
   if (!rawenv)
     {
@@ -809,11 +825,13 @@ environ_init (char **envp, int envc)
       if (*newp == '=')
 	*newp = '!';
       char *eq = strechr (newp, '=');
-      ucenv (newp, eq);	/* (possibly conditionally) uppercase env vars. */
+      ucenv (newp, eq);	/* uppercase env vars which need it */
       if (*newp == 'T' && strncmp (newp, "TERM=", 5) == 0)
 	sawTERM = 1;
-      if (*eq && conv_start_chars[(unsigned char) envp[i][0]])
-	posify (envp + i, *++eq ? eq : --eq, tmpbuf);
+      else if (*newp == 'C' && strncmp (newp, "CYGWIN=", 7) == 0)
+	parse_options (newp + 7);
+      if (*eq)
+	posify_maybe (envp + i, *++eq ? eq : --eq, tmpbuf);
       debug_printf ("%p: %s", envp[i], envp[i]);
     }
 

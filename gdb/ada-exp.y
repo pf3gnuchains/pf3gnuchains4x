@@ -1,6 +1,6 @@
 /* YACC parser for Ada expressions, for GDB.
-   Copyright (C) 1986, 1989, 1990, 1991, 1993, 1994, 1997, 2000, 2003, 2004,
-   2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1986, 1989-1991, 1993-1994, 1997, 2000, 2003-2004,
+   2007-2012 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -920,6 +920,7 @@ write_object_renaming (struct block *orig_left_context,
         break;
       case 'L':
 	slice_state = LOWER_BOUND;
+	/* FALLTHROUGH */
       case 'S':
 	renaming_expr += 1;
 	if (isdigit (*renaming_expr))
@@ -1091,7 +1092,6 @@ find_primitive_type (char *name)
     {
       /* Check to see if we have a regular definition of this
 	 type that just didn't happen to have been read yet.  */
-      int ntypes;
       struct symbol *sym;
       char *expanded_name = 
 	(char *) alloca (strlen (name) + sizeof ("standard__"));
@@ -1287,12 +1287,12 @@ write_var_or_type (struct block *block, struct stoken name0)
 	     FIXME pnh 7/20/2007. */
 	  if (nsyms == 1)
 	    {
-	      struct symbol *renaming =
+	      struct symbol *ren_sym =
 		ada_find_renaming_symbol (SYMBOL_LINKAGE_NAME (syms[0].sym), 
 					  syms[0].block);
 
-	      if (renaming != NULL)
-		syms[0].sym = renaming;
+	      if (ren_sym != NULL)
+		syms[0].sym = ren_sym;
 	    }
 
 	  type_sym = select_possible_type_sym (syms, nsyms);
@@ -1366,7 +1366,6 @@ write_var_or_type (struct block *block, struct stoken name0)
 	    }
 	  else if (nsyms == 0) 
 	    {
-	      int i;
 	      struct minimal_symbol *msym 
 		= ada_lookup_simple_minsym (encoded_name);
 	      if (msym != NULL)
@@ -1450,8 +1449,12 @@ convert_char_literal (struct type *type, LONGEST val)
   char name[7];
   int f;
 
-  if (type == NULL || TYPE_CODE (type) != TYPE_CODE_ENUM)
+  if (type == NULL)
     return val;
+  type = check_typedef (type);
+  if (TYPE_CODE (type) != TYPE_CODE_ENUM)
+    return val;
+
   xsnprintf (name, sizeof (name), "QU%02x", (int) val);
   for (f = 0; f < TYPE_NFIELDS (type); f += 1)
     {

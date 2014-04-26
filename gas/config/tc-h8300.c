@@ -146,7 +146,7 @@ static void
 h8300_elf_section (int push)
 {
   static const char * known_data_sections [] = { ".rodata", ".tdata", ".tbss" };
-  static const char * known_data_prefixes [] = { ".debug", ".gnu.warning" };
+  static const char * known_data_prefixes [] = { ".debug", ".zdebug", ".gnu.warning" };
   char * saved_ilp = input_line_pointer;
   char * name;
 
@@ -559,7 +559,7 @@ static int
 constant_fits_width_p (struct h8_op *operand, unsigned int width)
 {
   return ((operand->exp.X_add_number & ~width) == 0
-	  || (operand->exp.X_add_number | width) == (unsigned)(~0));
+	  || (operand->exp.X_add_number | (offsetT) width) == (offsetT)(~0));
 }
 
 static int

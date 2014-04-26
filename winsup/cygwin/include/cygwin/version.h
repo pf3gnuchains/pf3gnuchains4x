@@ -1,7 +1,7 @@
 /* version.h -- Cygwin version numbers and accompanying documentation.
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -43,7 +43,7 @@ details. */
 	 changes to the DLL and is mainly informative in nature. */
 
 #define CYGWIN_VERSION_DLL_MAJOR 1007
-#define CYGWIN_VERSION_DLL_MINOR 2
+#define CYGWIN_VERSION_DLL_MINOR 10
 
       /* Major numbers before CYGWIN_VERSION_DLL_EPOCH are
 	 incompatible. */
@@ -62,8 +62,11 @@ details. */
      /* Every version of cygwin <= this uses an old, incorrect method
 	to determine signal masks. */
 
+#define CYGWIN_VERSION_PER_PROCESS_API_VERSION_COMBINED(u) \
+  CYGWIN_VERSION_DLL_MAKE_COMBINED ((u)->api_major, (u)->api_minor)
+
 #define CYGWIN_VERSION_USER_API_VERSION_COMBINED \
-  CYGWIN_VERSION_DLL_MAKE_COMBINED (user_data->api_major, user_data->api_minor)
+  CYGWIN_VERSION_PER_PROCESS_API_VERSION_COMBINED (user_data)
 
     /* API versions <= this had a termios structure whose members were
        too small to accomodate modern settings. */
@@ -97,6 +100,9 @@ details. */
 
 #define CYGWIN_VERSION_CHECK_FOR_OLD_CTYPE \
   (CYGWIN_VERSION_USER_API_VERSION_COMBINED <= 209)
+
+#define CYGWIN_VERSION_USE_PSEUDO_RELOC_IN_DLL(u) \
+  (CYGWIN_VERSION_PER_PROCESS_API_VERSION_COMBINED (u) >= 227)
 
 #define CYGWIN_VERSION_CYGWIN_CONV 181
 
@@ -374,12 +380,60 @@ details. */
       218: Export get_nprocs, get_nprocs_conf, get_phys_pages, get_avphys_pages.
       219: Export dup3, pipe2, O_CLOEXEC, F_DUPFD_CLOEXEC.
       220: Export accept4, SOCK_CLOEXEC, SOCK_NONBLOCK.
+      221: Export strfmon.
+      222: CW_INT_SETLOCALE added.
+      223: SIGPWR added.
+      224: Export xdr* functions.
+      225: Export __xdr* functions.
+      226: Export __locale_mb_cur_max.
+      227: Add pseudo_reloc_start, pseudo_reloc_end, image_base to per_process.
+      228: CW_STRERROR added.
+      229: Add mkostemp, mkostemps.
+      230: Add CLOCK_MONOTONIC.
+      231: Add fenv.h functions.
+      232: Export cacos, cacosf, cacosh, cacoshf, carg, cargf, casin, casinf,
+	   casinh, casinhf, catan, catanf, catanh, catanhf, ccos, ccosf, ccosh,
+	   ccoshf, cexp, cexpf, cimag, cimagf, clog, clogf, conj, conjf, cpow,
+	   cpowf, cproj, cprojf, creal, crealf, csin, csinf, csinh, csinhf,
+	   csqrt, csqrtf, ctan, ctanf, ctanh, ctanhf.
+      233: Add TIOCGPGRP, TIOCSPGRP.  Export llround, llroundf.
+      234: Export program_invocation_name, program_invocation_short_name.
+      235: Export madvise.
+      236: Export pthread_yield, __xpg_strerror_r.
+      237: Export strchrnul.
+      238: Export pthread_spin_destroy, pthread_spin_init, pthread_spin_lock,
+	   pthread_spin_trylock, pthread_spin_unlock.
+      239: Export pthread_setschedprio.
+      240: Export ppoll.
+      241: Export pthread_attr_getstack, pthread_attr_getstackaddr,
+	   pthread_getattr_np.
+      242: Export psiginfo, psignal, sys_siglist.
+      243: Export sysinfo.
+      244: Export clock_settime.
+      245: Export pthread_attr_getguardsize, pthread_attr_setguardsize,
+	   pthread_attr_setstack, pthread_attr_setstackaddr.
+      246: Add CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID.
+	   Export clock_getcpuclockid, pthread_getcpuclockid.
+      247: Export error, error_at_line, error_message_count, error_one_per_line,
+	   error_print_progname.
+      248: Export __fpurge.
+      249: Export pthread_condattr_getclock, pthread_condattr_setclock.
+      250: Export clock_nanosleep.
+      251: RTLD_NODELETE, RTLD_NOLOAD, RTLD_DEEPBIND added.
+      252: CW_CVT_ENV_TO_WINENV added.
+      253: Export TIOCSCTTY, tcgetsid.
+      254: Export getgrouplist.
+      255: Export ptsname_r.
+      256: Add CW_ALLOC_DRIVE_MAP, CW_MAP_DRIVE_MAP, CW_FREE_DRIVE_MAP.
+      257: Export getpt.
+      258: Export get_current_dir_name.
+      259: Export pthread_sigqueue.
      */
 
      /* Note that we forgot to bump the api for ualarm, strtoll, strtoull */
 
 #define CYGWIN_VERSION_API_MAJOR 0
-#define CYGWIN_VERSION_API_MINOR 220
+#define CYGWIN_VERSION_API_MINOR 259
 
      /* There is also a compatibity version number associated with the
 	shared memory regions.  It is incremented when incompatible

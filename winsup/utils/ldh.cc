@@ -11,7 +11,7 @@ WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 	cmd += 4;
 	break;
       }
-  if (!*cmd || !LoadLibraryW (cmd))
+  if (!*cmd || !LoadLibraryExW (cmd, NULL, LOAD_WITH_ALTERED_SEARCH_PATH ))
     ExitProcess (0x0100);
   ExitProcess (0x0000);
 }

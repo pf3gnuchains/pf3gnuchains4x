@@ -1,5 +1,5 @@
 ; Generic simulator application utilities.
-; Copyright (C) 2000, 2005, 2006, 2009 Red Hat, Inc.
+; Copyright (C) 2000, 2005, 2006, 2009, 2010 Red Hat, Inc.
 ; This file is part of CGEN.
 ; See file COPYING.CGEN for details.
 
@@ -333,7 +333,7 @@
     ; itself.
     (let ((nub-sbufs (list (build-sbuf (car sfmt-contents))))
 	  (empty-sbuf (make <sformat-argbuf>
-			'fmt-empty "no operands" atlist-empty
+			'sfmt-empty "no operands" atlist-empty
 			nil))
 	  )
       (sfmt-set-sbuf! (caar sfmt-contents) (car nub-sbufs))

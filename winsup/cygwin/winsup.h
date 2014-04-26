@@ -1,7 +1,7 @@
 /* winsup.h: main Cygwin header file.
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -23,6 +23,7 @@ details. */
 
 #define NO_COPY __attribute__((nocommon)) __attribute__((section(".data_cygwin_nocopy")))
 #define NO_COPY_INIT __attribute__((section(".data_cygwin_nocopy")))
+#define _RDATA __attribute__ ((section(".rdata")))
 
 #define EXPORT_ALIAS(sym,symalias) extern "C" __typeof (sym) symalias __attribute__ ((alias(#sym)));
 
@@ -70,6 +71,12 @@ int fcntl64 (int fd, int cmd, ...);
    application provided path strings we handle. */
 #define NT_MAX_PATH 32768
 
+/* This definition allows to define wide char strings using macros as
+   parameters.  See the definition of __CONCAT in newlib's sys/cdefs.h
+   and accompanying comment. */
+#define __WIDE(a) L ## a
+#define _WIDE(a) __WIDE(a)
+
 #ifdef __cplusplus
 
 extern const char case_folded_lower[];
@@ -81,24 +88,7 @@ extern const char case_folded_upper[];
 #define cfree newlib_cfree_dont_use
 #endif
 
-#define WIN32_LEAN_AND_MEAN 1
-#define _WINGDI_H
-#define _WINUSER_H
-#define _WINNLS_H
-#define _WINVER_H
-#define _WINNETWK_H
-#define _WINSVC_H
-#include <windows.h>
-#include <wincrypt.h>
-#include <lmcons.h>
-#include <ntdef.h>
-#undef _WINGDI_H
-#undef _WINUSER_H
-#undef _WINNLS_H
-#undef _WINVER_H
-#undef _WINNETWK_H
-#undef _WINSVC_H
-
+#include "winlean.h"
 #include "wincap.h"
 
 /* The one function we use from winuser.h most of the time */
@@ -144,7 +134,6 @@ extern int cygserver_running;
 #define SIGTOMASK(sig)	(1 << ((sig) - 1))
 
 #define set_api_fatal_return(n) do {extern int __api_fatal_exit_val; __api_fatal_exit_val = (n);} while (0)
-#define api_fatal(fmt, args...) __api_fatal (fmt,## args)
 
 #undef issep
 #define issep(ch) (strchr (" \t\n\r", (ch)) != NULL)
@@ -172,12 +161,11 @@ void dll_crt0 (per_process *) __asm__ ("_dll_crt0__FP11per_process");
 extern "C" void __stdcall _dll_crt0 ();
 void dll_crt0_1 (void *);
 void dll_dllcrt0_1 (void *);
-int spawn_guts (const char * prog_arg, const char *const *argv,
-		const char *const envp[], int mode, int __stdin = -1,
-		int __stdout = -1) __attribute__ ((regparm(3)));
 
 /* dynamically loaded dll initialization */
 extern "C" int dll_dllcrt0 (HMODULE, per_process *);
+
+void _pei386_runtime_relocator (per_process *);
 
 /* dynamically loaded dll initialization for non-cygwin apps */
 extern "C" int dll_noncygwin_dllcrt0 (HMODULE, per_process *);
@@ -226,10 +214,7 @@ __ino64_t __stdcall hash_path_name (__ino64_t hash, PCWSTR name) __attribute__ (
 __ino64_t __stdcall hash_path_name (__ino64_t hash, const char *name) __attribute__ ((regparm(2)));
 void __stdcall nofinalslash (const char *src, char *dst) __attribute__ ((regparm(2)));
 
-/* String manipulation */
-extern "C" char *__stdcall strccpy (char *s1, const char **s2, char c);
-
-void *hook_or_detect_cygwin (const char *, const void *, WORD&) __attribute__ ((regparm (3)));
+void *hook_or_detect_cygwin (const char *, const void *, WORD&, HANDLE h = NULL) __attribute__ ((regparm (3)));
 
 /* Time related */
 void __stdcall totimeval (struct timeval *, FILETIME *, int, int);
@@ -251,7 +236,8 @@ void __set_winsock_errno (const char *fn, int ln) __attribute__ ((regparm(2)));
 extern bool wsock_started;
 
 /* Printf type functions */
-extern "C" void __api_fatal (const char *, ...) __attribute__ ((noreturn));
+extern "C" void vapi_fatal (const char *, va_list ap) __attribute__ ((noreturn));
+extern "C" void api_fatal (const char *, ...) __attribute__ ((noreturn));
 int __small_sprintf (char *dst, const char *fmt, ...) /*__attribute__ ((regparm (2)))*/;
 int __small_vsprintf (char *dst, const char *fmt, va_list ap) /*__attribute__ ((regparm (3)))*/;
 int __small_swprintf (PWCHAR dst, const WCHAR *fmt, ...) /*__attribute__ ((regparm (2)))*/;
@@ -271,9 +257,6 @@ int __stdcall stat_worker (path_conv &pc, struct __stat64 *buf) __attribute__ ((
 
 __ino64_t __stdcall readdir_get_ino (const char *path, bool dot_dot) __attribute__ ((regparm (2)));
 
-/* Returns the real page size, not the allocation size. */
-size_t getsystempagesize ();
-
 /* mmap functions. */
 enum mmap_region_status
   {
@@ -282,6 +265,7 @@ enum mmap_region_status
     MMAP_NORESERVE_COMMITED
   };
 mmap_region_status mmap_is_attached_or_noreserve (void *addr, size_t len);
+bool is_mmapped_region (caddr_t start_addr, caddr_t end_address);
 
 inline bool flush_file_buffers (HANDLE h)
 {

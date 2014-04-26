@@ -20,6 +20,8 @@
 
 #include "config.h"
 
+#include <stdio.h>
+#include <errno.h>
 #include <signal.h>
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
@@ -32,6 +34,22 @@
 # if !defined (MAP_ANONYMOUS) && defined (MAP_ANON)
 #  define MAP_ANONYMOUS MAP_ANON
 # endif
+#endif
+
+#ifdef HAVE_STRING_H
+#include <string.h>
+#else
+#ifdef HAVE_STRINGS_H
+#include <strings.h>
+#endif
+#endif
+
+#ifdef HAVE_STDLIB_H
+#include <stdlib.h>
+#endif
+
+#ifdef HAVE_SYS_STAT_H
+#include <sys/stat.h>
 #endif
 
 #include "bfd.h"
@@ -63,7 +81,7 @@
 
 extern unsigned short sh_jump_table[], sh_dsp_table[0x1000], ppi_table[];
 
-int sim_write (SIM_DESC sd, SIM_ADDR addr, unsigned char *buffer, int size);
+int sim_write (SIM_DESC sd, SIM_ADDR addr, const unsigned char *buffer, int size);
 
 #define O_RECOMPILE 85
 #define DEFINE_TABLE
@@ -2123,7 +2141,7 @@ int
 sim_write (sd, addr, buffer, size)
      SIM_DESC sd;
      SIM_ADDR addr;
-     unsigned char *buffer;
+     const unsigned char *buffer;
      int size;
 {
   int i;
@@ -2768,4 +2786,10 @@ sim_set_callbacks (p)
      host_callback *p;
 {
   callback = p;
+}
+
+char **
+sim_complete_command (SIM_DESC sd, char *text, char *word)
+{
+  return NULL;
 }

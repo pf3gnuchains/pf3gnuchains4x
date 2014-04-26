@@ -1,7 +1,7 @@
 /* pipe.cc: pipe for Cygwin.
 
    Copyright 1996, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
-   2008, 2009, 2010 Hat, Inc.
+   2008, 2009, 2010, 2011 Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -24,10 +24,10 @@ details. */
 #include "shared_info.h"
 
 fhandler_pipe::fhandler_pipe ()
-  : fhandler_base (), popen_pid (0), overlapped (NULL)
+  : fhandler_base_overlapped (), popen_pid (0)
 {
+  max_atomic_write = DEFAULT_PIPEBUFSIZE;
   need_fork_fixup (true);
-  uninterruptible_io (true);
 }
 
 int
@@ -54,7 +54,10 @@ fhandler_pipe::init (HANDLE f, DWORD a, mode_t mode)
   a &= ~FILE_CREATE_PIPE_INSTANCE;
   fhandler_base::init (f, a, mode);
   close_on_exec (mode & O_CLOEXEC);
-  setup_overlapped (opened_properly);
+  if (opened_properly)
+    setup_overlapped ();
+  else
+    destroy_overlapped ();
   return 1;
 }
 
@@ -83,7 +86,10 @@ fhandler_pipe::open (int flags, mode_t mode)
 	      set_errno (EACCES);
 	      return 0;
 	    }
-	  if (!cfd->dup (this))
+	  cfd->copyto (this);
+	  set_io_handle (NULL);
+	  pc.reset_conv_handle ();
+	  if (!cfd->dup (this, flags))
 	    return 1;
 	  return 0;
 	}
@@ -123,7 +129,6 @@ fhandler_pipe::open (int flags, mode_t mode)
       goto out;
     }
   init (nio_hdl, fh->get_access (), mode & O_TEXT ?: O_BINARY);
-  uninterruptible_io (fh->uninterruptible_io ());
   cfree (fh);
   CloseHandle (proc);
   return 1;
@@ -166,26 +171,14 @@ fhandler_pipe::get_proc_fd_name (char *buf)
   return buf;
 }
 
-void
-fhandler_pipe::raw_read (void *in_ptr, size_t& in_len)
-{
-  return read_overlapped (in_ptr, in_len);
-}
-
 int
-fhandler_pipe::raw_write (const void *ptr, size_t len)
-{
-  return write_overlapped (ptr, len);
-}
-
-int
-fhandler_pipe::dup (fhandler_base *child)
+fhandler_pipe::dup (fhandler_base *child, int flags)
 {
   fhandler_pipe *ftp = (fhandler_pipe *) child;
   ftp->set_popen_pid (0);
 
   int res;
-  if (get_handle () && fhandler_base::dup (child))
+  if (get_handle () && fhandler_base_overlapped::dup (child, flags))
     res = -1;
   else
     res = 0;
@@ -203,40 +196,41 @@ fhandler_pipe::dup (fhandler_base *child)
    which is used to implement select and nonblocking writes.
    Note that the return value is either 0 or GetLastError,
    unlike CreatePipe, which returns a bool for success or failure.  */
-int
-fhandler_pipe::create_selectable (LPSECURITY_ATTRIBUTES sa_ptr, HANDLE& r,
-				  HANDLE& w, DWORD psize, const char *name)
+DWORD
+fhandler_pipe::create (LPSECURITY_ATTRIBUTES sa_ptr, PHANDLE r, PHANDLE w,
+		       DWORD psize, const char *name, DWORD open_mode)
 {
   /* Default to error. */
-  r = w = INVALID_HANDLE_VALUE;
+  if (r)
+    *r = NULL;
+  if (w)
+    *w = NULL;
 
   /* Ensure that there is enough pipe buffer space for atomic writes.  */
-  if (psize < PIPE_BUF)
-    psize = PIPE_BUF;
+  if (!psize)
+    psize = DEFAULT_PIPEBUFSIZE;
 
   char pipename[MAX_PATH];
   const size_t len = __small_sprintf (pipename, PIPE_INTRO "%S-",
 				      &installation_key);
+  if (name)
+    strcpy (pipename + len, name);
 
-  /* FIXME: Eventually make ttys work with overlapped I/O. */
-  DWORD overlapped = name ? 0 : FILE_FLAG_OVERLAPPED;
+  open_mode |= PIPE_ACCESS_INBOUND;
 
   /* Retry CreateNamedPipe as long as the pipe name is in use.
      Retrying will probably never be necessary, but we want
      to be as robust as possible.  */
-  DWORD err;
-  do
+  DWORD err = 0;
+  while (r && !*r)
     {
       static volatile ULONG pipe_unique_id;
       if (!name)
 	__small_sprintf (pipename + len, "pipe-%p-%p", myself->pid,
 			InterlockedIncrement ((LONG *) &pipe_unique_id));
-      else
-	strcpy (pipename + len, name);
 
       debug_printf ("CreateNamedPipe: name %s, size %lu", pipename, psize);
 
-      err = 0;
       /* Use CreateNamedPipe instead of CreatePipe, because the latter
 	 returns a write handle that does not permit FILE_READ_ATTRIBUTES
 	 access, on versions of win32 earlier than WinXP SP2.
@@ -245,15 +239,21 @@ fhandler_pipe::create_selectable (LPSECURITY_ATTRIBUTES sa_ptr, HANDLE& r,
 	 It's important to only allow a single instance, to ensure that
 	 the pipe was not created earlier by some other process, even if
 	 the pid has been reused.  We avoid FILE_FLAG_FIRST_PIPE_INSTANCE
-	 because that is only available for Win2k SP2 and WinXP.  */
-      r = CreateNamedPipe (pipename, PIPE_ACCESS_INBOUND | overlapped,
-			   PIPE_TYPE_BYTE | PIPE_READMODE_BYTE, 1, psize,
+	 because that is only available for Win2k SP2 and WinXP.
+
+	 Note that the write side of the pipe is opened as PIPE_TYPE_MESSAGE.
+	 This *seems* to more closely mimic Linux pipe behavior and is
+	 definitely required for pty handling since fhandler_pty_master
+	 writes to the pipe in chunks, terminated by newline when CANON mode
+	 is specified.  */
+      *r = CreateNamedPipe (pipename, open_mode,
+			   PIPE_TYPE_MESSAGE | PIPE_READMODE_BYTE, 1, psize,
 			   psize, NMPWAIT_USE_DEFAULT_WAIT, sa_ptr);
 
-      /* Win 95 seems to return NULL instead of INVALID_HANDLE_VALUE */
-      if (r && r != INVALID_HANDLE_VALUE)
+      if (*r != INVALID_HANDLE_VALUE)
 	{
-	  debug_printf ("pipe read handle %p", r);
+	  debug_printf ("pipe read handle %p", *r);
+	  err = 0;
 	  break;
 	}
 
@@ -263,43 +263,58 @@ fhandler_pipe::create_selectable (LPSECURITY_ATTRIBUTES sa_ptr, HANDLE& r,
 	case ERROR_PIPE_BUSY:
 	  /* The pipe is already open with compatible parameters.
 	     Pick a new name and retry.  */
-	  debug_printf ("pipe busy", name ? ", retrying" : "");
+	  debug_printf ("pipe busy", !name ? ", retrying" : "");
+	  if (!name)
+	    *r = NULL;
 	  break;
 	case ERROR_ACCESS_DENIED:
 	  /* The pipe is already open with incompatible parameters.
 	     Pick a new name and retry.  */
-	  debug_printf ("pipe access denied%s", name ? ", retrying" : "");
+	  debug_printf ("pipe access denied%s", !name ? ", retrying" : "");
+	  if (!name)
+	    *r = NULL;
 	  break;
 	default:
 	  {
 	    err = GetLastError ();
-	    debug_printf ("CreatePipe failed, %E");
-	    return err;
+	    debug_printf ("failed, %E");
 	  }
 	}
     }
-  while (!name);
 
   if (err)
-    return err;
-
-  debug_printf ("CreateFile: name %s", pipename);
-
-  /* Open the named pipe for writing.
-     Be sure to permit FILE_READ_ATTRIBUTES access.  */
-  w = CreateFile (pipename, GENERIC_WRITE | FILE_READ_ATTRIBUTES, 0, sa_ptr,
-		  OPEN_EXISTING, overlapped, 0);
-
-  if (!w || w == INVALID_HANDLE_VALUE)
     {
-      /* Failure. */
-      DWORD err = GetLastError ();
-      debug_printf ("CreateFile failed, %E");
-      CloseHandle (r);
+      *r = NULL;
       return err;
     }
 
-  debug_printf ("pipe write handle %p", w);
+  if (!w)
+    debug_printf ("pipe write handle NULL");
+  else
+    {
+      debug_printf ("CreateFile: name %s", pipename);
+
+      /* Open the named pipe for writing.
+	 Be sure to permit FILE_READ_ATTRIBUTES access.  */
+      DWORD access = GENERIC_WRITE | FILE_READ_ATTRIBUTES;
+      if ((open_mode & PIPE_ACCESS_DUPLEX) == PIPE_ACCESS_DUPLEX)
+	access |= GENERIC_READ | FILE_WRITE_ATTRIBUTES;
+      *w = CreateFile (pipename, access, 0, sa_ptr, OPEN_EXISTING,
+		      open_mode & FILE_FLAG_OVERLAPPED, 0);
+
+      if (!*w || *w == INVALID_HANDLE_VALUE)
+	{
+	  /* Failure. */
+	  DWORD err = GetLastError ();
+	  debug_printf ("CreateFile failed, %E");
+	  if (r)
+	    CloseHandle (*r);
+	  *w = NULL;
+	  return err;
+	}
+
+      debug_printf ("pipe write handle %p", *w);
+    }
 
   /* Success. */
   return 0;
@@ -310,26 +325,30 @@ fhandler_pipe::create (fhandler_pipe *fhs[2], unsigned psize, int mode)
 {
   HANDLE r, w;
   SECURITY_ATTRIBUTES *sa = sec_none_cloexec (mode);
-  int res;
+  int res = -1;
 
-  int ret = create_selectable (sa, r, w, psize);
+  int ret = create (sa, &r, &w, psize, NULL, FILE_FLAG_OVERLAPPED);
   if (ret)
+    __seterrno_from_win_error (ret);
+  else if ((fhs[0] = (fhandler_pipe *) build_fh_dev (*piper_dev)) == NULL)
     {
-      __seterrno_from_win_error (ret);
-      res = -1;
+      CloseHandle (r);
+      CloseHandle (w);
+    }
+  else if ((fhs[1] = (fhandler_pipe *) build_fh_dev (*pipew_dev)) == NULL)
+    {
+      delete fhs[0];
+      CloseHandle (w);
     }
   else
     {
-      fhs[0] = (fhandler_pipe *) build_fh_dev (*piper_dev);
-      fhs[1] = (fhandler_pipe *) build_fh_dev (*pipew_dev);
-
       mode |= mode & O_TEXT ?: O_BINARY;
       fhs[0]->init (r, FILE_CREATE_PIPE_INSTANCE | GENERIC_READ, mode);
       fhs[1]->init (w, FILE_CREATE_PIPE_INSTANCE | GENERIC_WRITE, mode);
       res = 0;
     }
 
-  syscall_printf ("%d = pipe ([%p, %p], %d, %p)", res, fhs[0], fhs[1], psize, mode);
+  debug_printf ("%R = pipe([%p, %p], %d, %p)", res, fhs[0], fhs[1], psize, mode);
   return res;
 }
 
@@ -367,48 +386,72 @@ fhandler_pipe::fstatvfs (struct statvfs *sfs)
   return -1;
 }
 
-#define DEFAULT_PIPEBUFSIZE 65536
-
-extern "C" int
-pipe (int filedes[2])
+static int __attribute__ ((regparm (3)))
+pipe_worker (int filedes[2], unsigned int psize, int mode)
 {
   fhandler_pipe *fhs[2];
-  int res = fhandler_pipe::create (fhs, DEFAULT_PIPEBUFSIZE, O_BINARY);
-  if (res == 0)
+  int res = fhandler_pipe::create (fhs, psize, mode);
+  if (!res)
     {
       cygheap_fdnew fdin;
       cygheap_fdnew fdout (fdin, false);
+      char buf[sizeof ("/dev/fd/pipe:[2147483647]")];
+      __small_sprintf (buf, "/dev/fd/pipe:[%d]", (int) fdin);
+      fhs[0]->pc.set_normalized_path (buf);
+      __small_sprintf (buf, "pipe:[%d]", (int) fdout);
+      fhs[1]->pc.set_normalized_path (buf);
       fdin = fhs[0];
       fdout = fhs[1];
       filedes[0] = fdin;
       filedes[1] = fdout;
     }
-
   return res;
 }
 
 extern "C" int
 _pipe (int filedes[2], unsigned int psize, int mode)
 {
-  fhandler_pipe *fhs[2];
-  int res = fhandler_pipe::create (fhs, psize, mode);
-  /* This type of pipe is not interruptible so set the appropriate flag. */
-  if (!res)
+  int res = pipe_worker (filedes, psize, mode);
+  int read, write;
+  if (res != 0)
+    read = write = -1;
+  else
     {
-      cygheap_fdnew fdin;
-      cygheap_fdnew fdout (fdin, false);
-      fhs[0]->uninterruptible_io (true);
-      fdin = fhs[0];
-      fdout = fhs[1];
-      filedes[0] = fdin;
-      filedes[1] = fdout;
+      read = filedes[0];
+      write = filedes[1];
     }
+  syscall_printf ("%R = _pipe([%d, %d], %u, %p)", res, read, write, psize, mode);
+  return res;
+}
 
+extern "C" int
+pipe (int filedes[2])
+{
+  int res = pipe_worker (filedes, DEFAULT_PIPEBUFSIZE, O_BINARY);
+  int read, write;
+  if (res != 0)
+    read = write = -1;
+  else
+    {
+      read = filedes[0];
+      write = filedes[1];
+    }
+  syscall_printf ("%R = pipe([%d, %d])", res, read, write);
   return res;
 }
 
 extern "C" int
 pipe2 (int filedes[2], int mode)
 {
-  return _pipe (filedes, DEFAULT_PIPEBUFSIZE, mode);
+  int res = pipe_worker (filedes, DEFAULT_PIPEBUFSIZE, mode);
+  int read, write;
+  if (res != 0)
+    read = write = -1;
+  else
+    {
+      read = filedes[0];
+      write = filedes[1];
+    }
+  syscall_printf ("%R = pipe2([%d, %d], %p)", res, read, write, mode);
+  return res;
 }

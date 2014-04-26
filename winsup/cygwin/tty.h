@@ -1,6 +1,6 @@
 /* tty.h: shared tty info for cygwin
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2006 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2006, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -8,18 +8,17 @@ This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
 details. */
 
+#ifndef _TTY_H
+#define _TTY_H
 /* tty tables */
 
 #define INP_BUFFER_SIZE 256
 #define OUT_BUFFER_SIZE 256
-#define NTTYS		128
-#define real_tty_attached(p)	((p)->ctty >= 0 && (p)->ctty != TTY_CONSOLE)
+#define NTTYS		64
+#define real_tty_attached(p)	((p)->ctty > 0 && !iscons_dev ((p)->ctty))
 
 /* Input/Output/ioctl events */
 
-#define OUTPUT_DONE_EVENT	"cygtty.output.done"
-#define IOCTL_REQUEST_EVENT	"cygtty.ioctl.request"
-#define IOCTL_DONE_EVENT	"cygtty.ioctl.done"
 #define RESTART_OUTPUT_EVENT	"cygtty.output.restart"
 #define INPUT_AVAILABLE_EVENT	"cygtty.input.avail"
 #define OUTPUT_MUTEX		"cygtty.output.mutex"
@@ -33,6 +32,7 @@ details. */
 #define MIN_CTRL_C_SLOP 50
 #endif
 
+#include <devices.h>
 class tty_min
 {
   pid_t sid;	/* Session ID of tty */
@@ -45,9 +45,9 @@ class tty_min
 public:
   pid_t pgid;
   int output_stopped;
-  int ntty;
+  fh_devices ntty;
   DWORD last_ctrl_c;	/* tick count of last ctrl-c */
-  HWND hwnd;		/* Console window handle tty belongs to */
+  bool is_console;
 
   IMPLEMENT_STATUS_FLAG (bool, initialized)
   IMPLEMENT_STATUS_FLAG (bool, rstcons)
@@ -70,21 +70,24 @@ public:
   int ioctl_retval;
   int write_error;
 
-  void setntty (int n) {ntty = n;}
-  pid_t getpgid () {return pgid;}
+  void setntty (_major_t t, int n) {ntty = (fh_devices) FHDEV (t, n);}
+  int getntty () const {return ntty;}
+  int get_unit () const {return device::minor (ntty);}
+  pid_t getpgid () const {return pgid;}
   void setpgid (int pid) {pgid = pid;}
-  int getsid () {return sid;}
+  int getsid () const {return sid;}
   void setsid (pid_t tsid) {sid = tsid;}
-  void kill_pgrp (int sig);
-  HWND gethwnd () {return hwnd;}
-  void sethwnd (HWND wnd) {hwnd = wnd;}
+  void kill_pgrp (int);
+  int is_orphaned_process_group (int);
+  const char *ttyname () __attribute ((regparm (1)));
 };
 
 class fhandler_pty_master;
 
 class tty: public tty_min
 {
-  HANDLE get_event (const char *fmt, BOOL manual_reset = FALSE)
+  HANDLE get_event (const char *fmt, PSECURITY_ATTRIBUTES sa,
+		    BOOL manual_reset = FALSE);
     __attribute__ ((regparm (3)));
 public:
   pid_t master_pid;	/* PID of tty master process */
@@ -95,15 +98,18 @@ public:
   bool was_opened;	/* True if opened at least once. */
 
   void init ();
-  HANDLE create_inuse (const char *);
-  bool alive (const char *fmt);
+  HANDLE open_inuse (ACCESS_MASK access);
+  HANDLE create_inuse (PSECURITY_ATTRIBUTES);
   bool slave_alive ();
-  bool master_alive ();
-  HANDLE open_mutex (const char *mutex);
-  HANDLE open_output_mutex ();
-  HANDLE open_input_mutex ();
+  HANDLE open_mutex (const char *mutex, ACCESS_MASK access);
+  inline HANDLE open_output_mutex (ACCESS_MASK access)
+    { return open_mutex (OUTPUT_MUTEX, access); }
+  inline HANDLE open_input_mutex (ACCESS_MASK access)
+    { return open_mutex (INPUT_MUTEX, access); }
   bool exists ();
+  bool not_allocated (HANDLE&, HANDLE&);
   void set_master_closed () {master_pid = -1;}
+  bool is_master_closed () const {return master_pid == -1;}
   static void __stdcall create_master (int);
   static void __stdcall init_session ();
   friend class fhandler_pty_master;
@@ -115,13 +121,12 @@ class tty_list
   static HANDLE mutex;
 
 public:
-  tty * operator [](int n) {return ttys + n;}
-  int allocate (bool); /* true if allocate a tty, pty otherwise */
+  tty * operator [](int n) {return ttys + device::minor (n);}
+  int allocate (HANDLE& r, HANDLE& w);	/* allocate a pty */
   int connect (int);
-  void terminate ();
   void init ();
-  tty_min *get_tty (int n);
-  int __stdcall attach (int);
+  tty_min *get_cttyp ();
+  int __stdcall attach (int n) __attribute__ ((regparm (2)));
   static void __stdcall init_session ();
   friend class lock_ttys;
 };
@@ -141,3 +146,4 @@ public:
 };
 
 extern "C" int ttyslot (void);
+#endif /*_TTY_H*/

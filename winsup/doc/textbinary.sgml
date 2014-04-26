@@ -23,7 +23,7 @@ standard input and output) as text.  All other programs (such as
 would use binary mode.  In practice with Cygwin, programs that deal
 explicitly with object files specify binary mode (this is the case of
 <command>od</command>, which is helpful to diagnose CR problems).  Most
-other programs (such as <command>cat</command>, <command>cmp</command>,
+other programs (such as <command>sed</command>, <command>cmp</command>,
 <command>tr</command>) use the default mode.</para>
 
 </sect2>
@@ -68,43 +68,13 @@ Non-Cygwin shells always pipe and redirect with binary mode. With
 non-Cygwin shells the commands <command> cat filename | program </command>
 and <command> program &lt; filename </command> are not equivalent when
 <filename>filename</filename> is on a text-mounted partition. </para>
+<para>The programs <command>u2d</command> and <command>d2u</command> can
+be used to add or remove CR's from a file.  <command>u2d</command> add's CR's before a NL.
+<command>d2u</command> removes CR's.  Use the --help option to these commands
+for more information.
+</para>
 </listitem>
 </orderedlist>
-</sect2>
-
-<sect2 id="textbin-example"><title>Example</title>
-<para>To illustrate the various rules, we provide scripts to delete CRs
-from files by using the <command>tr</command> program, which can only write
-to standard output. 
-The script</para>
-<screen>
-<![CDATA[
-#!/bin/sh
-# Remove \r from the file given as argument
-tr -d '\r' < "$1" > "$1".nocr
-]]>
-</screen>
-<para> will not work on a text mounted systems because the \r will be 
-reintroduced on writing. However scripts such as </para>
-<screen>
-<![CDATA[
-#!/bin/sh
-# Remove \r from the file given as argument
-tr -d '\r' | gzip | gunzip > "$1".nocr
-]]>
-</screen>
-<para>and the .bat file</para>
-<screen>
-<![CDATA[
-REM Remove \r from the file given as argument
-@echo off
-tr -d \r < %1 > %1.nocr
-]]>
-</screen>
-<para> work fine. In the first case we rely on <command>gunzip</command> to
-set its output to binary mode, possibly overriding the mode used by the shell.
-In the second case we rely on the DOS shell to redirect in binary mode.
-</para>
 </sect2>
 
 <sect2 id="textbin-question"><title>Binary or text?</title>
@@ -143,6 +113,11 @@ specified with the flag <literal>O_BINARY</literal> and text mode with
 <literal>O_TEXT</literal>. These symbols are defined in
 <filename>fcntl.h</filename>.</para>
 
+<para>The <function>mkstemp()</function> and <function>mkstemps()</function>
+calls force binary mode.  Use <function>mkostemp()</function> or
+<function>mkostemps()</function> with the same flags
+as <function>open()</function> for more control on temporary files.</para>
+
 <para>In the <function>fopen()</function> and <function>popen()</function>
 function calls, binary mode can be specified by adding a <literal>b</literal>
 to the mode string. Text mode is specified by adding a <literal>t</literal>
@@ -167,38 +142,46 @@ in your project, like this:</para>
   $ gcc my_tiny_app.c /lib/binmode.o -o my_tiny_app
 </screen>
 
+<para>Starting with Cygwin 1.7.7, you can use the even simpler:</para>
+
+<screen>
+  $ gcc my_tiny_app.c -lbinmode -o my_tiny_app
+</screen>
+
 <para>This adds code which sets the default open mode for all files
 opened by <command>my_tiny_app</command> to binary for reading and
 writing.</para>
 
-<para>Cygwin provides the following object files to set the default open mode
-just by linking an application against them:</para>
+<para>Cygwin provides the following libraries and object files to set the
+default open mode just by linking an application against them:</para>
 
 <itemizedlist mark="bullet">
 
 <listitem>
 <screen>
-/lib/automode.o      -  Open files for reading in textmode
-                        Open files for writing in binary mode
+/lib/libautomode.a      -  Open files for reading in textmode,
+/lib/automode.o            open files for writing in binary mode
 </screen>
 </listitem>
 
 <listitem>
 <screen>
-/lib/binmode.o       -  Open files for reading and writing in binary mode
+/lib/libbinmode.a       -  Open files for reading and writing in binary mode
+/lib/binmode.o
 </screen>
 </listitem>
 
 <listitem>
 <screen>
-/lib/textmode.o      -  Open files for reading and writing in textmode
+/lib/libtextmode.a      -  Open files for reading and writing in textmode
+/lib/textmode.o
 </screen>
 </listitem>
 
 <listitem>
 <screen>
-/lib/textreadmode.o  -  Open files for reading in textmode
-                        Keep default behaviour for writing.
+/lib/libtextreadmode.a  -  Open files for reading in textmode,
+/lib/textreadmode.o        keep default behaviour for writing.
 </screen>
 </listitem>
 

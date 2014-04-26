@@ -1,5 +1,5 @@
 /* Declarations for Intel 80386 opcode table
-   Copyright 2007, 2008, 2009
+   Copyright 2007, 2008, 2009, 2010
    Free Software Foundation, Inc.
 
    This file is part of the GNU opcodes library.
@@ -44,9 +44,11 @@ enum
   Cpu586,
   /* i686 or better required */
   Cpu686,
-  /* CLFLUSH Instuction support required */
+  /* CLFLUSH Instruction support required */
   CpuClflush,
-  /* SYSCALL Instuctions support required */
+  /* NOP Instruction support required */
+  CpuNop,
+  /* SYSCALL Instructions support required */
   CpuSYSCALL,
   /* Floating point support required */
   Cpu8087,
@@ -90,10 +92,16 @@ enum
   CpuSSE4_2,
   /* AVX support required */
   CpuAVX,
+  /* AVX2 support required */
+  CpuAVX2,
   /* Intel L1OM support required */
   CpuL1OM,
-  /* Xsave/xrstor New Instuctions support required */
+  /* Intel K1OM support required */
+  CpuK1OM,
+  /* Xsave/xrstor New Instructions support required */
   CpuXsave,
+  /* Xsaveopt New Instructions support required */
+  CpuXsaveopt,
   /* AES support required */
   CpuAES,
   /* PCLMUL support required */
@@ -106,12 +114,30 @@ enum
   CpuXOP,
   /* LWP support required */
   CpuLWP,
-  /* MOVBE Instuction support required */
+  /* BMI support required */
+  CpuBMI,
+  /* TBM support required */
+  CpuTBM,
+  /* MOVBE Instruction support required */
   CpuMovbe,
   /* EPT Instructions required */
   CpuEPT,
-  /* RDTSCP Instuction support required */
+  /* RDTSCP Instruction support required */
   CpuRdtscp,
+  /* FSGSBASE Instructions required */
+  CpuFSGSBase,
+  /* RDRND Instructions required */
+  CpuRdRnd,
+  /* F16C Instructions required */
+  CpuF16C,
+  /* Intel BMI2 support required */
+  CpuBMI2,
+  /* LZCNT support required */
+  CpuLZCNT,
+  /* INVPCID Instructions required */
+  CpuINVPCID,
+  /* VMFUNC Instruction required */
+  CpuVMFUNC,
   /* 64bit support available, used by -march= in assembler.  */
   CpuLM,
   /* 64bit support required  */
@@ -144,6 +170,7 @@ typedef union i386_cpu_flags
       unsigned int cpui586:1;
       unsigned int cpui686:1;
       unsigned int cpuclflush:1;
+      unsigned int cpunop:1;
       unsigned int cpusyscall:1;
       unsigned int cpu8087:1;
       unsigned int cpu287:1;
@@ -166,17 +193,29 @@ typedef union i386_cpu_flags
       unsigned int cpusse4_1:1;
       unsigned int cpusse4_2:1;
       unsigned int cpuavx:1;
+      unsigned int cpuavx2:1;
       unsigned int cpul1om:1;
+      unsigned int cpuk1om:1;
       unsigned int cpuxsave:1;
+      unsigned int cpuxsaveopt:1;
       unsigned int cpuaes:1;
       unsigned int cpupclmul:1;
       unsigned int cpufma:1;
       unsigned int cpufma4:1;
       unsigned int cpuxop:1;
       unsigned int cpulwp:1;
+      unsigned int cpubmi:1;
+      unsigned int cputbm:1;
       unsigned int cpumovbe:1;
       unsigned int cpuept:1;
       unsigned int cpurdtscp:1;
+      unsigned int cpufsgsbase:1;
+      unsigned int cpurdrnd:1;
+      unsigned int cpuf16c:1;
+      unsigned int cpubmi2:1;
+      unsigned int cpulzcnt:1;
+      unsigned int cpuinvpcid:1;
+      unsigned int cpuvmfunc:1;
       unsigned int cpulm:1;
       unsigned int cpu64:1;
       unsigned int cpuno64:1;
@@ -222,6 +261,8 @@ enum
   Size32,
   /* needs size prefix if in 64-bit mode */
   Size64,
+  /* check register size.  */
+  CheckRegSize,
   /* instruction ignores operand size prefix and in Intel mode ignores
      mnemonic size suffix check.  */
   IgnoreSize,
@@ -271,9 +312,11 @@ enum
   /* insn has VEX prefix:
 	1: 128bit VEX prefix.
 	2: 256bit VEX prefix.
+	3: Scalar VEX prefix.
    */
-#define VEX128	1
-#define VEX256	2
+#define VEX128		1
+#define VEX256		2
+#define VEXScalar	3
   Vex,
   /* How to encode VEX.vvvv:
      0: VEX.vvvv must be 1111b.
@@ -282,9 +325,12 @@ enum
 	VEX.DDS.  The second register operand is encoded in VEX.vvvv 
 	where the content of first source register will be overwritten
 	by the result.
-	For assembler, there are no difference between VEX.NDS and
-	VEX.DDS.
-     2. VEX.NDD.  Register destination is encoded in VEX.vvvv.
+	VEX.NDD2.  The second destination register operand is encoded in
+	VEX.vvvv for instructions with 2 destination register operands.
+	For assembler, there are no difference between VEX.NDS, VEX.DDS
+	and VEX.NDD2.
+     2. VEX.NDD.  Register destination is encoded in VEX.vvvv for
+     instructions with 1 destination register operand.
      3. VEX.LWP.  Register destination is encoded in VEX.vvvv and one
 	of the operands can access a memory location.
    */
@@ -325,6 +371,13 @@ enum
   VexSources,
   /* instruction has VEX 8 bit imm */
   VexImmExt,
+  /* Instruction with vector SIB byte:
+	1: 128bit vector register.
+	2: 256bit vector register.
+   */
+#define VecSIB128	1
+#define VecSIB256	2
+  VecSIB,
   /* SSE to AVX support required */
   SSE2AVX,
   /* No AVX equivalent */
@@ -358,6 +411,7 @@ typedef struct i386_opcode_modifier
   unsigned int size16:1;
   unsigned int size32:1;
   unsigned int size64:1;
+  unsigned int checkregsize:1;
   unsigned int ignoresize:1;
   unsigned int defaultsize:1;
   unsigned int no_bsuf:1;
@@ -386,6 +440,7 @@ typedef struct i386_opcode_modifier
   unsigned int vexopcode:3;
   unsigned int vexsources:2;
   unsigned int veximmext:1;
+  unsigned int vecsib:2;
   unsigned int sse2avx:1;
   unsigned int noavx:1;
   unsigned int oldgcc:1;
@@ -498,6 +553,9 @@ enum
   /* Any memory size.  */
   Anysize,
 
+  /* Vector 4 bit immediate.  */
+  Vec_Imm4,
+
   /* The last bitfield in i386_operand_type.  */
   OTMax
 };
@@ -559,6 +617,7 @@ typedef union i386_operand_type
       unsigned int ymmword:1;
       unsigned int unspecified:1;
       unsigned int anysize:1;
+      unsigned int vec_imm4:1;
 #ifdef OTUnused
       unsigned int unused:(OTNumOfBits - OTUnused);
 #endif

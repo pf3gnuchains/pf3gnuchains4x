@@ -1,6 +1,6 @@
 /* dllwrap.c -- wrapper for DLLTOOL and GCC to generate PE style DLLs
-   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2007, 2009
-   Free Software Foundation, Inc.
+   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2007, 2009,
+   2011  Free Software Foundation, Inc.
    Contributed by Mumit Khan (khan@xraylith.wisc.edu).
 
    This file is part of GNU Binutils.
@@ -414,7 +414,7 @@ run (const char *what, char *args)
   pid = pwait (pid, &wait_status, 0);
   if (pid == -1)
     {
-      warn ("wait: %s", strerror (errno));
+      warn (_("pwait returns: %s"), strerror (errno));
       retcode = 1;
     }
   else if (WIFSIGNALED (wait_status))
@@ -854,6 +854,9 @@ Creating one, but that may not be what you want"));
     which_cpu = X86_CPU;
   else
     which_cpu = UNKNOWN_CPU;
+
+  if (is_leading_underscore == -1)
+    is_leading_underscore = (which_cpu != X64_CPU && which_cpu != ARM_CPU);
 
   /* Re-create the command lines as a string, taking care to quote stuff.  */
   dlltool_cmdline = dyn_string_new (cmdline_len);

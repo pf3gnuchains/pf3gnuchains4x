@@ -1,7 +1,7 @@
 /* grp.cc
 
    Copyright 1996, 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
-   2007, 2008, 2009 Red Hat, Inc.
+   2007, 2008, 2009, 2011 Red Hat, Inc.
 
    Original stubs by Jason Molenda of Cygnus Support, crash@cygnus.com
    First implementation by Gunther Ebert, gunther.ebert@ixos-leipzig.de
@@ -13,6 +13,7 @@ Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
 details. */
 
 #include "winsup.h"
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "cygerrno.h"
@@ -21,6 +22,7 @@ details. */
 #include "fhandler.h"
 #include "dtable.h"
 #include "cygheap.h"
+#include "ntdll.h"
 #include "pwdgrp.h"
 
 static __group32 *group_buf;
@@ -314,8 +316,9 @@ internal_getgrent (int pos)
 int
 internal_getgroups (int gidsetsize, __gid32_t *grouplist, cygpsid * srchsid)
 {
+  NTSTATUS status;
   HANDLE hToken = NULL;
-  DWORD size;
+  ULONG size;
   int cnt = 0;
   struct __group32 *gr;
 
@@ -345,12 +348,14 @@ internal_getgroups (int gidsetsize, __gid32_t *grouplist, cygpsid * srchsid)
   else
     hToken = hProcToken;
 
-  if (GetTokenInformation (hToken, TokenGroups, NULL, 0, &size)
-      || GetLastError () == ERROR_INSUFFICIENT_BUFFER)
+  status = NtQueryInformationToken (hToken, TokenGroups, NULL, 0, &size);
+  if (NT_SUCCESS (status) || status == STATUS_BUFFER_TOO_SMALL)
     {
       PTOKEN_GROUPS groups = (PTOKEN_GROUPS) alloca (size);
 
-      if (GetTokenInformation (hToken, TokenGroups, groups, size, &size))
+      status = NtQueryInformationToken (hToken, TokenGroups, groups,
+					size, &size);
+      if (NT_SUCCESS (status))
 	{
 	  cygsid sid;
 
@@ -379,7 +384,7 @@ internal_getgroups (int gidsetsize, __gid32_t *grouplist, cygpsid * srchsid)
 	}
     }
   else
-    debug_printf ("%d = GetTokenInformation(NULL) %E", size);
+    debug_printf ("%lu = NtQueryInformationToken(NULL) %p", size, status);
   return cnt;
 
 error:
@@ -415,40 +420,86 @@ getgroups (int gidsetsize, __gid16_t *grouplist)
   return ret;
 }
 
-extern "C" int
-initgroups32 (const char *name, __gid32_t gid)
+/* Core functionality of initgroups and getgrouplist. */
+static int
+get_groups (const char *user, gid_t gid, cygsidlist &gsids)
 {
   int ret = -1;
 
   cygheap->user.deimpersonate ();
-  struct passwd *pw = internal_getpwnam (name);
+  struct passwd *pw = internal_getpwnam (user);
   struct __group32 *gr = internal_getgrgid (gid);
   cygsid usersid, grpsid;
   if (!usersid.getfrompw (pw) || !grpsid.getfromgr (gr))
     set_errno (EINVAL);
-  else
+  else if (get_server_groups (gsids, usersid, pw))
     {
-      cygsidlist tmp_gsids (cygsidlist_auto, 12);
-      if (get_server_groups (tmp_gsids, usersid, pw))
-	{
-	  tmp_gsids += grpsid;
-	  cygsidlist new_gsids (cygsidlist_alloc, tmp_gsids.count ());
-	  for (int i = 0; i < tmp_gsids.count (); i++)
-	    new_gsids.sids[i] = tmp_gsids.sids[i];
-	  new_gsids.count (tmp_gsids.count ());
-	  cygheap->user.groups.update_supp (new_gsids);
-	  ret = 0;
-	}
+      gsids += grpsid;
+      ret = 0;
     }
   cygheap->user.reimpersonate ();
-  syscall_printf ( "%d = initgroups (%s, %u)", ret, name, gid);
   return ret;
 }
 
 extern "C" int
-initgroups (const char *name, __gid16_t gid)
+initgroups32 (const char *user, __gid32_t gid)
 {
-  return initgroups32 (name, gid16togid32(gid));
+  int ret;
+
+  assert (user != NULL);
+  cygsidlist tmp_gsids (cygsidlist_auto, 12);
+  if (!(ret = get_groups (user, gid, tmp_gsids)))
+    {
+      cygsidlist new_gsids (cygsidlist_alloc, tmp_gsids.count ());
+      for (int i = 0; i < tmp_gsids.count (); i++)
+	new_gsids.sids[i] = tmp_gsids.sids[i];
+      new_gsids.count (tmp_gsids.count ());
+      cygheap->user.groups.update_supp (new_gsids);
+    }
+  syscall_printf ( "%d = initgroups(%s, %u)", ret, user, gid);
+  return ret;
+}
+
+extern "C" int
+initgroups (const char *user, __gid16_t gid)
+{
+  return initgroups32 (user, gid16togid32(gid));
+}
+
+extern "C" int
+getgrouplist (const char *user, gid_t gid, gid_t *groups, int *ngroups)
+{
+  int ret;
+
+  /* Note that it's not defined if groups or ngroups may be NULL!
+     GLibc does not check the pointers on entry and just uses them.
+     FreeBSD calls assert for ngroups and allows a NULL groups if
+     *ngroups is 0.  We follow FreeBSD's lead here, but always allow
+     a NULL groups pointer. */
+  assert (user != NULL);
+  assert (ngroups != NULL);
+
+  cygsidlist tmp_gsids (cygsidlist_auto, 12);
+  if (!(ret = get_groups (user, gid, tmp_gsids)))
+    {
+      int cnt = 0;
+      for (int i = 0; i < tmp_gsids.count (); i++)
+	{
+	  struct __group32 *gr = internal_getgrsid (tmp_gsids.sids[i]);
+	  if (gr)
+	    {
+	      if (groups && cnt < *ngroups)
+		groups[cnt] = gr->gr_gid;
+	      ++cnt;
+	    }
+	}
+      if (cnt > *ngroups)
+	ret = -1;
+      *ngroups = cnt;
+    }
+  syscall_printf ( "%d = getgrouplist(%s, %u, %p, %d)",
+		  ret, user, gid, groups, *ngroups);
+  return ret;
 }
 
 /* setgroups32: standards? */

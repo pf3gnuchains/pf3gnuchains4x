@@ -51,7 +51,8 @@
 #define _ISA_ARM_4T
 #endif
 
-#if defined (__ARM_ARCH_7M__) || defined (__ARM_ARCH_7__)
+#if defined (__ARM_ARCH_7M__) || defined (__ARM_ARCH_7__) || \
+    defined (__ARM_ARCH_7EM__)
 #define _ISA_THUMB_2
 #endif
 
@@ -61,7 +62,22 @@
 
 
 /* Now some macros for common instruction sequences.  */
+#ifdef __ASSEMBLER__
+.macro  RETURN     cond=
+#if defined (_ISA_ARM_4T) || defined (_ISA_THUMB_1)
+	bx\cond	lr
+#else
+	mov\cond pc, lr
+#endif
+.endm
 
+.macro optpld	base, offset=#0
+#if defined (_ISA_ARM_7)
+	pld	[\base, \offset]
+#endif
+.endm
+
+#else
 asm(".macro  RETURN	cond=\n\t"
 #if defined (_ISA_ARM_4T) || defined (_ISA_THUMB_1)
     "bx\\cond	lr\n\t"
@@ -77,5 +93,6 @@ asm(".macro optpld	base, offset=#0\n\t"
 #endif
     ".endm"
     );
+#endif
 
 #endif /* ARM_ASM__H */

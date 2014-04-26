@@ -766,6 +766,7 @@ enable_werror
 enable_build_warnings
 enable_nls
 enable_maintainer_mode
+with_zlib
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1419,6 +1420,7 @@ Optional Packages:
   --with-pic              try to use only PIC/non-PIC objects [default=use
                           both]
   --with-gnu-ld           assume the C compiler uses GNU ld [default=no]
+  --with-zlib             include zlib support (auto/yes/no) default=auto
 
 Some influential environment variables:
   CC          C compiler command
@@ -1869,8 +1871,10 @@ $as_echo "$ac_res" >&6; }
 ac_fn_c_check_decl ()
 {
   as_lineno=${as_lineno-"$1"} as_lineno_stack=as_lineno_stack=$as_lineno_stack
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether $2 is declared" >&5
-$as_echo_n "checking whether $2 is declared... " >&6; }
+  as_decl_name=`echo $2|sed 's/ *(.*//'`
+  as_decl_use=`echo $2|sed -e 's/(/((/' -e 's/)/) 0&/' -e 's/,/) 0& (/g'`
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether $as_decl_name is declared" >&5
+$as_echo_n "checking whether $as_decl_name is declared... " >&6; }
 if { as_var=$3; eval "test \"\${$as_var+set}\" = set"; }; then :
   $as_echo_n "(cached) " >&6
 else
@@ -1880,8 +1884,12 @@ $4
 int
 main ()
 {
-#ifndef $2
-  (void) $2;
+#ifndef $as_decl_name
+#ifdef __cplusplus
+  (void) $as_decl_use;
+#else
+  (void) $as_decl_name;
+#endif
 #endif
 
   ;
@@ -9402,10 +9410,6 @@ if test -z "$aix_libpath"; then aix_libpath="/usr/lib:/lib"; fi
       hardcode_shlibpath_var=no
       ;;
 
-    freebsd1*)
-      ld_shlibs=no
-      ;;
-
     # FreeBSD 2.2.[012] allows us to include c++rt0.o to get C++ constructor
     # support.  Future versions do this automatically, but an explicit c++rt0.o
     # does not break anything, and helps significantly (at the cost of a little
@@ -10322,10 +10326,6 @@ dgux*)
   library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname$shared_ext'
   soname_spec='${libname}${release}${shared_ext}$major'
   shlibpath_var=LD_LIBRARY_PATH
-  ;;
-
-freebsd1*)
-  dynamic_linker=no
   ;;
 
 freebsd* | dragonfly*)
@@ -11561,7 +11561,19 @@ fi
 using_cgen=no
 
 
-GCC_WARN_CFLAGS="-W -Wall -Wstrict-prototypes -Wmissing-prototypes -Wshadow"
+GCC_WARN_CFLAGS="-W -Wall -Wstrict-prototypes -Wmissing-prototypes"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+__GNUC__
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "^[0-3]$" >/dev/null 2>&1; then :
+
+else
+  GCC_WARN_CFLAGS="$GCC_WARN_CFLAGS -Wshadow"
+fi
+rm -f conftest*
+
 
 # Check whether --enable-werror was given.
 if test "${enable_werror+set}" = set; then :
@@ -11573,7 +11585,7 @@ if test "${enable_werror+set}" = set; then :
 fi
 
 
-# Enable -Wno-format by default when using gcc on mingw
+# Disable -Wformat by default when using gcc on mingw
 case "${host}" in
   *-*-mingw32*)
     if test "${GCC}" = yes -a -z "${ERROR_ON_WARNING}" ; then
@@ -12064,10 +12076,10 @@ _ACEOF
 	esac
 	# Decide which ABI to target by default.
 	case ${target} in
-	  mips64*-linux* | mips-sgi-irix6*)
+	  mips64*-linux* | mips-sgi-irix6* | mips64*-freebsd* | mips64*-kfreebsd*-gnu)
 	    mips_default_abi=N32_ABI
 	    ;;
-	  mips*-linux*)
+	  mips*-linux* | mips*-freebsd* | mips*-kfreebsd*-gnu)
 	    mips_default_abi=O32_ABI
 	    ;;
 	  mips64*-openbsd*)
@@ -12131,7 +12143,7 @@ _ACEOF
         fi
         ;;
 
-      fr30 | ip2k | iq2000 | lm32 | m32r | openrisc)
+      epiphany | fr30 | ip2k | iq2000 | lm32 | m32r | openrisc)
 	using_cgen=yes
 	;;
 
@@ -12183,6 +12195,13 @@ _ACEOF
 	fi
 	;;
 
+      rl78)
+        echo ${extra_objects} | grep -s "rl78-parse.o"
+        if test $? -ne 0 ; then
+          extra_objects="$extra_objects rl78-parse.o"
+        fi
+	;;
+
       rx)
         echo ${extra_objects} | grep -s "rx-parse.o"
         if test $? -ne 0 ; then
@@ -12231,7 +12250,8 @@ _ACEOF
 
     case ${generic_target}-${fmt} in
       mips-*-irix5*-*)	emulation="mipsbelf mipslelf mipself mipsbecoff mipslecoff mipsecoff" ;;
-      mips*-*-linux*-*) case "$endian" in
+      mips*-*-linux*-* | mips*-*-freebsd* | mips*-*-kfreebsd*-gnu)
+			case "$endian" in
 			big)	emulation="mipsbelf mipslelf mipself" ;;
 			*)	emulation="mipslelf mipsbelf mipself" ;;
 			esac ;;
@@ -12295,6 +12315,11 @@ if test ${all_targets} = "yes"; then
   ;;
   esac
 fi
+
+# PE code has way too many macros tweaking behaviour
+case ${te_file} in
+  pe*) emulations="" ;;
+esac
 
 # Assign floating point type.  Most processors with FP support
 # IEEE FP.  On those that don't support FP at all, usually IEEE
@@ -12728,7 +12753,7 @@ if test "$LEX" = :; then
   LEX=${am_missing_run}flex
 fi
 
-ALL_LINGUAS="fr tr es rw id"
+ALL_LINGUAS="fr tr es rw id ru fi ja"
 # If we haven't got the data from the intl directory,
 # assume NLS is disabled.
 USE_NLS=no
@@ -13141,7 +13166,7 @@ fi
 
 
 
-for ac_header in string.h stdlib.h memory.h strings.h unistd.h stdarg.h varargs.h errno.h sys/types.h limits.h time.h sys/stat.h
+for ac_header in string.h stdlib.h memory.h strings.h unistd.h errno.h sys/types.h limits.h time.h sys/stat.h
 do :
   as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
 ac_fn_c_check_header_mongrel "$LINENO" "$ac_header" "$as_ac_Header" "$ac_includes_default"
@@ -13965,6 +13990,92 @@ case "${host}" in
 $as_echo "#define USE_BINARY_FOPEN 1" >>confdefs.h
  ;;
 esac
+
+# Link in zlib if we can.  This allows us to write compressed debug sections.
+
+  # See if the user specified whether he wants zlib support or not.
+
+# Check whether --with-zlib was given.
+if test "${with_zlib+set}" = set; then :
+  withval=$with_zlib;
+else
+  with_zlib=auto
+fi
+
+
+  if test "$with_zlib" != "no"; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing zlibVersion" >&5
+$as_echo_n "checking for library containing zlibVersion... " >&6; }
+if test "${ac_cv_search_zlibVersion+set}" = set; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_func_search_save_LIBS=$LIBS
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char zlibVersion ();
+int
+main ()
+{
+return zlibVersion ();
+  ;
+  return 0;
+}
+_ACEOF
+for ac_lib in '' z; do
+  if test -z "$ac_lib"; then
+    ac_res="none required"
+  else
+    ac_res=-l$ac_lib
+    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
+  fi
+  if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_search_zlibVersion=$ac_res
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext
+  if test "${ac_cv_search_zlibVersion+set}" = set; then :
+  break
+fi
+done
+if test "${ac_cv_search_zlibVersion+set}" = set; then :
+
+else
+  ac_cv_search_zlibVersion=no
+fi
+rm conftest.$ac_ext
+LIBS=$ac_func_search_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_search_zlibVersion" >&5
+$as_echo "$ac_cv_search_zlibVersion" >&6; }
+ac_res=$ac_cv_search_zlibVersion
+if test "$ac_res" != no; then :
+  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
+  for ac_header in zlib.h
+do :
+  ac_fn_c_check_header_mongrel "$LINENO" "zlib.h" "ac_cv_header_zlib_h" "$ac_includes_default"
+if test "x$ac_cv_header_zlib_h" = x""yes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_ZLIB_H 1
+_ACEOF
+
+fi
+
+done
+
+fi
+
+    if test "$with_zlib" = "yes" -a "$ac_cv_header_zlib_h" != "yes"; then
+      as_fn_error "zlib (libz) library was explicitly requested but not found" "$LINENO" 5
+    fi
+  fi
+
 
 # Support for VMS timestamps via cross compile
 
@@ -16416,7 +16527,7 @@ _LT_EOF
       case "$ac_file" in */Makefile.in)
         # Adjust a relative srcdir.
         ac_dir=`echo "$ac_file"|sed 's%/[^/][^/]*$%%'`
-        ac_dir_suffix="/`echo "$ac_dir"|sed 's%^\./%%'`"
+        ac_dir_suffix=/`echo "$ac_dir"|sed 's%^\./%%'`
         ac_dots=`echo "$ac_dir_suffix"|sed 's%/[^/]*%../%g'`
         # In autoconf-2.13 it is called $ac_given_srcdir.
         # In autoconf-2.50 it is called $srcdir.

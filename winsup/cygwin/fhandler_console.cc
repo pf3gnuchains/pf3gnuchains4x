@@ -1,7 +1,7 @@
 /* fhandler_console.cc
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2008, 2009, 2010 Red Hat, Inc.
+   2006, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -32,6 +32,9 @@ details. */
 #include "cygtls.h"
 #include "tls_pbuf.h"
 #include "registry.h"
+#include <asm/socket.h>
+#include "sync.h"
+#include "child_info.h"
 
 /* Don't make this bigger than NT_MAX_PATH as long as the temporary buffer
    is allocated using tmp_pathbuf!!! */
@@ -45,104 +48,169 @@ details. */
  * Negative values represents current screen dimensions
  */
 
-#define srTop (dev_state->info.winTop + dev_state->scroll_region.Top)
-#define srBottom ((dev_state->scroll_region.Bottom < 0) ? dev_state->info.winBottom : dev_state->info.winTop + dev_state->scroll_region.Bottom)
-
-#define use_tty ISSTATE (myself, PID_USETTY)
+#define dev_state (shared_console_info->dev_state)
+#define srTop (dev_state.info.winTop + dev_state.scroll_region.Top)
+#define srBottom ((dev_state.scroll_region.Bottom < 0) ? dev_state.info.winBottom : dev_state.info.winTop + dev_state.scroll_region.Bottom)
 
 const char *get_nonascii_key (INPUT_RECORD&, char *);
 
 const unsigned fhandler_console::MAX_WRITE_CHARS = 16384;
 
-static console_state NO_COPY *shared_console_info;
+fhandler_console::console_state NO_COPY *fhandler_console::shared_console_info;
 
-dev_console NO_COPY *fhandler_console::dev_state;
+bool NO_COPY fhandler_console::invisible_console;
 
 static void
 beep ()
 {
-  reg_key r (HKEY_CURRENT_USER, KEY_ALL_ACCESS, "AppEvents", "Schemes", "Apps",
-	     ".Default", ".Default", ".Current", NULL);
+  const WCHAR ding[] = L"\\media\\ding.wav";
+  reg_key r (HKEY_CURRENT_USER, KEY_ALL_ACCESS, L"AppEvents", L"Schemes",
+	     L"Apps", L".Default", L".Default", L".Current", NULL);
   if (r.created ())
     {
-      char *buf = NULL;
-      UINT len = GetWindowsDirectory (buf, 0);
-      buf = (char *) alloca (len += sizeof ("\\media\\ding.wav"));
-      UINT res = GetWindowsDirectory (buf, len);
+      PWCHAR buf = NULL;
+      UINT len = GetSystemWindowsDirectoryW (buf, 0) * sizeof (WCHAR);
+      buf = (PWCHAR) alloca (len += sizeof (ding));
+      UINT res = GetSystemWindowsDirectoryW (buf, len);
       if (res && res <= len)
-	r.set_string ("", strcat (buf, "\\media\\ding.wav"));
+	r.set_string (L"", wcscat (buf, ding));
     }
   MessageBeep (MB_OK);
 }
 
-/* Allocate and initialize the shared record for the current console.
-   Returns a pointer to shared_console_info. */
-tty_min *
-fhandler_console::get_tty_stuff (int flags = 0)
+fhandler_console::console_state *
+fhandler_console::open_shared_console (HWND hw, HANDLE& h, bool& create)
 {
-  if (dev_state)
-    return &shared_console_info->tty_min_state;
+  wchar_t namebuf[(sizeof "XXXXXXXXXXXXXXXXXX-consNNNNNNNNNN")];
+  __small_swprintf (namebuf, L"%S-cons%p", &installation_key, hw);
 
-  shared_locations sh_shared_console = SH_SHARED_CONSOLE;
-  shared_console_info =
-    (console_state *) open_shared (NULL, 0, cygheap->console_h,
-				   sizeof (*shared_console_info),
-				   sh_shared_console);
-  dev_state = &shared_console_info->dev_state;
+  shared_locations m = create ? SH_SHARED_CONSOLE : SH_JUSTOPEN;
+  console_state *res = (console_state *)
+    open_shared (namebuf, 0, h, sizeof (*shared_console_info), &m);
+  create = m != SH_JUSTOPEN;
+  return res;
+}
+class console_unit
+{
+  int n;
+  unsigned long bitmask;
+  HWND me;
 
-  ProtectHandleINH (cygheap->console_h);
-  if (!shared_console_info->tty_min_state.ntty)
+public:
+  operator int () const {return n;}
+  console_unit (HWND);
+  friend BOOL CALLBACK enum_windows (HWND, LPARAM);
+};
+
+BOOL CALLBACK
+enum_windows (HWND hw, LPARAM lp)
+{
+  console_unit *this1 = (console_unit *) lp;
+  if (hw == this1->me)
+    return TRUE;
+  HANDLE h = NULL;
+  fhandler_console::console_state *cs;
+  if ((cs = fhandler_console::open_shared_console (hw, h)))
     {
-      shared_console_info->tty_min_state.setntty (TTY_CONSOLE);
-      shared_console_info->tty_min_state.setsid (myself->sid);
-      myself->set_ctty (&shared_console_info->tty_min_state, flags, NULL);
-
-      dev_state->scroll_region.Bottom = -1;
-      dev_state->dwLastCursorPosition.X = -1;
-      dev_state->dwLastCursorPosition.Y = -1;
-      dev_state->dwLastMousePosition.X = -1;
-      dev_state->dwLastMousePosition.Y = -1;
-      dev_state->dwLastButtonState = 0;	/* none pressed */
-      dev_state->last_button_code = 3;	/* released */
-      dev_state->underline_color = FOREGROUND_GREEN | FOREGROUND_BLUE;
-      dev_state->dim_color = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-      dev_state->meta_mask = LEFT_ALT_PRESSED;
-      /* Set the mask that determines if an input keystroke is modified by
-	 META.  We set this based on the keyboard layout language loaded
-	 for the current thread.  The left <ALT> key always generates
-	 META, but the right <ALT> key only generates META if we are using
-	 an English keyboard because many "international" keyboards
-	 replace common shell symbols ('[', '{', etc.) with accented
-	 language-specific characters (umlaut, accent grave, etc.).  On
-	 these keyboards right <ALT> (called AltGr) is used to produce the
-	 shell symbols and should not be interpreted as META. */
-      if (PRIMARYLANGID (LOWORD (GetKeyboardLayout (0))) == LANG_ENGLISH)
-	dev_state->meta_mask |= RIGHT_ALT_PRESSED;
-      dev_state->set_default_attr ();
-      shared_console_info->tty_min_state.sethwnd ((HWND) INVALID_HANDLE_VALUE);
+      this1->bitmask ^= 1 << cs->tty_min_state.getntty ();
+      UnmapViewOfFile ((void *) cs);
+      CloseHandle (h);
     }
-
-  return &shared_console_info->tty_min_state;
+  return TRUE;
 }
 
-void
-set_console_ctty ()
+console_unit::console_unit (HWND me0):
+  bitmask (0xffffffff), me (me0)
 {
-  fhandler_console::get_tty_stuff ();
+  EnumWindows (enum_windows, (LPARAM) this);
+  n = (_minor_t) ffs (bitmask) - 1;
+  if (n < 0)
+    api_fatal ("console device allocation failure - too many consoles in use, max consoles is 32");
+}
+
+bool
+fhandler_console::set_unit ()
+{
+  bool created;
+  fh_devices devset;
+  if (shared_console_info)
+    {
+      fh_devices this_unit = dev ();
+      fh_devices shared_unit =
+	(fh_devices) shared_console_info->tty_min_state.getntty ();
+      created = false;
+      devset = (shared_unit == this_unit || this_unit == FH_CONSOLE
+		|| this_unit == FH_CONIN || this_unit == FH_CONOUT
+		|| this_unit == FH_TTY) ?
+		shared_unit : FH_ERROR;
+    }
+  else
+    {
+      HWND me = GetConsoleWindow ();
+      created = true;
+      shared_console_info = open_shared_console (me, cygheap->console_h, created);
+      ProtectHandleINH (cygheap->console_h);
+      if (created)
+	{
+	  lock_ttys here;
+	  shared_console_info->tty_min_state.setntty (DEV_CONS_MAJOR, console_unit (me));
+	}
+      devset = (fh_devices) shared_console_info->tty_min_state.getntty ();
+    }
+
+  dev ().parse (devset);
+  if (devset != FH_ERROR)
+    pc.file_attributes (FILE_ATTRIBUTE_NORMAL);
+  return created;
+}
+
+/* Allocate and initialize the shared record for the current console. */
+void
+fhandler_console::setup ()
+{
+  if (set_unit ())
+      {
+
+	dev_state.scroll_region.Bottom = -1;
+	dev_state.dwLastCursorPosition.X = -1;
+	dev_state.dwLastCursorPosition.Y = -1;
+	dev_state.dwLastMousePosition.X = -1;
+	dev_state.dwLastMousePosition.Y = -1;
+	dev_state.dwLastButtonState = 0;	/* none pressed */
+	dev_state.last_button_code = 3;	/* released */
+	dev_state.underline_color = FOREGROUND_GREEN | FOREGROUND_BLUE;
+	dev_state.dim_color = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+	dev_state.meta_mask = LEFT_ALT_PRESSED;
+	/* Set the mask that determines if an input keystroke is modified by
+	   META.  We set this based on the keyboard layout language loaded
+	   for the current thread.  The left <ALT> key always generates
+	   META, but the right <ALT> key only generates META if we are using
+	   an English keyboard because many "international" keyboards
+	   replace common shell symbols ('[', '{', etc.) with accented
+	   language-specific characters (umlaut, accent grave, etc.).  On
+	   these keyboards right <ALT> (called AltGr) is used to produce the
+	   shell symbols and should not be interpreted as META. */
+	if (PRIMARYLANGID (LOWORD (GetKeyboardLayout (0))) == LANG_ENGLISH)
+	  dev_state.meta_mask |= RIGHT_ALT_PRESSED;
+	dev_state.set_default_attr ();
+	dev_state.backspace_keycode = CERASE;
+	shared_console_info->tty_min_state.is_console = true;
+      }
 }
 
 /* Return the tty structure associated with a given tty number.  If the
    tty number is < 0, just return a dummy record. */
 tty_min *
-tty_list::get_tty (int n)
+tty_list::get_cttyp ()
 {
-  static tty_min nada;
-  if (n == TTY_CONSOLE)
-    return fhandler_console::get_tty_stuff ();
-  else if (n >= 0)
-    return &cygwin_shared->tty.ttys[n];
+  _dev_t n = myself->ctty;
+  if (iscons_dev (n))
+    return fhandler_console::shared_console_info ?
+      &fhandler_console::shared_console_info->tty_min_state : NULL;
+  else if (istty_slave_dev (n))
+    return &ttys[device::minor (n)];
   else
-    return &nada;
+    return NULL;
 }
 
 inline DWORD
@@ -169,9 +237,9 @@ dev_console::str_to_con (mbtowc_p f_mbtowc, const char *charset,
 bool
 fhandler_console::set_raw_win32_keyboard_mode (bool new_mode)
 {
-  bool old_mode = dev_state->raw_win32_keyboard_mode;
-  dev_state->raw_win32_keyboard_mode = new_mode;
-  syscall_printf ("raw keyboard mode %sabled", dev_state->raw_win32_keyboard_mode ? "en" : "dis");
+  bool old_mode = dev_state.raw_win32_keyboard_mode;
+  dev_state.raw_win32_keyboard_mode = new_mode;
+  syscall_printf ("raw keyboard mode %sabled", dev_state.raw_win32_keyboard_mode ? "en" : "dis");
   return old_mode;
 };
 
@@ -183,30 +251,26 @@ fhandler_console::set_cursor_maybe ()
   if (!GetConsoleScreenBufferInfo (get_output_handle (), &now))
     return;
 
-  if (dev_state->dwLastCursorPosition.X != now.dwCursorPosition.X ||
-      dev_state->dwLastCursorPosition.Y != now.dwCursorPosition.Y)
+  if (dev_state.dwLastCursorPosition.X != now.dwCursorPosition.X ||
+      dev_state.dwLastCursorPosition.Y != now.dwCursorPosition.Y)
     {
       SetConsoleCursorPosition (get_output_handle (), now.dwCursorPosition);
-      dev_state->dwLastCursorPosition = now.dwCursorPosition;
+      dev_state.dwLastCursorPosition = now.dwCursorPosition;
     }
 }
 
 void
 fhandler_console::send_winch_maybe ()
 {
-  SHORT y = dev_state->info.dwWinSize.Y;
-  SHORT x = dev_state->info.dwWinSize.X;
-  dev_state->fillin_info (get_output_handle ());
+  SHORT y = dev_state.info.dwWinSize.Y;
+  SHORT x = dev_state.info.dwWinSize.X;
+  dev_state.fillin_info (get_output_handle ());
 
-  if (y != dev_state->info.dwWinSize.Y || x != dev_state->info.dwWinSize.X)
+  if (y != dev_state.info.dwWinSize.Y || x != dev_state.info.dwWinSize.X)
     {
-      extern fhandler_tty_master *tty_master;
-      dev_state->scroll_region.Top = 0;
-      dev_state->scroll_region.Bottom = -1;
-      if (tty_master)
-	tty_master->set_winsize (true);
-      else
-	tc->kill_pgrp (SIGWINCH);
+      dev_state.scroll_region.Top = 0;
+      dev_state.scroll_region.Bottom = -1;
+      get_ttyp ()->kill_pgrp (SIGWINCH);
     }
 }
 
@@ -214,7 +278,7 @@ fhandler_console::send_winch_maybe ()
 bool
 fhandler_console::mouse_aware (MOUSE_EVENT_RECORD& mouse_event)
 {
-  if (! dev_state->use_mouse)
+  if (!dev_state.use_mouse)
     return 0;
 
   /* Adjust mouse position by window scroll buffer offset
@@ -222,8 +286,8 @@ fhandler_console::mouse_aware (MOUSE_EVENT_RECORD& mouse_event)
   CONSOLE_SCREEN_BUFFER_INFO now;
   if (GetConsoleScreenBufferInfo (get_output_handle (), &now))
     {
-      dev_state->dwMousePosition.X = mouse_event.dwMousePosition.X - now.srWindow.Left;
-      dev_state->dwMousePosition.Y = mouse_event.dwMousePosition.Y - now.srWindow.Top;
+      dev_state.dwMousePosition.X = mouse_event.dwMousePosition.X - now.srWindow.Left;
+      dev_state.dwMousePosition.Y = mouse_event.dwMousePosition.Y - now.srWindow.Top;
     }
   else
     {
@@ -232,26 +296,28 @@ fhandler_console::mouse_aware (MOUSE_EVENT_RECORD& mouse_event)
     }
 
   /* Check whether adjusted mouse position can be reported */
-  if (dev_state->dwMousePosition.X > 0xFF - ' ' - 1
-      || dev_state->dwMousePosition.Y > 0xFF - ' ' - 1)
+  if (dev_state.dwMousePosition.X > 0xFF - ' ' - 1
+      || dev_state.dwMousePosition.Y > 0xFF - ' ' - 1)
     {
       /* Mouse position out of reporting range */
       return 0;
     }
 
   return ((mouse_event.dwEventFlags == 0 || mouse_event.dwEventFlags == DOUBLE_CLICK)
-	  && mouse_event.dwButtonState != dev_state->dwLastButtonState)
+	  && mouse_event.dwButtonState != dev_state.dwLastButtonState)
 	 || mouse_event.dwEventFlags == MOUSE_WHEELED
 	 || (mouse_event.dwEventFlags == MOUSE_MOVED
-	     && (dev_state->dwMousePosition.X != dev_state->dwLastMousePosition.X
-	         || dev_state->dwMousePosition.Y != dev_state->dwLastMousePosition.Y)
-	     && ((dev_state->use_mouse >= 2 && mouse_event.dwButtonState)
-	         || dev_state->use_mouse >= 3));
+	     && (dev_state.dwMousePosition.X != dev_state.dwLastMousePosition.X
+		 || dev_state.dwMousePosition.Y != dev_state.dwLastMousePosition.Y)
+	     && ((dev_state.use_mouse >= 2 && mouse_event.dwButtonState)
+		 || dev_state.use_mouse >= 3));
 }
 
 void __stdcall
 fhandler_console::read (void *pv, size_t& buflen)
 {
+  push_process_state process_state (PID_TTYIN);
+
   HANDLE h = get_io_handle ();
 
 #define buf ((char *) pv)
@@ -267,20 +333,10 @@ fhandler_console::read (void *pv, size_t& buflen)
       return;
     }
 
-  HANDLE w4[2];
-  DWORD nwait;
+  DWORD timeout = is_nonblocking () ? 0 : INFINITE;
   char tmp[60];
 
-  w4[0] = h;
-  if (&_my_tls != _main_tls)
-    nwait = 1;
-  else
-    {
-      w4[1] = signal_arrived;
-      nwait = 2;
-    }
-
-  termios ti = tc->ti;
+  termios ti = get_ttyp ()->ti;
   for (;;)
     {
       int bgres;
@@ -291,12 +347,20 @@ fhandler_console::read (void *pv, size_t& buflen)
 	}
 
       set_cursor_maybe ();	/* to make cursor appear on the screen immediately */
-      switch (WaitForMultipleObjects (nwait, w4, FALSE, INFINITE))
+      switch (cygwait (h, timeout))
 	{
 	case WAIT_OBJECT_0:
 	  break;
 	case WAIT_OBJECT_0 + 1:
 	  goto sig_exit;
+	case WAIT_OBJECT_0 + 2:
+	  process_state.pop ();
+	  pthread::static_cancel_self ();
+	  /*NOTREACHED*/
+	case WAIT_TIMEOUT:
+	  set_sig_errno (EAGAIN);
+	  buflen = (size_t) -1;
+	  return;
 	default:
 	  goto err;
 	}
@@ -318,7 +382,7 @@ fhandler_console::read (void *pv, size_t& buflen)
 #define virtual_key_code (input_rec.Event.KeyEvent.wVirtualKeyCode)
 #define control_key_state (input_rec.Event.KeyEvent.dwControlKeyState)
 
-	  dev_state->nModifiers = 0;
+	  dev_state.nModifiers = 0;
 
 #ifdef DEBUGGING
 	  /* allow manual switching to/from raw mode via ctrl-alt-scrolllock */
@@ -327,12 +391,12 @@ fhandler_console::read (void *pv, size_t& buflen)
 	      ((control_key_state & (LEFT_ALT_PRESSED | LEFT_CTRL_PRESSED)) == (LEFT_ALT_PRESSED | LEFT_CTRL_PRESSED))
 	    )
 	    {
-	      set_raw_win32_keyboard_mode (!dev_state->raw_win32_keyboard_mode);
+	      set_raw_win32_keyboard_mode (!dev_state.raw_win32_keyboard_mode);
 	      continue;
 	    }
 #endif
 
-	  if (dev_state->raw_win32_keyboard_mode)
+	  if (dev_state.raw_win32_keyboard_mode)
 	    {
 	      __small_sprintf (tmp, "\033{%u;%u;%u;%u;%u;%luK",
 				    input_rec.Event.KeyEvent.bKeyDown,
@@ -367,21 +431,21 @@ fhandler_console::read (void *pv, size_t& buflen)
 	    continue;
 
 	  if (control_key_state & SHIFT_PRESSED)
-	    dev_state->nModifiers |= 1;
+	    dev_state.nModifiers |= 1;
 	  if (control_key_state & RIGHT_ALT_PRESSED)
-	    dev_state->nModifiers |= 2;
+	    dev_state.nModifiers |= 2;
 	  if (control_key_state & CTRL_PRESSED)
-	    dev_state->nModifiers |= 4;
+	    dev_state.nModifiers |= 4;
 	  if (control_key_state & LEFT_ALT_PRESSED)
-	    dev_state->nModifiers |= 8;
+	    dev_state.nModifiers |= 8;
 
-	  /* Send the VERASE character from the terminal settings as backspace keycode. */
-	  if (input_rec.Event.KeyEvent.wVirtualScanCode == 14)
+	  /* Allow Backspace to emit ^? and escape sequences. */
+	  if (input_rec.Event.KeyEvent.wVirtualKeyCode == VK_BACK)
 	    {
-	      char c = ti.c_cc[VERASE];
+	      char c = dev_state.backspace_keycode;
 	      nread = 0;
 	      if (control_key_state & ALT_PRESSED) {
-		if (dev_state->metabit)
+		if (dev_state.metabit)
 		  c |= 0x80;
 		else
 		  tmp[nread++] = '\e';
@@ -392,7 +456,8 @@ fhandler_console::read (void *pv, size_t& buflen)
 	    }
 	  /* Allow Ctrl-Space to emit ^@ */
 	  else if (input_rec.Event.KeyEvent.wVirtualKeyCode == VK_SPACE
-		   && (control_key_state & CTRL_PRESSED))
+		   && (control_key_state & CTRL_PRESSED)
+		   && !(control_key_state & ALT_PRESSED))
 	    toadd = "";
 	  else if (wch == 0
 	      /* arrow/function keys */
@@ -401,14 +466,14 @@ fhandler_console::read (void *pv, size_t& buflen)
 	      toadd = get_nonascii_key (input_rec, tmp);
 	      if (!toadd)
 		{
-		  dev_state->nModifiers = 0;
+		  dev_state.nModifiers = 0;
 		  continue;
 		}
 	      nread = strlen (toadd);
 	    }
 	  else
 	    {
-	      nread = dev_state->con_to_str (tmp + 1, 59, wch);
+	      nread = dev_state.con_to_str (tmp + 1, 59, wch);
 	      /* Determine if the keystroke is modified by META.  The tricky
 		 part is to distinguish whether the right Alt key should be
 		 recognized as Alt, or as AltGr. */
@@ -432,7 +497,7 @@ fhandler_console::read (void *pv, size_t& buflen)
 		  else
 		    toadd = tmp + 1;
 		}
-	      else if (dev_state->metabit)
+	      else if (dev_state.metabit)
 		{
 		  tmp[1] |= 0x80;
 		  toadd = tmp + 1;
@@ -443,7 +508,7 @@ fhandler_console::read (void *pv, size_t& buflen)
 		  tmp[1] = cyg_tolower (tmp[1]);
 		  toadd = tmp;
 		  nread++;
-		  dev_state->nModifiers &= ~4;
+		  dev_state.nModifiers &= ~4;
 		}
 	    }
 #undef ich
@@ -456,14 +521,14 @@ fhandler_console::read (void *pv, size_t& buflen)
 	  send_winch_maybe ();
 	  {
 	    MOUSE_EVENT_RECORD& mouse_event = input_rec.Event.MouseEvent;
-	    /* As a unique guard for mouse report generation, 
-	       call mouse_aware() which is common with select(), so the result 
-	       of select() and the actual read() will be consistent on the 
-	       issue of whether input (i.e. a mouse escape sequence) will 
+	    /* As a unique guard for mouse report generation,
+	       call mouse_aware() which is common with select(), so the result
+	       of select() and the actual read() will be consistent on the
+	       issue of whether input (i.e. a mouse escape sequence) will
 	       be available or not */
 	    if (mouse_aware (mouse_event))
 	      {
-		/* Note: Reported mouse position was already retrieved by 
+		/* Note: Reported mouse position was already retrieved by
 		   mouse_aware() and adjusted by window scroll buffer offset */
 
 		/* Treat the double-click event like a regular button press */
@@ -498,30 +563,30 @@ fhandler_console::read (void *pv, size_t& buflen)
 
 		    if (mouse_event.dwEventFlags == MOUSE_MOVED)
 		      {
-			b = dev_state->last_button_code;
+			b = dev_state.last_button_code;
 		      }
-		    else if (mouse_event.dwButtonState < dev_state->dwLastButtonState)
+		    else if (mouse_event.dwButtonState < dev_state.dwLastButtonState)
 		      {
 			b = 3;
 			strcpy (sz, "btn up");
 		      }
-		    else if ((mouse_event.dwButtonState & 1) != (dev_state->dwLastButtonState & 1))
+		    else if ((mouse_event.dwButtonState & 1) != (dev_state.dwLastButtonState & 1))
 		      {
 			b = 0;
 			strcpy (sz, "btn1 down");
 		      }
-		    else if ((mouse_event.dwButtonState & 2) != (dev_state->dwLastButtonState & 2))
+		    else if ((mouse_event.dwButtonState & 2) != (dev_state.dwLastButtonState & 2))
 		      {
 			b = 2;
 			strcpy (sz, "btn2 down");
 		      }
-		    else if ((mouse_event.dwButtonState & 4) != (dev_state->dwLastButtonState & 4))
+		    else if ((mouse_event.dwButtonState & 4) != (dev_state.dwLastButtonState & 4))
 		      {
 			b = 1;
 			strcpy (sz, "btn3 down");
 		      }
 
-		    dev_state->last_button_code = b;
+		    dev_state.last_button_code = b;
 
 		    if (mouse_event.dwEventFlags == MOUSE_MOVED)
 		      {
@@ -531,29 +596,29 @@ fhandler_console::read (void *pv, size_t& buflen)
 		    else
 		      {
 			/* Remember the modified button state */
-			dev_state->dwLastButtonState = mouse_event.dwButtonState;
+			dev_state.dwLastButtonState = mouse_event.dwButtonState;
 		      }
 		  }
 
 		/* Remember mouse position */
-		dev_state->dwLastMousePosition.X = dev_state->dwMousePosition.X;
-		dev_state->dwLastMousePosition.Y = dev_state->dwMousePosition.Y;
+		dev_state.dwLastMousePosition.X = dev_state.dwMousePosition.X;
+		dev_state.dwLastMousePosition.Y = dev_state.dwMousePosition.Y;
 
 		/* Remember the modifiers */
-		dev_state->nModifiers = 0;
+		dev_state.nModifiers = 0;
 		if (mouse_event.dwControlKeyState & SHIFT_PRESSED)
-		    dev_state->nModifiers |= 0x4;
+		    dev_state.nModifiers |= 0x4;
 		if (mouse_event.dwControlKeyState & (RIGHT_ALT_PRESSED|LEFT_ALT_PRESSED))
-		    dev_state->nModifiers |= 0x8;
+		    dev_state.nModifiers |= 0x8;
 		if (mouse_event.dwControlKeyState & (RIGHT_CTRL_PRESSED|LEFT_CTRL_PRESSED))
-		    dev_state->nModifiers |= 0x10;
+		    dev_state.nModifiers |= 0x10;
 
 		/* Indicate the modifiers */
-		b |= dev_state->nModifiers;
+		b |= dev_state.nModifiers;
 
 		/* We can now create the code. */
-		sprintf (tmp, "\033[M%c%c%c", b + ' ', dev_state->dwMousePosition.X + ' ' + 1, dev_state->dwMousePosition.Y + ' ' + 1);
-		syscall_printf ("mouse: %s at (%d,%d)", sz, dev_state->dwMousePosition.X, dev_state->dwMousePosition.Y);
+		sprintf (tmp, "\033[M%c%c%c", b + ' ', dev_state.dwMousePosition.X + ' ' + 1, dev_state.dwMousePosition.Y + ' ' + 1);
+		syscall_printf ("mouse: %s at (%d,%d)", sz, dev_state.dwMousePosition.X, dev_state.dwMousePosition.Y);
 
 		toadd = tmp;
 		nread = 6;
@@ -562,7 +627,7 @@ fhandler_console::read (void *pv, size_t& buflen)
 	  break;
 
 	case FOCUS_EVENT:
-	  if (dev_state->use_focus) {
+	  if (dev_state.use_focus) {
 	    if (input_rec.Event.FocusEvent.bSetFocus)
 	      sprintf (tmp, "\033[I");
 	    else
@@ -616,8 +681,8 @@ sig_exit:
 void
 fhandler_console::set_input_state ()
 {
-  if (tc->rstcons ())
-    input_tcsetattr (0, &tc->ti);
+  if (get_ttyp ()->rstcons ())
+    input_tcsetattr (0, &get_ttyp ()->ti);
 }
 
 bool
@@ -654,30 +719,30 @@ fhandler_console::scroll_screen (int x1, int y1, int x2, int y2, int xn, int yn)
   CHAR_INFO fill;
   COORD dest;
 
-  dev_state->fillin_info (get_output_handle ());
-  sr1.Left = x1 >= 0 ? x1 : dev_state->info.dwWinSize.X - 1;
+  dev_state.fillin_info (get_output_handle ());
+  sr1.Left = x1 >= 0 ? x1 : dev_state.info.dwWinSize.X - 1;
   if (y1 == 0)
-    sr1.Top = dev_state->info.winTop;
+    sr1.Top = dev_state.info.winTop;
   else
-    sr1.Top = y1 > 0 ? y1 : dev_state->info.winBottom;
-  sr1.Right = x2 >= 0 ? x2 : dev_state->info.dwWinSize.X - 1;
+    sr1.Top = y1 > 0 ? y1 : dev_state.info.winBottom;
+  sr1.Right = x2 >= 0 ? x2 : dev_state.info.dwWinSize.X - 1;
   if (y2 == 0)
-    sr1.Bottom = dev_state->info.winTop;
+    sr1.Bottom = dev_state.info.winTop;
   else
-    sr1.Bottom = y2 > 0 ? y2 : dev_state->info.winBottom;
+    sr1.Bottom = y2 > 0 ? y2 : dev_state.info.winBottom;
   sr2.Top = srTop;
   sr2.Left = 0;
   sr2.Bottom = srBottom;
-  sr2.Right = dev_state->info.dwWinSize.X - 1;
+  sr2.Right = dev_state.info.dwWinSize.X - 1;
   if (sr1.Bottom > sr2.Bottom && sr1.Top <= sr2.Bottom)
     sr1.Bottom = sr2.Bottom;
-  dest.X = xn >= 0 ? xn : dev_state->info.dwWinSize.X - 1;
+  dest.X = xn >= 0 ? xn : dev_state.info.dwWinSize.X - 1;
   if (yn == 0)
-    dest.Y = dev_state->info.winTop;
+    dest.Y = dev_state.info.winTop;
   else
-    dest.Y = yn > 0 ? yn : dev_state->info.winBottom;
+    dest.Y = yn > 0 ? yn : dev_state.info.winBottom;
   fill.Char.AsciiChar = ' ';
-  fill.Attributes = dev_state->current_win32_attr;
+  fill.Attributes = dev_state.current_win32_attr;
   ScrollConsoleScreenBuffer (get_output_handle (), &sr1, &sr2, dest, &fill);
 
   /* ScrollConsoleScreenBuffer on Windows 95 is buggy - when scroll distance
@@ -692,20 +757,31 @@ fhandler_console::scroll_screen (int x1, int y1, int x2, int y2, int xn, int yn)
 }
 
 int
+fhandler_console::dup (fhandler_base *child, int flags)
+{
+  myself->set_ctty (this, flags);
+  return 0;
+}
+
+int
 fhandler_console::open (int flags, mode_t)
 {
   HANDLE h;
 
-  tcinit (get_tty_stuff (flags));
+  if (dev () == FH_ERROR)
+    {
+      set_errno (EPERM);	/* constructor found an error */
+      return 0;
+    }
+
+  tcinit (false);
 
   set_io_handle (NULL);
   set_output_handle (NULL);
 
-  set_flags ((flags & ~O_TEXT) | O_BINARY);
-
   /* Open the input handle as handle_ */
   h = CreateFile ("CONIN$", GENERIC_READ | GENERIC_WRITE,
-		  FILE_SHARE_READ | FILE_SHARE_WRITE, sec_none_cloexec (flags),
+		  FILE_SHARE_READ | FILE_SHARE_WRITE, &sec_none,
 		  OPEN_EXISTING, 0, 0);
 
   if (h == INVALID_HANDLE_VALUE)
@@ -714,10 +790,9 @@ fhandler_console::open (int flags, mode_t)
       return 0;
     }
   set_io_handle (h);
-  uninterruptible_io (true);	// Handled explicitly in read code
 
   h = CreateFile ("CONOUT$", GENERIC_READ | GENERIC_WRITE,
-		  FILE_SHARE_READ | FILE_SHARE_WRITE, sec_none_cloexec (flags),
+		  FILE_SHARE_READ | FILE_SHARE_WRITE, &sec_none,
 		  OPEN_EXISTING, 0, 0);
 
   if (h == INVALID_HANDLE_VALUE)
@@ -727,17 +802,16 @@ fhandler_console::open (int flags, mode_t)
     }
   set_output_handle (h);
 
-  if (dev_state->fillin_info (get_output_handle ()))
+  if (dev_state.fillin_info (get_output_handle ()))
     {
-      dev_state->current_win32_attr = dev_state->info.wAttributes;
-      if (!dev_state->default_color)
-	dev_state->default_color = dev_state->info.wAttributes;
-      dev_state->set_default_attr ();
+      dev_state.current_win32_attr = dev_state.info.wAttributes;
+      if (!dev_state.default_color)
+	dev_state.default_color = dev_state.info.wAttributes;
+      dev_state.set_default_attr ();
     }
 
-  tc->rstcons (false);
+  get_ttyp ()->rstcons (false);
   set_open_status ();
-  cygheap->manage_console_count ("fhandler_console::open", 1);
 
   DWORD cflags;
   if (GetConsoleMode (get_io_handle (), &cflags))
@@ -750,47 +824,45 @@ fhandler_console::open (int flags, mode_t)
   return 1;
 }
 
+void
+fhandler_console::open_setup (int flags)
+{
+  cygheap->manage_console_count ("fhandler_console::open", 1);
+  set_flags ((flags & ~O_TEXT) | O_BINARY);
+  myself->set_ctty (this, flags);
+}
+
 int
 fhandler_console::close ()
 {
   CloseHandle (get_io_handle ());
   CloseHandle (get_output_handle ());
-  if (!hExeced)
+  if (!have_execed)
     cygheap->manage_console_count ("fhandler_console::close", -1);
   return 0;
 }
 
-/*  Special console dup to duplicate input and output  handles.  */
-
 int
-fhandler_console::dup (fhandler_base *child)
+fhandler_console::ioctl (unsigned int cmd, void *arg)
 {
-  fhandler_console *fhc = (fhandler_console *) child;
-
-  if (!fhc->open (get_flags () & ~O_NOCTTY, 0))
-    system_printf ("error opening console, %E");
-
-  return 0;
-}
-
-int
-fhandler_console::ioctl (unsigned int cmd, void *buf)
-{
+  int res = fhandler_termios::ioctl (cmd, arg);
+  if (res <= 0)
+    return res;
   switch (cmd)
     {
       case TIOCGWINSZ:
 	int st;
 
-	st = dev_state->fillin_info (get_output_handle ());
+	st = dev_state.fillin_info (get_output_handle ());
 	if (st)
 	  {
 	    /* *not* the buffer size, the actual screen size... */
 	    /* based on Left Top Right Bottom of srWindow */
-	    ((struct winsize *) buf)->ws_row = dev_state->info.dwWinSize.Y;
-	    ((struct winsize *) buf)->ws_col = dev_state->info.dwWinSize.X;
+	    ((struct winsize *) arg)->ws_row = dev_state.info.dwWinSize.Y;
+	    ((struct winsize *) arg)->ws_col = dev_state.info.dwWinSize.X;
 	    syscall_printf ("WINSZ: (row=%d,col=%d)",
-			   ((struct winsize *) buf)->ws_row,
-			   ((struct winsize *) buf)->ws_col);
+			   ((struct winsize *) arg)->ws_row,
+			   ((struct winsize *) arg)->ws_col);
 	    return 0;
 	  }
 	else
@@ -804,13 +876,13 @@ fhandler_console::ioctl (unsigned int cmd, void *buf)
 	bg_check (SIGTTOU);
 	return 0;
       case KDGKBMETA:
-	*(int *) buf = (dev_state->metabit) ? K_METABIT : K_ESCPREFIX;
+	*(int *) arg = (dev_state.metabit) ? K_METABIT : K_ESCPREFIX;
 	return 0;
       case KDSKBMETA:
-	if ((int) buf == K_METABIT)
-	  dev_state->metabit = TRUE;
-	else if ((int) buf == K_ESCPREFIX)
-	  dev_state->metabit = FALSE;
+	if ((int) arg == K_METABIT)
+	  dev_state.metabit = TRUE;
+	else if ((int) arg == K_ESCPREFIX)
+	  dev_state.metabit = FALSE;
 	else
 	  {
 	    set_errno (EINVAL);
@@ -818,19 +890,36 @@ fhandler_console::ioctl (unsigned int cmd, void *buf)
 	  }
 	return 0;
       case TIOCLINUX:
-	if (*(unsigned char *) buf == 6)
+	if (*(unsigned char *) arg == 6)
 	  {
-	    *(unsigned char *) buf = (unsigned char) dev_state->nModifiers;
+	    *(unsigned char *) arg = (unsigned char) dev_state.nModifiers;
 	    return 0;
 	  }
-	else
-	  {
-	    set_errno (EINVAL);
-	    return -1;
-	  }
+	set_errno (EINVAL);
+	return -1;
+      case FIONREAD:
+	{
+	  /* Per MSDN, max size of buffer required is below 64K. */
+#define	  INREC_SIZE	(65536 / sizeof (INPUT_RECORD))
+
+	  DWORD n;
+	  int ret = 0;
+	  INPUT_RECORD inp[INREC_SIZE];
+	  if (!PeekConsoleInputW (get_io_handle (), inp, INREC_SIZE, &n))
+	    {
+	      set_errno (EINVAL);
+	      return -1;
+	    }
+	  while (n-- > 0)
+	    if (inp[n].EventType == KEY_EVENT && inp[n].Event.KeyEvent.bKeyDown)
+	      ++ret;
+	  *(int *) arg = ret;
+	  return 0;
+	}
+	break;
     }
 
-  return fhandler_base::ioctl (cmd, buf);
+  return fhandler_base::ioctl (cmd, arg);
 }
 
 int
@@ -857,7 +946,9 @@ fhandler_console::output_tcsetattr (int, struct termios const *t)
   DWORD flags = ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT;
 
   int res = SetConsoleMode (get_output_handle (), flags) ? 0 : -1;
-  syscall_printf ("%d = tcsetattr (,%x) (ENABLE FLAGS %x) (lflag %x oflag %x)",
+  if (res)
+    __seterrno_from_win_error (GetLastError ());
+  syscall_printf ("%d = tcsetattr(,%x) (ENABLE FLAGS %x) (lflag %x oflag %x)",
 		  res, t, flags, t->c_lflag, t->c_oflag);
   return res;
 }
@@ -883,7 +974,8 @@ fhandler_console::input_tcsetattr (int, struct termios const *t)
      available.  We've got ECHO and ICANON, they've
      got ENABLE_ECHO_INPUT and ENABLE_LINE_INPUT. */
 
-  tc->ti = *t;
+  termios_printf ("this %p, get_ttyp () %p, t %p", this, get_ttyp (), t);
+  get_ttyp ()->ti = *t;
 
   if (t->c_lflag & ECHO)
     {
@@ -903,16 +995,9 @@ fhandler_console::input_tcsetattr (int, struct termios const *t)
       flags &= ~ENABLE_ECHO_INPUT;
     }
 
-  if (t->c_lflag & ISIG)
+  if ((t->c_lflag & ISIG) && !(t->c_iflag & IGNBRK))
     {
       flags |= ENABLE_PROCESSED_INPUT;
-    }
-
-  if (use_tty)
-    {
-      flags = 0; // ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT;
-      tc->ti.c_iflag = 0;
-      tc->ti.c_lflag = 0;
     }
 
   flags |= ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT;
@@ -925,11 +1010,11 @@ fhandler_console::input_tcsetattr (int, struct termios const *t)
       res = SetConsoleMode (get_io_handle (), flags) ? 0 : -1;
       if (res < 0)
 	__seterrno ();
-      syscall_printf ("%d = tcsetattr (,%x) enable flags %p, c_lflag %p iflag %p",
+      syscall_printf ("%d = tcsetattr(,%x) enable flags %p, c_lflag %p iflag %p",
 		      res, t, flags, t->c_lflag, t->c_iflag);
     }
 
-  tc->rstcons (false);
+  get_ttyp ()->rstcons (false);
   return res;
 }
 
@@ -946,7 +1031,7 @@ int
 fhandler_console::tcgetattr (struct termios *t)
 {
   int res;
-  *t = tc->ti;
+  *t = get_ttyp ()->ti;
 
   t->c_cflag |= CS8;
 
@@ -967,6 +1052,8 @@ fhandler_console::tcgetattr (struct termios *t)
 
       if (flags & ENABLE_PROCESSED_INPUT)
 	t->c_lflag |= ISIG;
+      else
+	t->c_iflag |= IGNBRK;
 
       /* What about ENABLE_WINDOW_INPUT
 	 and ENABLE_MOUSE_INPUT   ? */
@@ -974,15 +1061,19 @@ fhandler_console::tcgetattr (struct termios *t)
       /* All the output bits we can ignore */
       res = 0;
     }
-  syscall_printf ("%d = tcgetattr (%p) enable flags %p, t->lflag %p, t->iflag %p",
+  syscall_printf ("%d = tcgetattr(%p) enable flags %p, t->lflag %p, t->iflag %p",
 		 res, t, flags, t->c_lflag, t->c_iflag);
   return res;
 }
 
-fhandler_console::fhandler_console () :
+fhandler_console::fhandler_console (fh_devices unit) :
   fhandler_termios ()
 {
+  if (unit > 0)
+    dev ().parse (unit);
+  setup ();
   trunc_buf.len = 0;
+  _tc = &(shared_console_info->tty_min_state);
 }
 
 void
@@ -1049,20 +1140,20 @@ fhandler_console::clear_screen (int x1, int y1, int x2, int y2)
   DWORD done;
   int num;
 
-  dev_state->fillin_info (get_output_handle ());
+  dev_state.fillin_info (get_output_handle ());
 
   if (x1 < 0)
-    x1 = dev_state->info.dwWinSize.X - 1;
+    x1 = dev_state.info.dwWinSize.X - 1;
   if (y1 < 0)
-    y1 = dev_state->info.winBottom;
+    y1 = dev_state.info.winBottom;
   if (x2 < 0)
-    x2 = dev_state->info.dwWinSize.X - 1;
+    x2 = dev_state.info.dwWinSize.X - 1;
   if (y2 < 0)
-    y2 = dev_state->info.winBottom;
+    y2 = dev_state.info.winBottom;
 
-  num = abs (y1 - y2) * dev_state->info.dwBufferSize.X + abs (x1 - x2) + 1;
+  num = abs (y1 - y2) * dev_state.info.dwBufferSize.X + abs (x1 - x2) + 1;
 
-  if ((y2 * dev_state->info.dwBufferSize.X + x2) > (y1 * dev_state->info.dwBufferSize.X + x1))
+  if ((y2 * dev_state.info.dwBufferSize.X + x2) > (y1 * dev_state.info.dwBufferSize.X + x1))
     {
       tlc.X = x1;
       tlc.Y = y1;
@@ -1077,7 +1168,7 @@ fhandler_console::clear_screen (int x1, int y1, int x2, int y2)
 			       tlc,
 			       &done);
   FillConsoleOutputAttribute (get_output_handle (),
-			       dev_state->current_win32_attr,
+			       dev_state.current_win32_attr,
 			       num,
 			       tlc,
 			       &done);
@@ -1088,16 +1179,26 @@ fhandler_console::cursor_set (bool rel_to_top, int x, int y)
 {
   COORD pos;
 
-  dev_state->fillin_info (get_output_handle ());
-  if (y > dev_state->info.winBottom)
-    y = dev_state->info.winBottom;
-  else if (y < 0)
+  dev_state.fillin_info (get_output_handle ());
+#if 0
+  /* Setting y to the current winBottom here is the reason that the window
+     isn't scrolled back to the current cursor position like it's done in
+     any other terminal.  Rather, the curser is forced to the bottom of the
+     currently scrolled region.  This breaks the console buffer content if
+     output is generated while the user had the window scrolled back.  This
+     behaviour is very old, it has no matching ChangeLog entry.
+     Just disable for now but keep the code in for future reference. */
+  if (y > dev_state.info.winBottom)
+    y = dev_state.info.winBottom;
+  else
+#endif
+  if (y < 0)
     y = 0;
   else if (rel_to_top)
-    y += dev_state->info.winTop;
+    y += dev_state.info.winTop;
 
-  if (x > dev_state->info.dwWinSize.X)
-    x = dev_state->info.dwWinSize.X - 1;
+  if (x > dev_state.info.dwWinSize.X)
+    x = dev_state.info.dwWinSize.X - 1;
   else if (x < 0)
     x = 0;
 
@@ -1109,23 +1210,23 @@ fhandler_console::cursor_set (bool rel_to_top, int x, int y)
 void
 fhandler_console::cursor_rel (int x, int y)
 {
-  dev_state->fillin_info (get_output_handle ());
-  x += dev_state->info.dwCursorPosition.X;
-  y += dev_state->info.dwCursorPosition.Y;
+  dev_state.fillin_info (get_output_handle ());
+  x += dev_state.info.dwCursorPosition.X;
+  y += dev_state.info.dwCursorPosition.Y;
   cursor_set (false, x, y);
 }
 
 void
 fhandler_console::cursor_get (int *x, int *y)
 {
-  dev_state->fillin_info (get_output_handle ());
-  *y = dev_state->info.dwCursorPosition.Y;
-  *x = dev_state->info.dwCursorPosition.X;
+  dev_state.fillin_info (get_output_handle ());
+  *y = dev_state.info.dwCursorPosition.Y;
+  *x = dev_state.info.dwCursorPosition.X;
 }
 
 /* VT100 line drawing graphics mode maps `abcdefghijklmnopqrstuvwxyz{|}~ to
    graphical characters */
-static wchar_t __vt100_conv [31] = {
+static const wchar_t __vt100_conv[31] = {
 	0x25C6, /* Black Diamond */
 	0x2592, /* Medium Shade */
 	0x2409, /* Symbol for Horizontal Tabulation */
@@ -1162,10 +1263,12 @@ static wchar_t __vt100_conv [31] = {
 inline
 bool fhandler_console::write_console (PWCHAR buf, DWORD len, DWORD& done)
 {
-  if (dev_state->vt100_graphics_mode_active)
+  if (dev_state.iso_2022_G1
+	? dev_state.vt100_graphics_mode_G1
+	: dev_state.vt100_graphics_mode_G0)
     for (DWORD i = 0; i < len; i ++)
       if (buf[i] >= (unsigned char) '`' && buf[i] <= (unsigned char) '~')
-        buf[i] = __vt100_conv[buf[i] - (unsigned char) '`'];
+	buf[i] = __vt100_conv[buf[i] - (unsigned char) '`'];
 
   while (len > 0)
     {
@@ -1242,120 +1345,120 @@ fhandler_console::char_command (char c)
   switch (c)
     {
     case 'm':   /* Set Graphics Rendition */
-       for (int i = 0; i <= dev_state->nargs_; i++)
-	 switch (dev_state->args_[i])
+       for (int i = 0; i <= dev_state.nargs_; i++)
+	 switch (dev_state.args_[i])
 	   {
 	     case 0:    /* normal color */
-	       dev_state->set_default_attr ();
+	       dev_state.set_default_attr ();
 	       break;
 	     case 1:    /* bold */
-	       dev_state->intensity = INTENSITY_BOLD;
+	       dev_state.intensity = INTENSITY_BOLD;
 	       break;
 	     case 2:	/* dim */
-	       dev_state->intensity = INTENSITY_DIM;
+	       dev_state.intensity = INTENSITY_DIM;
 	       break;
 	     case 4:	/* underlined */
-	       dev_state->underline = 1;
+	       dev_state.underline = 1;
 	       break;
 	     case 5:    /* blink mode */
-	       dev_state->blink = true;
+	       dev_state.blink = true;
 	       break;
 	     case 7:    /* reverse */
-	       dev_state->reverse = true;
+	       dev_state.reverse = true;
 	       break;
 	     case 8:    /* invisible */
-	       dev_state->intensity = INTENSITY_INVISIBLE;
+	       dev_state.intensity = INTENSITY_INVISIBLE;
 	       break;
 	     case 10:   /* end alternate charset */
-	       dev_state->alternate_charset_active = false;
+	       dev_state.alternate_charset_active = false;
 	       break;
 	     case 11:   /* start alternate charset */
-	       dev_state->alternate_charset_active = true;
+	       dev_state.alternate_charset_active = true;
 	       break;
 	     case 22:
 	     case 28:
-	       dev_state->intensity = INTENSITY_NORMAL;
+	       dev_state.intensity = INTENSITY_NORMAL;
 	       break;
 	     case 24:
-	       dev_state->underline = false;
+	       dev_state.underline = false;
 	       break;
 	     case 25:
-	       dev_state->blink = false;
+	       dev_state.blink = false;
 	       break;
 	     case 27:
-	       dev_state->reverse = false;
+	       dev_state.reverse = false;
 	       break;
 	     case 30:		/* BLACK foreground */
-	       dev_state->fg = 0;
+	       dev_state.fg = 0;
 	       break;
 	     case 31:		/* RED foreground */
-	       dev_state->fg = FOREGROUND_RED;
+	       dev_state.fg = FOREGROUND_RED;
 	       break;
 	     case 32:		/* GREEN foreground */
-	       dev_state->fg = FOREGROUND_GREEN;
+	       dev_state.fg = FOREGROUND_GREEN;
 	       break;
 	     case 33:		/* YELLOW foreground */
-	       dev_state->fg = FOREGROUND_RED | FOREGROUND_GREEN;
+	       dev_state.fg = FOREGROUND_RED | FOREGROUND_GREEN;
 	       break;
 	     case 34:		/* BLUE foreground */
-	       dev_state->fg = FOREGROUND_BLUE;
+	       dev_state.fg = FOREGROUND_BLUE;
 	       break;
 	     case 35:		/* MAGENTA foreground */
-	       dev_state->fg = FOREGROUND_RED | FOREGROUND_BLUE;
+	       dev_state.fg = FOREGROUND_RED | FOREGROUND_BLUE;
 	       break;
 	     case 36:		/* CYAN foreground */
-	       dev_state->fg = FOREGROUND_BLUE | FOREGROUND_GREEN;
+	       dev_state.fg = FOREGROUND_BLUE | FOREGROUND_GREEN;
 	       break;
 	     case 37:		/* WHITE foreg */
-	       dev_state->fg = FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED;
+	       dev_state.fg = FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED;
 	       break;
 	     case 39:
-	       dev_state->fg = dev_state->default_color & FOREGROUND_ATTR_MASK;
+	       dev_state.fg = dev_state.default_color & FOREGROUND_ATTR_MASK;
 	       break;
 	     case 40:		/* BLACK background */
-	       dev_state->bg = 0;
+	       dev_state.bg = 0;
 	       break;
 	     case 41:		/* RED background */
-	       dev_state->bg = BACKGROUND_RED;
+	       dev_state.bg = BACKGROUND_RED;
 	       break;
 	     case 42:		/* GREEN background */
-	       dev_state->bg = BACKGROUND_GREEN;
+	       dev_state.bg = BACKGROUND_GREEN;
 	       break;
 	     case 43:		/* YELLOW background */
-	       dev_state->bg = BACKGROUND_RED | BACKGROUND_GREEN;
+	       dev_state.bg = BACKGROUND_RED | BACKGROUND_GREEN;
 	       break;
 	     case 44:		/* BLUE background */
-	       dev_state->bg = BACKGROUND_BLUE;
+	       dev_state.bg = BACKGROUND_BLUE;
 	       break;
 	     case 45:		/* MAGENTA background */
-	       dev_state->bg = BACKGROUND_RED | BACKGROUND_BLUE;
+	       dev_state.bg = BACKGROUND_RED | BACKGROUND_BLUE;
 	       break;
 	     case 46:		/* CYAN background */
-	       dev_state->bg = BACKGROUND_BLUE | BACKGROUND_GREEN;
+	       dev_state.bg = BACKGROUND_BLUE | BACKGROUND_GREEN;
 	       break;
 	     case 47:    /* WHITE background */
-	       dev_state->bg = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED;
+	       dev_state.bg = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED;
 	       break;
 	     case 49:
-	       dev_state->bg = dev_state->default_color & BACKGROUND_ATTR_MASK;
+	       dev_state.bg = dev_state.default_color & BACKGROUND_ATTR_MASK;
 	       break;
 	   }
-       dev_state->set_color (get_output_handle ());
+       dev_state.set_color (get_output_handle ());
       break;
     case 'h':
     case 'l':
-      if (!dev_state->saw_question_mark)
+      if (!dev_state.saw_question_mark)
 	{
-	  switch (dev_state->args_[0])
+	  switch (dev_state.args_[0])
 	    {
 	    case 4:    /* Insert mode */
-	      dev_state->insert_mode = (c == 'h') ? true : false;
-	      syscall_printf ("insert mode %sabled", dev_state->insert_mode ? "en" : "dis");
+	      dev_state.insert_mode = (c == 'h') ? true : false;
+	      syscall_printf ("insert mode %sabled", dev_state.insert_mode ? "en" : "dis");
 	      break;
 	    }
 	  break;
 	}
-      switch (dev_state->args_[0])
+      switch (dev_state.args_[0])
 	{
 	case 47:   /* Save/Restore screen */
 	  if (c == 'h') /* save */
@@ -1366,16 +1469,16 @@ fhandler_console::char_command (char c)
 	      if (!GetConsoleScreenBufferInfo (get_output_handle (), &now))
 		break;
 
-	      dev_state->savebufsiz.X = now.srWindow.Right - now.srWindow.Left + 1;
-	      dev_state->savebufsiz.Y = now.srWindow.Bottom - now.srWindow.Top + 1;
+	      dev_state.savebufsiz.X = now.srWindow.Right - now.srWindow.Left + 1;
+	      dev_state.savebufsiz.Y = now.srWindow.Bottom - now.srWindow.Top + 1;
 
-	      if (dev_state->savebuf)
-		cfree (dev_state->savebuf);
-	      dev_state->savebuf = (PCHAR_INFO) cmalloc_abort (HEAP_1_BUF, sizeof (CHAR_INFO) *
-					     dev_state->savebufsiz.X * dev_state->savebufsiz.Y);
+	      if (dev_state.savebuf)
+		cfree (dev_state.savebuf);
+	      dev_state.savebuf = (PCHAR_INFO) cmalloc_abort (HEAP_1_BUF, sizeof (CHAR_INFO) *
+					     dev_state.savebufsiz.X * dev_state.savebufsiz.Y);
 
-	      ReadConsoleOutputW (get_output_handle (), dev_state->savebuf,
-				  dev_state->savebufsiz, cob, &now.srWindow);
+	      ReadConsoleOutputW (get_output_handle (), dev_state.savebuf,
+				  dev_state.savebufsiz, cob, &now.srWindow);
 	    }
 	  else		/* restore */
 	    {
@@ -1385,36 +1488,40 @@ fhandler_console::char_command (char c)
 	      if (!GetConsoleScreenBufferInfo (get_output_handle (), &now))
 		break;
 
-	      if (!dev_state->savebuf)
+	      if (!dev_state.savebuf)
 		break;
 
-	      WriteConsoleOutputW (get_output_handle (), dev_state->savebuf,
-				   dev_state->savebufsiz, cob, &now.srWindow);
+	      WriteConsoleOutputW (get_output_handle (), dev_state.savebuf,
+				   dev_state.savebufsiz, cob, &now.srWindow);
 
-	      cfree (dev_state->savebuf);
-	      dev_state->savebuf = NULL;
-	      dev_state->savebufsiz.X = dev_state->savebufsiz.Y = 0;
+	      cfree (dev_state.savebuf);
+	      dev_state.savebuf = NULL;
+	      dev_state.savebufsiz.X = dev_state.savebufsiz.Y = 0;
 	    }
 	  break;
 
+	case 67: /* DECBKM ("DEC Backarrow Key Mode") */
+	  dev_state.backspace_keycode = (c == 'h' ? CTRL('H') : CERASE);
+	  break;
+
 	case 1000: /* Mouse tracking */
-	  dev_state->use_mouse = (c == 'h') ? 1 : 0;
-	  syscall_printf ("mouse support set to mode %d", dev_state->use_mouse);
+	  dev_state.use_mouse = (c == 'h') ? 1 : 0;
+	  syscall_printf ("mouse support set to mode %d", dev_state.use_mouse);
 	  break;
 
 	case 1002: /* Mouse button event tracking */
-	  dev_state->use_mouse = (c == 'h') ? 2 : 0;
-	  syscall_printf ("mouse support set to mode %d", dev_state->use_mouse);
+	  dev_state.use_mouse = (c == 'h') ? 2 : 0;
+	  syscall_printf ("mouse support set to mode %d", dev_state.use_mouse);
 	  break;
 
 	case 1003: /* Mouse any event tracking */
-	  dev_state->use_mouse = (c == 'h') ? 3 : 0;
-	  syscall_printf ("mouse support set to mode %d", dev_state->use_mouse);
+	  dev_state.use_mouse = (c == 'h') ? 3 : 0;
+	  syscall_printf ("mouse support set to mode %d", dev_state.use_mouse);
 	  break;
 
 	case 1004: /* Focus in/out event reporting */
-	  dev_state->use_focus = (c == 'h') ? true : false;
-	  syscall_printf ("focus reporting set to %d", dev_state->use_focus);
+	  dev_state.use_focus = (c == 'h') ? true : false;
+	  syscall_printf ("focus reporting set to %d", dev_state.use_focus);
 	  break;
 
 	case 2000: /* Raw keyboard mode */
@@ -1422,12 +1529,12 @@ fhandler_console::char_command (char c)
 	  break;
 
 	default: /* Ignore */
-	  syscall_printf ("unknown h/l command: %d", dev_state->args_[0]);
+	  syscall_printf ("unknown h/l command: %d", dev_state.args_[0]);
 	  break;
 	}
       break;
     case 'J':
-      switch (dev_state->args_[0])
+      switch (dev_state.args_[0])
 	{
 	case 0:			/* Clear to end of screen */
 	  cursor_get (&x, &y);
@@ -1447,19 +1554,19 @@ fhandler_console::char_command (char c)
       break;
 
     case 'A':
-      cursor_rel (0, -(dev_state->args_[0] ? dev_state->args_[0] : 1));
+      cursor_rel (0, -(dev_state.args_[0] ? dev_state.args_[0] : 1));
       break;
     case 'B':
-      cursor_rel (0, dev_state->args_[0] ? dev_state->args_[0] : 1);
+      cursor_rel (0, dev_state.args_[0] ? dev_state.args_[0] : 1);
       break;
     case 'C':
-      cursor_rel (dev_state->args_[0] ? dev_state->args_[0] : 1, 0);
+      cursor_rel (dev_state.args_[0] ? dev_state.args_[0] : 1, 0);
       break;
     case 'D':
-      cursor_rel (-(dev_state->args_[0] ? dev_state->args_[0] : 1),0);
+      cursor_rel (-(dev_state.args_[0] ? dev_state.args_[0] : 1),0);
       break;
     case 'K':
-      switch (dev_state->args_[0])
+      switch (dev_state.args_[0])
 	{
 	  case 0:		/* Clear to end of line */
 	    cursor_get (&x, &y);
@@ -1479,96 +1586,96 @@ fhandler_console::char_command (char c)
       break;
     case 'H':
     case 'f':
-      cursor_set (true, (dev_state->args_[1] ? dev_state->args_[1] : 1) - 1,
-			(dev_state->args_[0] ? dev_state->args_[0] : 1) - 1);
+      cursor_set (true, (dev_state.args_[1] ? dev_state.args_[1] : 1) - 1,
+			(dev_state.args_[0] ? dev_state.args_[0] : 1) - 1);
       break;
     case 'G':   /* hpa - position cursor at column n - 1 */
       cursor_get (&x, &y);
-      cursor_set (false, (dev_state->args_[0] ? dev_state->args_[0] - 1 : 0), y);
+      cursor_set (false, (dev_state.args_[0] ? dev_state.args_[0] - 1 : 0), y);
       break;
     case 'd':   /* vpa - position cursor at line n */
       cursor_get (&x, &y);
-      cursor_set (true, x, (dev_state->args_[0] ? dev_state->args_[0] - 1 : 0));
+      cursor_set (true, x, (dev_state.args_[0] ? dev_state.args_[0] - 1 : 0));
       break;
     case 's':   /* Save cursor position */
-      cursor_get (&dev_state->savex, &dev_state->savey);
-      dev_state->savey -= dev_state->info.winTop;
+      cursor_get (&dev_state.savex, &dev_state.savey);
+      dev_state.savey -= dev_state.info.winTop;
       break;
     case 'u':   /* Restore cursor position */
-      cursor_set (true, dev_state->savex, dev_state->savey);
+      cursor_set (true, dev_state.savex, dev_state.savey);
       break;
     case 'I':	/* TAB */
       cursor_get (&x, &y);
       cursor_set (false, 8 * (x / 8 + 1), y);
       break;
     case 'L':				/* AL - insert blank lines */
-      dev_state->args_[0] = dev_state->args_[0] ? dev_state->args_[0] : 1;
+      dev_state.args_[0] = dev_state.args_[0] ? dev_state.args_[0] : 1;
       cursor_get (&x, &y);
-      scroll_screen (0, y, -1, -1, 0, y + dev_state->args_[0]);
+      scroll_screen (0, y, -1, -1, 0, y + dev_state.args_[0]);
       break;
     case 'M':				/* DL - delete lines */
-      dev_state->args_[0] = dev_state->args_[0] ? dev_state->args_[0] : 1;
+      dev_state.args_[0] = dev_state.args_[0] ? dev_state.args_[0] : 1;
       cursor_get (&x, &y);
-      scroll_screen (0, y + dev_state->args_[0], -1, -1, 0, y);
+      scroll_screen (0, y + dev_state.args_[0], -1, -1, 0, y);
       break;
     case '@':				/* IC - insert chars */
-      dev_state->args_[0] = dev_state->args_[0] ? dev_state->args_[0] : 1;
+      dev_state.args_[0] = dev_state.args_[0] ? dev_state.args_[0] : 1;
       cursor_get (&x, &y);
-      scroll_screen (x, y, -1, y, x + dev_state->args_[0], y);
+      scroll_screen (x, y, -1, y, x + dev_state.args_[0], y);
       break;
     case 'P':				/* DC - delete chars */
-      dev_state->args_[0] = dev_state->args_[0] ? dev_state->args_[0] : 1;
+      dev_state.args_[0] = dev_state.args_[0] ? dev_state.args_[0] : 1;
       cursor_get (&x, &y);
-      scroll_screen (x + dev_state->args_[0], y, -1, y, x, y);
+      scroll_screen (x + dev_state.args_[0], y, -1, y, x, y);
       break;
     case 'S':				/* SF - Scroll forward */
-      dev_state->args_[0] = dev_state->args_[0] ? dev_state->args_[0] : 1;
-      scroll_screen (0, dev_state->args_[0], -1, -1, 0, 0);
+      dev_state.args_[0] = dev_state.args_[0] ? dev_state.args_[0] : 1;
+      scroll_screen (0, dev_state.args_[0], -1, -1, 0, 0);
       break;
     case 'T':				/* SR - Scroll down */
-      dev_state->fillin_info (get_output_handle ());
-      dev_state->args_[0] = dev_state->args_[0] ? dev_state->args_[0] : 1;
-      scroll_screen (0, 0, -1, -1, 0, dev_state->info.winTop + dev_state->args_[0]);
+      dev_state.fillin_info (get_output_handle ());
+      dev_state.args_[0] = dev_state.args_[0] ? dev_state.args_[0] : 1;
+      scroll_screen (0, 0, -1, -1, 0, dev_state.info.winTop + dev_state.args_[0]);
       break;
     case 'X':				/* ec - erase chars */
-      dev_state->args_[0] = dev_state->args_[0] ? dev_state->args_[0] : 1;
+      dev_state.args_[0] = dev_state.args_[0] ? dev_state.args_[0] : 1;
       cursor_get (&x, &y);
-      scroll_screen (x + dev_state->args_[0], y, -1, y, x, y);
-      scroll_screen (x, y, -1, y, x + dev_state->args_[0], y);
+      scroll_screen (x + dev_state.args_[0], y, -1, y, x, y);
+      scroll_screen (x, y, -1, y, x + dev_state.args_[0], y);
       break;
     case 'Z':				/* Back tab */
       cursor_get (&x, &y);
       cursor_set (false, ((8 * (x / 8 + 1)) - 8), y);
       break;
     case 'b':				/* Repeat char #1 #2 times */
-      if (dev_state->insert_mode)
+      if (dev_state.insert_mode)
 	{
 	  cursor_get (&x, &y);
-	  scroll_screen (x, y, -1, y, x + dev_state->args_[1], y);
+	  scroll_screen (x, y, -1, y, x + dev_state.args_[1], y);
 	}
-      while (dev_state->args_[1]--)
-	WriteFile (get_output_handle (), &dev_state->args_[0], 1, (DWORD *) &x, 0);
+      while (dev_state.args_[1]--)
+	WriteFile (get_output_handle (), &dev_state.args_[0], 1, (DWORD *) &x, 0);
       break;
     case 'c':				/* u9 - Terminal enquire string */
-      if (dev_state->saw_greater_than_sign)
-	/* Generate Secondary Device Attribute report, using 67 = ASCII 'C' 
-	   to indicate Cygwin (convention used by Rxvt, Urxvt, Screen, Mintty), 
+      if (dev_state.saw_greater_than_sign)
+	/* Generate Secondary Device Attribute report, using 67 = ASCII 'C'
+	   to indicate Cygwin (convention used by Rxvt, Urxvt, Screen, Mintty),
 	   and cygwin version for terminal version. */
 	__small_sprintf (buf, "\033[>67;%d%02d;0c", CYGWIN_VERSION_DLL_MAJOR, CYGWIN_VERSION_DLL_MINOR);
       else
 	strcpy (buf, "\033[?6c");
-      /* The generated report needs to be injected for read-ahead into the 
-         fhandler_console object associated with standard input.
-         The current call does not work. */
+      /* The generated report needs to be injected for read-ahead into the
+	 fhandler_console object associated with standard input.
+	 The current call does not work. */
       puts_readahead (buf);
       break;
     case 'n':
-      switch (dev_state->args_[0])
+      switch (dev_state.args_[0])
 	{
 	case 6:				/* u7 - Cursor position request */
 	  cursor_get (&x, &y);
-	  y -= dev_state->info.winTop;
-	  /* x -= dev_state->info.winLeft;		// not available yet */
+	  y -= dev_state.info.winTop;
+	  /* x -= dev_state.info.winLeft;		// not available yet */
 	  __small_sprintf (buf, "\033[%d;%dR", y + 1, x + 1);
 	  puts_readahead (buf);
 	  break;
@@ -1577,8 +1684,8 @@ fhandler_console::char_command (char c)
 	}
       break;
     case 'r':				/* Set Scroll region */
-      dev_state->scroll_region.Top = dev_state->args_[0] ? dev_state->args_[0] - 1 : 0;
-      dev_state->scroll_region.Bottom = dev_state->args_[1] ? dev_state->args_[1] - 1 : -1;
+      dev_state.scroll_region.Top = dev_state.args_[0] ? dev_state.args_[0] - 1 : 0;
+      dev_state.scroll_region.Bottom = dev_state.args_[1] ? dev_state.args_[1] - 1 : -1;
       cursor_set (true, 0, 0);
       break;
     case 'g':				/* TAB set/clear */
@@ -1610,7 +1717,7 @@ fhandler_console::write_normal (const unsigned char *src,
   const unsigned char *found = src;
   size_t ret;
   mbstate_t ps;
-  UINT cp = dev_state->get_console_cp ();
+  UINT cp = dev_state.get_console_cp ();
   const char *charset;
   mbtowc_p f_mbtowc;
 
@@ -1660,7 +1767,7 @@ fhandler_console::write_normal (const unsigned char *src,
       /* Valid multibyte sequence?  Process. */
       if (nfound)
 	{
-	  buf_len = dev_state->str_to_con (f_mbtowc, charset, write_buf,
+	  buf_len = dev_state.str_to_con (f_mbtowc, charset, write_buf,
 					   (const char *) trunc_buf.buf,
 					   nfound - trunc_buf.buf);
 	  if (!write_console (write_buf, buf_len, done))
@@ -1674,6 +1781,9 @@ fhandler_console::write_normal (const unsigned char *src,
 	}
     }
 
+  /* Loop over src buffer as long as we have just simple characters.  Stop
+     as soon as we reach the conversion limit, or if we encounter a control
+     character or a truncated or invalid mutibyte sequence. */
   memset (&ps, 0, sizeof ps);
   while (found < end
 	 && found - src < CONVERT_LIMIT
@@ -1682,13 +1792,12 @@ fhandler_console::write_normal (const unsigned char *src,
       switch (ret = f_mbtowc (_REENT, NULL, (const char *) found,
 			       end - found, charset, &ps))
 	{
-	case -2:
-	  /* Truncated multibyte sequence.  Stick to it until the next write. */
+	case -2: /* Truncated multibyte sequence.  Store for next write. */
 	  trunc_buf.len = end - found;
 	  memcpy (trunc_buf.buf, found, trunc_buf.len);
-	  return end;
-	case -1:
-	  break;
+	  goto do_print;
+	case -1: /* Invalid multibyte sequence. Handled below. */
+	  goto do_print;
 	case 0:
 	  found++;
 	  break;
@@ -1696,15 +1805,15 @@ fhandler_console::write_normal (const unsigned char *src,
 	  found += ret;
 	  break;
 	}
-      if (ret == (size_t) -1)		/* Invalid multibyte sequence. */
-	break;
     }
 
-  /* Print all the base ones out */
+do_print:
+
+  /* Print all the base characters out */
   if (found != src)
     {
       DWORD len = found - src;
-      buf_len = dev_state->str_to_con (f_mbtowc, charset, write_buf,
+      buf_len = dev_state.str_to_con (f_mbtowc, charset, write_buf,
 				       (const char *) src, len);
       if (!buf_len)
 	{
@@ -1714,7 +1823,7 @@ fhandler_console::write_normal (const unsigned char *src,
 	  return 0;
 	}
 
-      if (dev_state->insert_mode)
+      if (dev_state.insert_mode)
 	{
 	  int x, y;
 	  cursor_get (&x, &y);
@@ -1726,32 +1835,35 @@ fhandler_console::write_normal (const unsigned char *src,
 	  debug_printf ("write failed, handle %p", get_output_handle ());
 	  return 0;
 	}
+      /* Stop here if we reached the conversion limit. */
       if (len >= CONVERT_LIMIT)
-	return found;
+	return found + trunc_buf.len;
     }
-
-  if (found < end)
+  /* If there's still something in the src buffer, but it's not a truncated
+     multibyte sequence, then we stumbled over a control character or an
+     invalid multibyte sequence.  Print it. */
+  if (found < end && trunc_buf.len == 0)
     {
       int x, y;
       switch (base_chars[*found])
 	{
-	case SO:
-	  dev_state->vt100_graphics_mode_active = true;
+	case SO:	/* Shift Out: Invoke G1 character set (ISO 2022) */
+	  dev_state.iso_2022_G1 = true;
 	  break;
-	case SI:
-	  dev_state->vt100_graphics_mode_active = false;
+	case SI:	/* Shift In: Invoke G0 character set (ISO 2022) */
+	  dev_state.iso_2022_G1 = false;
 	  break;
 	case BEL:
 	  beep ();
 	  break;
 	case ESC:
-	  dev_state->state_ = gotesc;
+	  dev_state.state_ = gotesc;
 	  break;
 	case DWN:
 	  cursor_get (&x, &y);
 	  if (y >= srBottom)
 	    {
-	      if (y >= dev_state->info.winBottom && !dev_state->scroll_region.Top)
+	      if (y >= dev_state.info.winBottom && !dev_state.scroll_region.Top)
 		WriteConsoleW (get_output_handle (), L"\n", 1, &done, 0);
 	      else
 		{
@@ -1759,7 +1871,7 @@ fhandler_console::write_normal (const unsigned char *src,
 		  y--;
 		}
 	    }
-	  cursor_set (false, ((tc->ti.c_oflag & ONLCR) ? 0 : x), y + 1);
+	  cursor_set (false, ((get_ttyp ()->ti.c_oflag & ONLCR) ? 0 : x), y + 1);
 	  break;
 	case BAK:
 	  cursor_rel (-1, 0);
@@ -1802,12 +1914,18 @@ fhandler_console::write_normal (const unsigned char *src,
 	}
       found++;
     }
-  return found;
+  return found + trunc_buf.len;
 }
 
 ssize_t __stdcall
 fhandler_console::write (const void *vsrc, size_t len)
 {
+  bg_check_types bg = bg_check (SIGTTOU);
+  if (bg <= bg_eof)
+    return (ssize_t) bg;
+
+  push_process_state process_state (PID_TTYOU);
+
   /* Run and check for ansi sequences */
   unsigned const char *src = (unsigned char *) vsrc;
   unsigned const char *end = src + len;
@@ -1822,8 +1940,8 @@ fhandler_console::write (const void *vsrc, size_t len)
   while (src < end)
     {
       debug_printf ("at %d(%c) state is %d", *src, isprint (*src) ? *src : ' ',
-		    dev_state->state_);
-      switch (dev_state->state_)
+		    dev_state.state_);
+      switch (dev_state.state_)
 	{
 	case normal:
 	  src = write_normal (src, end);
@@ -1833,108 +1951,107 @@ fhandler_console::write (const void *vsrc, size_t len)
 	case gotesc:
 	  if (*src == '[')		/* CSI Control Sequence Introducer */
 	    {
-	      dev_state->state_ = gotsquare;
-	      dev_state->saw_question_mark = false;
-	      dev_state->saw_greater_than_sign = false;
-	      for (dev_state->nargs_ = 0; dev_state->nargs_ < MAXARGS; dev_state->nargs_++)
-		dev_state->args_[dev_state->nargs_] = 0;
-	      dev_state->nargs_ = 0;
+	      dev_state.state_ = gotsquare;
+	      dev_state.saw_question_mark = false;
+	      dev_state.saw_greater_than_sign = false;
+	      for (dev_state.nargs_ = 0; dev_state.nargs_ < MAXARGS; dev_state.nargs_++)
+		dev_state.args_[dev_state.nargs_] = 0;
+	      dev_state.nargs_ = 0;
 	    }
 	  else if (*src == ']')		/* OSC Operating System Command */
 	    {
-	      dev_state->rarg = 0;
-	      dev_state->my_title_buf[0] = '\0';
-	      dev_state->state_ = gotrsquare;
+	      dev_state.rarg = 0;
+	      dev_state.my_title_buf[0] = '\0';
+	      dev_state.state_ = gotrsquare;
 	    }
 	  else if (*src == '(')		/* Designate G0 character set */
 	    {
-	      dev_state->state_ = gotparen;
+	      dev_state.state_ = gotparen;
 	    }
 	  else if (*src == ')')		/* Designate G1 character set */
 	    {
-	      dev_state->state_ = gotrparen;
+	      dev_state.state_ = gotrparen;
 	    }
 	  else if (*src == 'M')		/* Reverse Index (scroll down) */
 	    {
-	      dev_state->fillin_info (get_output_handle ());
-	      scroll_screen (0, 0, -1, -1, 0, dev_state->info.winTop + 1);
-	      dev_state->state_ = normal;
+	      dev_state.fillin_info (get_output_handle ());
+	      scroll_screen (0, 0, -1, -1, 0, dev_state.info.winTop + 1);
+	      dev_state.state_ = normal;
 	    }
 	  else if (*src == 'c')		/* RIS Full Reset */
 	    {
-	      dev_state->set_default_attr ();
+	      dev_state.set_default_attr ();
+	      dev_state.vt100_graphics_mode_G0 = false;
+	      dev_state.vt100_graphics_mode_G1 = false;
+	      dev_state.iso_2022_G1 = false;
 	      clear_screen (0, 0, -1, -1);
 	      cursor_set (true, 0, 0);
-	      dev_state->state_ = normal;
+	      dev_state.state_ = normal;
 	    }
 	  else if (*src == '8')		/* DECRC Restore cursor position */
 	    {
-	      cursor_set (true, dev_state->savex, dev_state->savey);
-	      dev_state->state_ = normal;
+	      cursor_set (true, dev_state.savex, dev_state.savey);
+	      dev_state.state_ = normal;
 	    }
 	  else if (*src == '7')		/* DECSC Save cursor position */
 	    {
-	      cursor_get (&dev_state->savex, &dev_state->savey);
-	      dev_state->savey -= dev_state->info.winTop;
-	      dev_state->state_ = normal;
+	      cursor_get (&dev_state.savex, &dev_state.savey);
+	      dev_state.savey -= dev_state.info.winTop;
+	      dev_state.state_ = normal;
 	    }
 	  else if (*src == 'R')		/* ? */
-	      dev_state->state_ = normal;
+	      dev_state.state_ = normal;
 	  else
 	    {
-	      dev_state->state_ = normal;
+	      dev_state.state_ = normal;
 	    }
 	  src++;
 	  break;
 	case gotarg1:
 	  if (isdigit (*src))
 	    {
-	      dev_state->args_[dev_state->nargs_] = dev_state->args_[dev_state->nargs_] * 10 + *src - '0';
+	      dev_state.args_[dev_state.nargs_] = dev_state.args_[dev_state.nargs_] * 10 + *src - '0';
 	      src++;
 	    }
 	  else if (*src == ';')
 	    {
 	      src++;
-	      dev_state->nargs_++;
-	      if (dev_state->nargs_ >= MAXARGS)
-		dev_state->nargs_--;
+	      dev_state.nargs_++;
+	      if (dev_state.nargs_ >= MAXARGS)
+		dev_state.nargs_--;
 	    }
 	  else
 	    {
-	      dev_state->state_ = gotcommand;
+	      dev_state.state_ = gotcommand;
 	    }
 	  break;
 	case gotcommand:
 	  char_command (*src++);
-	  dev_state->state_ = normal;
+	  dev_state.state_ = normal;
 	  break;
 	case gotrsquare:
 	  if (isdigit (*src))
-	    dev_state->rarg = dev_state->rarg * 10 + (*src - '0');
-	  else if (*src == ';' && (dev_state->rarg == 2 || dev_state->rarg == 0))
-	    dev_state->state_ = gettitle;
+	    dev_state.rarg = dev_state.rarg * 10 + (*src - '0');
+	  else if (*src == ';' && (dev_state.rarg == 2 || dev_state.rarg == 0))
+	    dev_state.state_ = gettitle;
 	  else
-	    dev_state->state_ = eattitle;
+	    dev_state.state_ = eattitle;
 	  src++;
 	  break;
 	case eattitle:
 	case gettitle:
 	  {
-	    int n = strlen (dev_state->my_title_buf);
+	    int n = strlen (dev_state.my_title_buf);
 	    if (*src < ' ')
 	      {
-		if (*src == '\007' && dev_state->state_ == gettitle)
-		  {
-		    if (old_title)
-		      strcpy (old_title, dev_state->my_title_buf);
-		    set_console_title (dev_state->my_title_buf);
-		  }
-		dev_state->state_ = normal;
+		if (*src == '\007' && dev_state.state_ == gettitle)
+		  set_console_title (dev_state.my_title_buf);
+		dev_state.state_ = normal;
 	      }
 	    else if (n < TITLESIZE)
 	      {
-		dev_state->my_title_buf[n++] = *src;
-		dev_state->my_title_buf[n] = '\0';
+		dev_state.my_title_buf[n++] = *src;
+		dev_state.my_title_buf[n] = '\0';
 	      }
 	    src++;
 	    break;
@@ -1942,45 +2059,44 @@ fhandler_console::write (const void *vsrc, size_t len)
 	case gotsquare:
 	  if (*src == ';')
 	    {
-	      dev_state->state_ = gotarg1;
-	      dev_state->nargs_++;
+	      dev_state.state_ = gotarg1;
+	      dev_state.nargs_++;
 	      src++;
 	    }
 	  else if (isalpha (*src))
-	    dev_state->state_ = gotcommand;
+	    dev_state.state_ = gotcommand;
 	  else if (*src != '@' && !isalpha (*src) && !isdigit (*src))
 	    {
 	      if (*src == '?')
-		dev_state->saw_question_mark = true;
+		dev_state.saw_question_mark = true;
 	      else if (*src == '>')
-		dev_state->saw_greater_than_sign = true;
+		dev_state.saw_greater_than_sign = true;
 	      /* ignore any extra chars between [ and first arg or command */
 	      src++;
 	    }
 	  else
-	    dev_state->state_ = gotarg1;
+	    dev_state.state_ = gotarg1;
 	  break;
-	case gotparen:
+	case gotparen:	/* Designate G0 Character Set (ISO 2022) */
 	  if (*src == '0')
-	    dev_state->vt100_graphics_mode_active = true;
+	    dev_state.vt100_graphics_mode_G0 = true;
 	  else
-	    dev_state->vt100_graphics_mode_active = false;
-	  dev_state->state_ = normal;
+	    dev_state.vt100_graphics_mode_G0 = false;
+	  dev_state.state_ = normal;
 	  src++;
 	  break;
-	case gotrparen:
-	  /* This is not strictly needed, ^N/^O can just always be enabled */
+	case gotrparen:	/* Designate G1 Character Set (ISO 2022) */
 	  if (*src == '0')
-	    /*dev_state->vt100_graphics_mode_SOSI_enabled = true*/;
+	    dev_state.vt100_graphics_mode_G1 = true;
 	  else
-	    /*dev_state->vt100_graphics_mode_SOSI_enabled = false*/;
-	  dev_state->state_ = normal;
+	    dev_state.vt100_graphics_mode_G1 = false;
+	  dev_state.state_ = normal;
 	  src++;
 	  break;
 	}
     }
 
-  syscall_printf ("%d = fhandler_console::write (,..%d)", len, len);
+  syscall_printf ("%d = fhandler_console::write(...)", len);
 
   return len;
 }
@@ -2042,16 +2158,16 @@ get_nonascii_key (INPUT_RECORD& input_rec, char *tmp)
   for (int i = 0; keytable[i].vk; i++)
     if (input_rec.Event.KeyEvent.wVirtualKeyCode == keytable[i].vk)
       {
-        if ((input_rec.Event.KeyEvent.dwControlKeyState &
+	if ((input_rec.Event.KeyEvent.dwControlKeyState &
 		(LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED))
 	    && keytable[i].val[modifier_index] != NULL)
-          { /* Generic ESC prefixing if Alt is pressed */
+	  { /* Generic ESC prefixing if Alt is pressed */
 	    tmp[0] = '\033';
 	    strcpy (tmp + 1, keytable[i].val[modifier_index]);
 	    return tmp;
-          }
-        else
-          return keytable[i].val[modifier_index];
+	  }
+	else
+	  return keytable[i].val[modifier_index];
       }
 
   if (input_rec.Event.KeyEvent.uChar.AsciiChar)
@@ -2064,9 +2180,9 @@ get_nonascii_key (INPUT_RECORD& input_rec, char *tmp)
 }
 
 int
-fhandler_console::init (HANDLE f, DWORD a, mode_t bin)
+fhandler_console::init (HANDLE h, DWORD a, mode_t bin)
 {
-  // this->fhandler_termios::init (f, mode, bin);
+  // this->fhandler_termios::init (h, mode, bin);
   /* Ensure both input and output console handles are open */
   int flags = 0;
 
@@ -2077,24 +2193,21 @@ fhandler_console::init (HANDLE f, DWORD a, mode_t bin)
     flags = O_WRONLY;
   if (a == (GENERIC_READ | GENERIC_WRITE))
     flags = O_RDWR;
-  open (flags | O_BINARY);
-  if (f != INVALID_HANDLE_VALUE)
-    CloseHandle (f);	/* Reopened by open */
+  open_with_arch (flags | O_BINARY | (h ? 0 : O_NOCTTY));
 
-  return !tcsetattr (0, &tc->ti);
+  return !tcsetattr (0, &get_ttyp ()->ti);
 }
 
 int
 fhandler_console::igncr_enabled ()
 {
-  return tc->ti.c_iflag & IGNCR;
+  return get_ttyp ()->ti.c_iflag & IGNCR;
 }
 
 void
 fhandler_console::set_close_on_exec (bool val)
 {
-  fhandler_base::set_close_on_exec (val);
-  set_no_inheritance (output_handle, val);
+  close_on_exec (val);
 }
 
 void __stdcall
@@ -2110,37 +2223,8 @@ set_console_title (char *title)
 void
 fhandler_console::fixup_after_fork_exec (bool execing)
 {
-  HANDLE h = get_handle ();
-  HANDLE oh = get_output_handle ();
-
-  if ((execing && close_on_exec ()) || open (O_NOCTTY | get_flags (), 0))
-    cygheap->manage_console_count ("fhandler_console::fixup_after_fork_exec", -1);
-  else
-    {
-      bool sawerr = false;
-      if (!get_io_handle ())
-	{
-	  system_printf ("error opening input console handle for %s after fork/exec, errno %d, %E", get_name (), get_errno ());
-	  sawerr = true;
-	}
-      if (!get_output_handle ())
-	{
-	  system_printf ("error opening output console handle for %s after fork/exec, errno %d, %E", get_name (), get_errno ());
-	  sawerr = true;
-	}
-
-      if (!sawerr)
-	system_printf ("error opening console after fork/exec, errno %d, %E", get_errno ());
-    }
-
-  if (!close_on_exec ())
-    {
-      CloseHandle (h);
-      CloseHandle (oh);
-    }
+  set_unit ();
 }
-
-bool NO_COPY fhandler_console::invisible_console;
 
 // #define WINSTA_ACCESS (WINSTA_READATTRIBUTES | STANDARD_RIGHTS_READ | STANDARD_RIGHTS_WRITE | WINSTA_CREATEDESKTOP | WINSTA_EXITWINDOWS)
 #define WINSTA_ACCESS WINSTA_ALL_ACCESS
@@ -2159,7 +2243,7 @@ fhandler_console::create_invisible_console (HWINSTA horig)
       termios_printf ("SetProcessWindowStation %d, %E", b);
     }
   b = AllocConsole ();	/* will cause flashing if CreateWindowStation
-	 		   failed */
+			   failed */
   if (!h)
     SetParent (GetConsoleWindow (), HWND_MESSAGE);
   if (horig && h && h != horig && SetProcessWindowStation (horig))

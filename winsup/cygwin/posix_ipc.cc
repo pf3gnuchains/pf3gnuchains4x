@@ -1,6 +1,6 @@
 /* posix_ipc.cc: POSIX IPC API for Cygwin.
 
-   Copyright 2007, 2008, 2009, 2010 Red Hat, Inc.
+   Copyright 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -9,6 +9,7 @@ Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
 details. */
 
 #include "winsup.h"
+#include "shared_info.h"
 #include "thread.h"
 #include "path.h"
 #include "cygtls.h"
@@ -95,15 +96,24 @@ check_path (char *res_name, ipc_type_t type, const char *name, size_t len)
 static int
 ipc_mutex_init (HANDLE *pmtx, const char *name)
 {
-  char buf[MAX_PATH];
-  SECURITY_ATTRIBUTES sa = sec_none;
+  WCHAR buf[MAX_PATH];
+  UNICODE_STRING uname;
+  OBJECT_ATTRIBUTES attr;
+  NTSTATUS status;
 
-  __small_sprintf (buf, "mqueue/mtx_%s", name);
-  sa.lpSecurityDescriptor = everyone_sd (CYG_MUTANT_ACCESS);
-  *pmtx = CreateMutex (&sa, FALSE, buf);
-  if (!*pmtx)
-    debug_printf ("CreateMutex: %E");
-  return *pmtx ? 0 : geterrno_from_win_error ();
+  __small_swprintf (buf, L"mqueue/mtx_%s", name);
+  RtlInitUnicodeString (&uname, buf);
+  InitializeObjectAttributes (&attr, &uname,
+			      OBJ_INHERIT | OBJ_OPENIF | OBJ_CASE_INSENSITIVE,
+			      get_shared_parent_dir (),
+			      everyone_sd (CYG_MUTANT_ACCESS));
+  status = NtCreateMutant (pmtx, CYG_MUTANT_ACCESS, &attr, FALSE);
+  if (!NT_SUCCESS (status))
+    {
+      debug_printf ("NtCreateMutant: %p", status);
+      return geterrno_from_win_error (RtlNtStatusToDosError (status));
+    }
+  return 0;
 }
 
 static int
@@ -138,70 +148,139 @@ ipc_mutex_close (HANDLE mtx)
 }
 
 static int
-ipc_cond_init (HANDLE *pevt, const char *name)
+ipc_cond_init (HANDLE *pevt, const char *name, char sr)
 {
-  char buf[MAX_PATH];
-  SECURITY_ATTRIBUTES sa = sec_none;
+  WCHAR buf[MAX_PATH];
+  UNICODE_STRING uname;
+  OBJECT_ATTRIBUTES attr;
+  NTSTATUS status;
 
-  __small_sprintf (buf, "mqueue/evt_%s", name);
-  sa.lpSecurityDescriptor = everyone_sd (CYG_EVENT_ACCESS);
-  *pevt = CreateEvent (&sa, TRUE, FALSE, buf);
-  if (!*pevt)
-    debug_printf ("CreateEvent: %E");
-  return *pevt ? 0 : geterrno_from_win_error ();
+  __small_swprintf (buf, L"mqueue/evt_%s%c", name, sr);
+  RtlInitUnicodeString (&uname, buf);
+  InitializeObjectAttributes (&attr, &uname,
+			      OBJ_INHERIT | OBJ_OPENIF | OBJ_CASE_INSENSITIVE,
+			      get_shared_parent_dir (),
+			      everyone_sd (CYG_EVENT_ACCESS));
+  status = NtCreateEvent (pevt, CYG_EVENT_ACCESS, &attr,
+			  NotificationEvent, FALSE);
+  if (!NT_SUCCESS (status))
+    {
+      debug_printf ("NtCreateEvent: %p", status);
+      return geterrno_from_win_error (RtlNtStatusToDosError (status));
+    }
+  return 0;
 }
 
 static int
 ipc_cond_timedwait (HANDLE evt, HANDLE mtx, const struct timespec *abstime)
 {
-  struct timeval tv;
-  DWORD timeout;
-  HANDLE h[2] = { mtx, evt };
+  HANDLE w4[4] = { evt, signal_arrived, NULL, NULL };
+  DWORD cnt = 2;
+  DWORD timer_idx = 0;
+  int ret = 0;
 
-  if (!abstime)
-    timeout = INFINITE;
-  else if (abstime->tv_sec < 0
-	   || abstime->tv_nsec < 0
-	   || abstime->tv_nsec > 999999999)
-    return EINVAL;
-  else
+  if ((w4[cnt] = pthread::get_cancel_event ()) != NULL)
+    ++cnt;
+  if (abstime)
     {
-      gettimeofday (&tv, NULL);
-      /* Check for immediate timeout. */
-      if (tv.tv_sec > abstime->tv_sec
-	  || (tv.tv_sec == abstime->tv_sec
-	      && tv.tv_usec > abstime->tv_nsec / 1000))
-	return ETIMEDOUT;
-      timeout = (abstime->tv_sec - tv.tv_sec) * 1000;
-      timeout += (abstime->tv_nsec / 1000 - tv.tv_usec) / 1000;
+      if (abstime->tv_sec < 0
+	       || abstime->tv_nsec < 0
+	       || abstime->tv_nsec > 999999999)
+	return EINVAL;
+
+      /* If a timeout is set, we create a waitable timer to wait for.
+	 This is the easiest way to handle the absolute timeout value, given
+	 that NtSetTimer also takes absolute times and given the double
+	 dependency on evt *and* mtx, which requires to call WFMO twice. */
+      NTSTATUS status;
+      LARGE_INTEGER duetime;
+
+      timer_idx = cnt++;
+      status = NtCreateTimer (&w4[timer_idx], TIMER_ALL_ACCESS, NULL,
+			      NotificationTimer);
+      if (!NT_SUCCESS (status))
+	return geterrno_from_nt_status (status);
+      timespec_to_filetime (abstime, (FILETIME *) &duetime);
+      status = NtSetTimer (w4[timer_idx], &duetime, NULL, NULL, FALSE, 0, NULL);
+      if (!NT_SUCCESS (status))
+	{
+	  NtClose (w4[timer_idx]);
+	  return geterrno_from_nt_status (status);
+	}
     }
-  if (ipc_mutex_unlock (mtx))
-    return -1;
-  switch (WaitForMultipleObjects (2, h, TRUE, timeout))
+  ResetEvent (evt);
+  if ((ret = ipc_mutex_unlock (mtx)) != 0)
+    return ret;
+  /* Everything's set up, so now wait for the event to be signalled. */
+restart1:
+  switch (WaitForMultipleObjects (cnt, w4, FALSE, INFINITE))
     {
     case WAIT_OBJECT_0:
-    case WAIT_ABANDONED_0:
-      ResetEvent (evt);
-      return 0;
-    case WAIT_TIMEOUT:
-      ipc_mutex_lock (mtx);
-      return ETIMEDOUT;
+      break;
+    case WAIT_OBJECT_0 + 1:
+      if (_my_tls.call_signal_handler ())
+	goto restart1;
+      ret = EINTR;
+      break;
+    case WAIT_OBJECT_0 + 2:
+      if (timer_idx != 2)
+	pthread::static_cancel_self ();
+      /*FALLTHRU*/
+    case WAIT_OBJECT_0 + 3:
+      ret = ETIMEDOUT;
+      break;
     default:
+      ret = geterrno_from_win_error ();
       break;
     }
-  return geterrno_from_win_error ();
+  if (ret == 0)
+    {
+      /* At this point we need to lock the mutex.  The wait is practically
+	 the same as before, just that we now wait on the mutex instead of the
+	 event. */
+    restart2:
+      w4[0] = mtx;
+      switch (WaitForMultipleObjects (cnt, w4, FALSE, INFINITE))
+	{
+	case WAIT_OBJECT_0:
+	case WAIT_ABANDONED_0:
+	  break;
+	case WAIT_OBJECT_0 + 1:
+	  if (_my_tls.call_signal_handler ())
+	    goto restart2;
+	  ret = EINTR;
+	  break;
+	case WAIT_OBJECT_0 + 2:
+	  if (timer_idx != 2)
+	    pthread_testcancel ();
+	  /*FALLTHRU*/
+	case WAIT_OBJECT_0 + 3:
+	  ret = ETIMEDOUT;
+	  break;
+	default:
+	  ret = geterrno_from_win_error ();
+	  break;
+	}
+    }
+  if (timer_idx)
+    {
+      if (ret != ETIMEDOUT)
+	NtCancelTimer (w4[timer_idx], NULL);
+      NtClose (w4[timer_idx]);
+    }
+  return ret;
 }
 
-static inline int
+static inline void
 ipc_cond_signal (HANDLE evt)
 {
-  return SetEvent (evt) ? 0 : geterrno_from_win_error ();
+  SetEvent (evt);
 }
 
-static inline int
+static inline void
 ipc_cond_close (HANDLE evt)
 {
-  return CloseHandle (evt) ? 0 : geterrno_from_win_error ();
+  CloseHandle (evt);
 }
 
 class ipc_flock
@@ -295,7 +374,8 @@ struct mq_info
   unsigned long   mqi_magic;	 /* magic number if open */
   int             mqi_flags;	 /* flags for this process */
   HANDLE          mqi_lock;	 /* mutex lock */
-  HANDLE          mqi_wait;	 /* and condition variable */
+  HANDLE          mqi_waitsend;	 /* and condition variable for full queue */
+  HANDLE          mqi_waitrecv;	 /* and condition variable for empty queue */
 };
 
 #define MQI_MAGIC	0x98765432UL
@@ -383,7 +463,7 @@ again:
 	goto err;
 
       /* Allocate one mq_info{} for the queue */
-      if (!(mqinfo = (struct mq_info *) malloc (sizeof (struct mq_info))))
+      if (!(mqinfo = (struct mq_info *) calloc (1, sizeof (struct mq_info))))
 	goto err;
       mqinfo->mqi_hdr = mqhdr = (struct mq_hdr *) mptr;
       mqinfo->mqi_magic = MQI_MAGIC;
@@ -397,11 +477,7 @@ again:
       mqhdr->mqh_attr.mq_curmsgs = 0;
       mqhdr->mqh_nwait = 0;
       mqhdr->mqh_pid = 0;
-      if (!AllocateLocallyUniqueId (&luid))
-	{
-	  __seterrno ();
-	  goto err;
-	}
+      NtAllocateLocallyUniqueId (&luid);
       __small_sprintf (mqhdr->mqh_uname, "%016X%08x%08x",
 		       hash_path_name (0,mqname),
 		       luid.HighPart, luid.LowPart);
@@ -417,12 +493,16 @@ again:
       msghdr = (struct msg_hdr *) &mptr[index];
       msghdr->msg_next = 0;		/* end of free list */
 
-      /* Initialize mutex & condition variable */
+      /* Initialize mutex & condition variables */
       i = ipc_mutex_init (&mqinfo->mqi_lock, mqhdr->mqh_uname);
       if (i != 0)
 	goto pthreaderr;
 
-      i = ipc_cond_init (&mqinfo->mqi_wait, mqhdr->mqh_uname);
+      i = ipc_cond_init (&mqinfo->mqi_waitsend, mqhdr->mqh_uname, 'S');
+      if (i != 0)
+	goto pthreaderr;
+
+      i = ipc_cond_init (&mqinfo->mqi_waitrecv, mqhdr->mqh_uname, 'R');
       if (i != 0)
 	goto pthreaderr;
 
@@ -473,7 +553,7 @@ exists:
   fd = -1;
 
   /* Allocate one mq_info{} for each open */
-  if (!(mqinfo = (struct mq_info *) malloc (sizeof (struct mq_info))))
+  if (!(mqinfo = (struct mq_info *) calloc (1, sizeof (struct mq_info))))
     goto err;
   mqinfo->mqi_hdr = mqhdr = (struct mq_hdr *) mptr;
   mqinfo->mqi_magic = MQI_MAGIC;
@@ -484,7 +564,11 @@ exists:
   if (i != 0)
     goto pthreaderr;
 
-  i = ipc_cond_init (&mqinfo->mqi_wait, mqhdr->mqh_uname);
+  i = ipc_cond_init (&mqinfo->mqi_waitsend, mqhdr->mqh_uname, 'S');
+  if (i != 0)
+    goto pthreaderr;
+
+  i = ipc_cond_init (&mqinfo->mqi_waitrecv, mqhdr->mqh_uname, 'R');
   if (i != 0)
     goto pthreaderr;
 
@@ -501,7 +585,15 @@ err:
   if (mptr != (int8_t *) MAP_FAILED)
     munmap((void *) mptr, (size_t) filesize);
   if (mqinfo)
-    free (mqinfo);
+    {
+      if (mqinfo->mqi_lock)
+	ipc_mutex_close (mqinfo->mqi_lock);
+      if (mqinfo->mqi_waitsend)
+	ipc_cond_close (mqinfo->mqi_waitsend);
+      if (mqinfo->mqi_waitrecv)
+	ipc_cond_close (mqinfo->mqi_waitrecv);
+      free (mqinfo);
+    }
   if (fd >= 0)
     close (fd);
   return (mqd_t) -1;
@@ -646,6 +738,8 @@ _mq_send (mqd_t mqd, const char *ptr, size_t len, unsigned int prio,
   struct msg_hdr *msghdr, *nmsghdr, *pmsghdr;
   struct mq_info *mqinfo;
 
+  pthread_testcancel ();
+
   myfault efault;
   if (efault.faulted (EBADF))
       return -1;
@@ -696,7 +790,15 @@ _mq_send (mqd_t mqd, const char *ptr, size_t len, unsigned int prio,
 	}
       /* Wait for room for one message on the queue */
       while (attr->mq_curmsgs >= attr->mq_maxmsg)
-	ipc_cond_timedwait (mqinfo->mqi_wait, mqinfo->mqi_lock, abstime);
+	{
+	  int ret = ipc_cond_timedwait (mqinfo->mqi_waitsend, mqinfo->mqi_lock,
+					abstime);
+	  if (ret != 0)
+	    {
+	      set_errno (ret);
+	      return -1;
+	    }
+	}
     }
 
   /* nmsghdr will point to new message */
@@ -732,7 +834,7 @@ _mq_send (mqd_t mqd, const char *ptr, size_t len, unsigned int prio,
     }
   /* Wake up anyone blocked in mq_receive waiting for a message */
   if (attr->mq_curmsgs == 0)
-    ipc_cond_signal (mqinfo->mqi_wait);
+    ipc_cond_signal (mqinfo->mqi_waitrecv);
   attr->mq_curmsgs++;
 
   ipc_mutex_unlock (mqinfo->mqi_lock);
@@ -769,6 +871,8 @@ _mq_receive (mqd_t mqd, char *ptr, size_t maxlen, unsigned int *priop,
   struct msg_hdr *msghdr;
   struct mq_info *mqinfo;
 
+  pthread_testcancel ();
+
   myfault efault;
   if (efault.faulted (EBADF))
       return -1;
@@ -803,7 +907,15 @@ _mq_receive (mqd_t mqd, char *ptr, size_t maxlen, unsigned int *priop,
       /* Wait for a message to be placed onto queue */
       mqhdr->mqh_nwait++;
       while (attr->mq_curmsgs == 0)
-	ipc_cond_timedwait (mqinfo->mqi_wait, mqinfo->mqi_lock, abstime);
+	{
+	  int ret = ipc_cond_timedwait (mqinfo->mqi_waitrecv, mqinfo->mqi_lock,
+					abstime);
+	  if (ret != 0)
+	    {
+	      set_errno (ret);
+	      return -1;
+	    }
+	}
       mqhdr->mqh_nwait--;
     }
 
@@ -823,7 +935,7 @@ _mq_receive (mqd_t mqd, char *ptr, size_t maxlen, unsigned int *priop,
 
   /* Wake up anyone blocked in mq_send waiting for room */
   if (attr->mq_curmsgs == attr->mq_maxmsg)
-    ipc_cond_signal (mqinfo->mqi_wait);
+    ipc_cond_signal (mqinfo->mqi_waitsend);
   attr->mq_curmsgs--;
 
   ipc_mutex_unlock (mqinfo->mqi_lock);
@@ -878,7 +990,8 @@ mq_close (mqd_t mqd)
     return -1;
 
   mqinfo->mqi_magic = 0;          /* just in case */
-  ipc_cond_close (mqinfo->mqi_wait);
+  ipc_cond_close (mqinfo->mqi_waitsend);
+  ipc_cond_close (mqinfo->mqi_waitrecv);
   ipc_mutex_close (mqinfo->mqi_lock);
   free (mqinfo);
   return 0;
@@ -953,11 +1066,7 @@ again:
 	}
       created = 1;
       /* First one to create the file initializes it. */
-      if (!AllocateLocallyUniqueId (&sf.luid))
-	{
-	  __seterrno ();
-	  goto err;
-	}
+      NtAllocateLocallyUniqueId (&sf.luid);
       sf.value = value;
       sf.hash = hash_path_name (0, semname);
       if (write (fd, &sf, sizeof sf) != sizeof sf)

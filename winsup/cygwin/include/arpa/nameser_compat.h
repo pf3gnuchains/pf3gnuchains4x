@@ -1,6 +1,6 @@
 /* Copyright (c) 1983, 1989
  *    The Regents of the University of California.  All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -16,7 +16,7 @@
  * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -40,50 +40,7 @@
 
 #define	__BIND		19950621	/* (DEAD) interface version stamp. */
 
-#ifndef BYTE_ORDER
-#if (BSD >= 199103)
-# include <machine/endian.h>
-#else
-#ifdef linux
-# include <endian.h>
-#else
-#define	LITTLE_ENDIAN	1234	/* least-significant byte first (vax, pc) */
-#define	BIG_ENDIAN	4321	/* most-significant byte first (IBM, net) */
-#define	PDP_ENDIAN	3412	/* LSB first in word, MSW first in long (pdp)*/
-
-#if defined(vax) || defined(ns32000) || defined(sun386) || defined(i386) || \
-    defined(MIPSEL) || defined(_MIPSEL) || defined(BIT_ZERO_ON_RIGHT) || \
-    defined(__alpha__) || defined(__alpha) || \
-    (defined(__Lynx__) && defined(__x86__))
-#define BYTE_ORDER	LITTLE_ENDIAN
-#endif
-
-#if defined(sel) || defined(pyr) || defined(mc68000) || defined(sparc) || \
-    defined(is68k) || defined(tahoe) || defined(ibm032) || defined(ibm370) || \
-    defined(MIPSEB) || defined(_MIPSEB) || defined(_IBMR2) || defined(DGUX) ||\
-    defined(apollo) || defined(__convex__) || defined(_CRAY) || \
-    defined(__hppa) || defined(__hp9000) || \
-    defined(__hp9000s300) || defined(__hp9000s700) || \
-    defined(__hp3000s900) || defined(MPE) || \
-    defined (BIT_ZERO_ON_LEFT) || defined(m68k) || \
-    (defined(__Lynx__) && \
-     (defined(__68k__) || defined(__sparc__) || defined(__powerpc__)))
-#define BYTE_ORDER	BIG_ENDIAN
-#endif
-#endif /* linux */
-#endif /* BSD */
-#endif /* BYTE_ORDER */
-
-#if !defined(BYTE_ORDER) || \
-    (BYTE_ORDER != BIG_ENDIAN && BYTE_ORDER != LITTLE_ENDIAN && \
-    BYTE_ORDER != PDP_ENDIAN)
-	/* you must determine what the correct bit order is for
-	 * your compiler - the next line is an intentional error
-	 * which will force your compiles to bomb until you fix
-	 * the above macros.
-	 */
-  error "Undefined or invalid BYTE_ORDER";
-#endif
+#include <endian.h>
 
 /*
  * Structure for query header.  The order of the fields is machine- and

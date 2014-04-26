@@ -1,8 +1,7 @@
 /* Machine independent support for QNX Neutrino /proc (process file system)
-   for GDB.  Written by Colin Burgess at QNX Software Systems Limited. 
+   for GDB.  Written by Colin Burgess at QNX Software Systems Limited.
 
-   Copyright (C) 2003, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2003, 2006-2012 Free Software Foundation, Inc.
 
    Contributed by QNX Software Systems Ltd.
 
@@ -64,17 +63,17 @@ static int procfs_xfer_memory (CORE_ADDR, gdb_byte *, int, int,
 			       struct mem_attrib *attrib,
 			       struct target_ops *);
 
-static void notice_signals (void);
-
 static void init_procfs_ops (void);
 
 static ptid_t do_attach (ptid_t ptid);
 
 static int procfs_can_use_hw_breakpoint (int, int, int);
 
-static int procfs_insert_hw_watchpoint (CORE_ADDR addr, int len, int type);
+static int procfs_insert_hw_watchpoint (CORE_ADDR addr, int len, int type,
+					struct expression *cond);
 
-static int procfs_remove_hw_watchpoint (CORE_ADDR addr, int len, int type);
+static int procfs_remove_hw_watchpoint (CORE_ADDR addr, int len, int type,
+					struct expression *cond);
 
 static int procfs_stopped_by_watchpoint (void);
 
@@ -402,7 +401,7 @@ procfs_pidlist (char *args, int from_tty)
 	}
       while (pid == 0);
 
-      /* Open the procfs path. */
+      /* Open the procfs path.  */
       fd = open (buf, O_RDONLY);
       if (fd == -1)
 	{
@@ -577,14 +576,14 @@ procfs_meminfo (char *args, int from_tty)
 		       printme.text.addr);
       printf_filtered ("\t\tflags=%08x\n", printme.text.flags);
       printf_filtered ("\t\tdebug=%08x\n", printme.text.debug_vaddr);
-      printf_filtered ("\t\toffset=%016llx\n", printme.text.offset);
+      printf_filtered ("\t\toffset=%s\n", phex (printme.text.offset, 8));
       if (printme.data.size)
 	{
 	  printf_filtered ("\tdata=%08x bytes @ 0x%08x\n", printme.data.size,
 			   printme.data.addr);
 	  printf_filtered ("\t\tflags=%08x\n", printme.data.flags);
 	  printf_filtered ("\t\tdebug=%08x\n", printme.data.debug_vaddr);
-	  printf_filtered ("\t\toffset=%016llx\n", printme.data.offset);
+	  printf_filtered ("\t\toffset=%s\n", phex (printme.data.offset, 8));
 	}
       printf_filtered ("\tdev=0x%x\n", printme.dev);
       printf_filtered ("\tino=0x%x\n", (unsigned int) printme.ino);
@@ -604,7 +603,8 @@ procfs_files_info (struct target_ops *ignore)
 		     target_pid_to_str (inferior_ptid), nto_procfs_path);
 }
 
-/* Mark our target-struct as eligible for stray "run" and "attach" commands.  */
+/* Mark our target-struct as eligible for stray "run" and "attach"
+   commands.  */
 static int
 procfs_can_run (void)
 {
@@ -619,10 +619,7 @@ procfs_attach (struct target_ops *ops, char *args, int from_tty)
   int pid;
   struct inferior *inf;
 
-  if (!args)
-    error_no_arg (_("process-id to attach"));
-
-  pid = atoi (args);
+  pid = parse_pid_to_attach (args);
 
   if (pid == getpid ())
     error (_("Attaching GDB to itself is not a good idea..."));
@@ -985,8 +982,6 @@ procfs_resume (struct target_ops *ops,
 
   run.flags |= _DEBUG_RUN_ARM;
 
-  sigemptyset (&run.trace);
-  notice_signals ();
   signal_to_pass = target_signal_to_host (signo);
 
   if (signal_to_pass)
@@ -1001,7 +996,7 @@ procfs_resume (struct target_ops *ops,
 			  signal_to_pass, 0, 0);
 	      run.flags |= _DEBUG_RUN_CLRFLT | _DEBUG_RUN_CLRSIG;
 	    }
-	  else			/* Let it kill the program without telling us.  */
+	  else		/* Let it kill the program without telling us.  */
 	    sigdelset (&run.trace, signal_to_pass);
 	}
     }
@@ -1011,7 +1006,7 @@ procfs_resume (struct target_ops *ops,
   errno = devctl (ctl_fd, DCMD_PROC_RUN, &run, sizeof (run), 0);
   if (errno != EOK)
     {
-      perror ("run error!\n");
+      perror (_("run error!\n"));
       return;
     }
 }
@@ -1334,32 +1329,21 @@ procfs_store_registers (struct target_ops *ops,
     }
 }
 
+/* Set list of signals to be handled in the target.  */
+
 static void
-notice_signals (void)
+procfs_pass_signals (int numsigs, unsigned char *pass_signals)
 {
   int signo;
 
+  sigfillset (&run.trace);
+
   for (signo = 1; signo < NSIG; signo++)
     {
-      if (signal_stop_state (target_signal_from_host (signo)) == 0
-	  && signal_print_state (target_signal_from_host (signo)) == 0
-	  && signal_pass_state (target_signal_from_host (signo)) == 1)
-	sigdelset (&run.trace, signo);
-      else
-	sigaddset (&run.trace, signo);
+      int target_signo = target_signal_from_host (signo);
+      if (target_signo < numsigs && pass_signals[target_signo])
+        sigdelset (&run.trace, signo);
     }
-}
-
-/* When the user changes the state of gdb's signal handling via the
-   "handle" command, this function gets called to see if any change
-   in the /proc interface is required.  It is also called internally
-   by other /proc interface functions to initialize the state of
-   the traced signal set.  */
-static void
-procfs_notice_signals (ptid_t ptid)
-{
-  sigemptyset (&run.trace);
-  notice_signals ();
 }
 
 static struct tidinfo *
@@ -1426,7 +1410,7 @@ init_procfs_ops (void)
   procfs_ops.to_create_inferior = procfs_create_inferior;
   procfs_ops.to_mourn_inferior = procfs_mourn_inferior;
   procfs_ops.to_can_run = procfs_can_run;
-  procfs_ops.to_notice_signals = procfs_notice_signals;
+  procfs_ops.to_pass_signals = procfs_pass_signals;
   procfs_ops.to_thread_alive = procfs_thread_alive;
   procfs_ops.to_find_new_threads = procfs_find_new_threads;
   procfs_ops.to_pid_to_str = procfs_pid_to_str;
@@ -1458,8 +1442,8 @@ _initialize_procfs (void)
   sigaddset (&set, SIGUSR1);
   sigprocmask (SIG_BLOCK, &set, NULL);
 
-  /* Set up trace and fault sets, as gdb expects them.  */
-  sigemptyset (&run.trace);
+  /* Initially, make sure all signals are reported.  */
+  sigfillset (&run.trace);
 
   /* Stuff some information.  */
   nto_cpuinfo_flags = SYSPAGE_ENTRY (cpuinfo)->flags;
@@ -1496,7 +1480,7 @@ procfs_hw_watchpoint (int addr, int len, int type)
   errno = devctl (ctl_fd, DCMD_PROC_BREAK, &brk, sizeof (brk), 0);
   if (errno != EOK)
     {
-      perror ("Failed to set hardware watchpoint");
+      perror (_("Failed to set hardware watchpoint"));
       return -1;
     }
   return 0;
@@ -1509,13 +1493,15 @@ procfs_can_use_hw_breakpoint (int type, int cnt, int othertype)
 }
 
 static int
-procfs_remove_hw_watchpoint (CORE_ADDR addr, int len, int type)
+procfs_remove_hw_watchpoint (CORE_ADDR addr, int len, int type,
+			     struct expression *cond)
 {
   return procfs_hw_watchpoint (addr, -1, type);
 }
 
 static int
-procfs_insert_hw_watchpoint (CORE_ADDR addr, int len, int type)
+procfs_insert_hw_watchpoint (CORE_ADDR addr, int len, int type,
+			     struct expression *cond)
 {
   return procfs_hw_watchpoint (addr, len, type);
 }

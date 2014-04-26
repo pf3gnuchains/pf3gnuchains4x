@@ -90,6 +90,7 @@
                         on a line.  */
 
 #include "as.h"
+#include "filenames.h"
 #include "obstack.h"
 #include "safe-ctype.h"
 #include "input-file.h"
@@ -257,7 +258,7 @@ file_info (const char *file_name)
 
   while (p != (file_info_type *) NULL)
     {
-      if (strcmp (p->filename, file_name) == 0)
+      if (filename_cmp (p->filename, file_name) == 0)
 	return p;
       p = p->next;
     }
@@ -318,7 +319,7 @@ listing_newline (char *ps)
   if (ps == NULL)
     {
       if (line == last_line
-	  && !(last_file && file && strcmp (file, last_file)))
+	  && !(last_file && file && filename_cmp (file, last_file)))
 	return;
 
       new_i = (list_info_type *) xmalloc (sizeof (list_info_type));
@@ -347,10 +348,12 @@ listing_newline (char *ps)
 			 || is_end_of_line [(unsigned char) *copy] != 1);
 	       copy++)
 	    {
-	      if (*copy == '\\')
-		seen_slash = ! seen_slash;
-	      else if (*copy == '"' && seen_slash)
-		seen_quote = ! seen_quote;
+	      if (seen_slash)
+		seen_slash = 0;
+	      else if (*copy == '\\')
+		seen_slash = 1;
+	      else if (*copy == '"')
+		seen_quote = !seen_quote;
 	    }
 
 	  len = copy - input_line_pointer + 1;
@@ -1073,17 +1076,22 @@ print_source (file_info_type *  current_file,
 static int
 debugging_pseudo (list_info_type *list, const char *line)
 {
+#ifdef OBJ_ELF
   static int in_debug;
   int was_debug;
+#endif
 
   if (list->debugging)
     {
+#ifdef OBJ_ELF
       in_debug = 1;
+#endif
       return 1;
     }
-
+#ifdef OBJ_ELF
   was_debug = in_debug;
   in_debug = 0;
+#endif
 
   while (ISSPACE (*line))
     line++;
@@ -1144,7 +1152,6 @@ listing_listing (char *name ATTRIBUTE_UNUSED)
 {
   list_info_type *list = head;
   file_info_type *current_hll_file = (file_info_type *) NULL;
-  char *message;
   char *buffer;
   char *p;
   int show_listing = 1;
@@ -1209,8 +1216,6 @@ listing_listing (char *name ATTRIBUTE_UNUSED)
 	{
 	  /* Scan down the list and print all the stuff which can be done
 	     with this line (or lines).  */
-	  message = 0;
-
 	  if (list->hll_file)
 	    current_hll_file = list->hll_file;
 

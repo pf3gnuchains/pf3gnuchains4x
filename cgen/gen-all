@@ -5,61 +5,126 @@
 #
 # NOTE: This script doesn't rm -rf the previous run since it can run
 # different tests.  If you want to start fresh, rm -rf tmp-all yourself.
+#
+# File ./gen-all.rc must exist and must define several env vars.
+# It saves us from having to always pass the same long path names as
+# parameters.
+# The config file lives in "." instead of say "$HOME" so that multiple
+# different configs are easily supported.
+# Typical contents are:
+#
+## Paths to src,gcc,rel relative to ${build_dir}.
+#SRC_DIR="../../../src"
+#GCC_DIR="../../../gcc"
+#REL_DIR="../../.."
+## Location of mpc (gmp,mpfr taken from /usr/{include,lib}).
+#MPC_DIR="$HOME/gnu/rel32/mpc-0.8.1"
 
 set -e
 trap "echo ERROR: $(date)" 0
 
-MPC_DIR="/path/to/mpc"
+all_args="$@"
+
+if [ ! -f ./gen-all.rc ]
+then
+    echo "Missing gen-all.rc file." >&2
+    exit
+fi
+
+source ./gen-all.rc
+
+usage() {
+    echo "Usage:"
+    echo "  gen-all help"
+    echo "  gen-all [options] [todos] [apps]"
+    echo "  gen-all all"
+    echo ""
+    echo "Options:"
+    echo "cpus=\"space-separated-list-of-cpus\""
+    echo "force    Force cgen files to be regenerated"
+    echo ""
+    echo "Things-to-do:"
+    echo "config   Configure the tree"
+    echo "build    Build the tree"
+    echo "diffs    Generate diffs from what is checked in"
+    echo ""
+    echo "Applications:"
+    echo "binutils, gcc, newlib, sim, sid, intrinsics"
+    echo ""
+    echo "Notes:"
+    echo "\"all\" can be specified which means \"config, build, and diff everything\""
+    echo "Options, todos, and apps may be specified in any order."
+    echo ""
+    echo "Example:"
+    echo "sh gen-all build binutils diffs cpus=m32r"
+}
+
+# Parameters to configure.
 MPC_CONFIG="--with-mpc=${MPC_DIR}"
+
+# Set up any env vars we need, blech.
 export LD_LIBRARY_PATH="${MPC_DIR}/lib"
 
-echo "Starting gen-all: $(date)"
+build_all_target_sys="fr30-elf"
 
 all_cgen_cpus="arm cris fr30 frv ip2k iq2000 lm32 m32c m32r mep mt \
 openrisc sh sh64 xc16x xstormy16"
 
 all_sid_cpus="arm m32r mep mt sh xstormy16"
 
+do_force=no
+
 do_config=no
 do_build=no
+do_diffs=no
+
 do_binutils=no
 do_gcc=no
 do_newlib=no
 do_sim=no
 do_sid=no
 do_intrinsics=no
-do_diffs=no
 
 cgen_cpus="${all_cgen_cpus}"
 sid_cpus="${all_sid_cpus}"
 
+# Parameter processing.
+
 for a in "$@"
 do
     case $a in
+    help) usage ; trap "" 0 ; exit 0 ;;
     cpus=*) cgen_cpus=${a/cpus=} sid_cpus=${cgen_cpus} ;;
+    force) do_force=yes ;;
     config) do_config=yes ;;
     build) do_build=yes ;;
+    diffs) do_diffs=yes ;;
     binutils) do_binutils=yes ;;
     gcc) do_gcc=yes ;;
     newlib) do_newlib=yes ;;
     sim) do_sim=yes ;;
     sid) do_sid=yes ;;
     intrinsics) do_intrinsics=yes ;;
-    diffs) do_diffs=yes ;;
     all)
 	do_config=yes
 	do_build=yes
+	do_diffs=yes
 	do_binutils=yes
 	do_gcc=yes
 	do_newlib=yes
 	do_sim=yes
 	do_sid=yes
 	do_intrinsics=yes
-	do_diffs=yes
 	;;
     *) echo "Invalid option: $a" >&2 ; exit 1 ;;
     esac
 done
+
+if [ "${do_config}" = "no" -a "${do_build}" = "no" -a "${do_diffs}" = "no" ]
+then
+    echo "Nothing to do." >&2
+    exit 1
+fi
 
 for c in ${cgen_cpus}
 do
@@ -85,18 +150,7 @@ then
     done
 fi
 
-mkdir -p tmp-all
-cd tmp-all
-build_dir=$(pwd)
-
-# Paths to src,gcc,rel relative to ${build_dir}.
-src="../../../src"
-gcc="../../../gcc"
-reltop="../../.."
-
-build_all_target_sys="fr30-elf"
-build_sys=$(sh ${src}/config.guess)
-host_sys=${build_sys}
+# Utility functions.
 
 config_src () {
     target_sys=$1
@@ -114,7 +168,7 @@ config_src () {
     elif [ "${do_config}" = "yes" ]
     then
 	echo "Configuring: $(date)"
-	../${src}/configure \
+	../${SRC_DIR}/configure \
 	    --prefix=${prefix} \
 	    --build=${build_sys} \
 	    --host=${host_sys} \
@@ -138,7 +192,7 @@ config_gcc () {
     elif [ "${do_config}" = "yes" ]
     then
 	echo "Configuring: $(date)"
-	../${gcc}/configure \
+	../${GCC_DIR}/configure \
 	    --prefix=${prefix} \
 	    --build=${build_sys} \
 	    --host=${host_sys} \
@@ -153,6 +207,11 @@ build_binutils () {
     target_sys=$1
     prefix=$2
     PATH=${prefix}/bin:$PATH
+
+    if [ "${do_force}" = "yes" ]
+    then
+	touch ${SRC_DIR}/cgen/opcodes.scm
+    fi
 
     echo "Building ${target_sys} binutils, $(date)"
     mkdir -p tmp-src-${target_sys}
@@ -245,6 +304,11 @@ build_sim () {
     prefix=$2
     PATH=${prefix}/bin:$PATH
 
+    if [ "${do_force}" = "yes" ]
+    then
+	touch ${SRC_DIR}/cgen/sim.scm
+    fi
+
     echo "Building ${cpu} sim, $(date)"
     mkdir -p tmp-src-${target_sys}
     (
@@ -273,6 +337,11 @@ build_sid () {
     target_sys=$1
     prefix=$2
     PATH=${prefix}/bin:$PATH
+
+    if [ "${do_force}" = "yes" ]
+    then
+	touch ${SRC_DIR}/cgen/sid.scm
+    fi
 
     echo "Building ${cpu} sid, $(date)"
     mkdir -p tmp-src-${target_sys}
@@ -306,23 +375,55 @@ build_sid () {
 }
 
 build_intrinsics () {
-    (cd .. && sh ./gen-all-intrinsics ${build_dir}/${gcc})
-    if [ $? != 0 ] ; then exit 1 ; fi
+    if [ "${do_build}" = "yes" ]
+    then
+	echo "Building intrinsics: $(date)"
+	(cd ${SRC_DIR}/cgen && sh ./gen-all-intrinsics ${build_dir}/${GCC_DIR})
+	if [ $? != 0 ] ; then exit 1 ; fi
+	echo "Build done: $(date)"
+    fi
 }
 
 build_diffs () {
     # NOTE: cvs will return with a non-zero exit code if there are diffs.
-    (cd ${src}/opcodes && cvs diff -du >${build_dir}/opcodes.diffs)
-    (cd ${src}/sim && cvs diff -du >${build_dir}/sim.diffs)
-    (cd ${src}/sid/component/cgen-cpu && cvs diff -du >${build_dir}/sid.diffs)
-    (cd ${gcc}/gcc/config/mep && svn diff -x -u >${build_dir}/gcc.diffs)
+    if [ "${do_binutils}" = "yes" ]
+    then
+	(cd ${SRC_DIR}/opcodes && cvs diff -du >${build_dir}/opcodes.diffs)
+    fi
+    if [ "${do_sim}" = "yes" ]
+    then
+	(cd ${SRC_DIR}/sim && cvs diff -du >${build_dir}/sim.diffs)
+    fi
+    if [ "${do_sid}" = "yes" ]
+    then
+	(cd ${SRC_DIR}/sid/component/cgen-cpu && cvs diff -du >${build_dir}/sid.diffs)
+    fi
+    if [ "${do_intrinsics}" = "yes" ]
+    then
+	(cd ${GCC_DIR}/gcc/config/mep && svn diff -x -u >${build_dir}/gcc.diffs)
+    fi
 }
+
+# And we're off.
+
+echo "Starting gen-all: $(date)"
+# Print the command line to make it easier to review old builds.
+echo "Options: ${all_args}"
+
+mkdir -p tmp-all
+cd tmp-all
+build_dir=$(pwd)
+
+# We can't call config.guess until we've cd'd into the build_dir because
+# SRC_DIR, if relative, is relative to build_dir.
+build_sys=$(sh ${SRC_DIR}/config.guess)
+host_sys=${build_sys}
 
 for cpu in ${cgen_cpus}
 do
     # FIXME: arm-eabi is preferred over arm-elf
     target_sys=${cpu}-elf
-    prefix=$(cd ${reltop} && pwd -P)/rel-${target_sys}
+    prefix=$(cd ${REL_DIR} && pwd -P)/rel-${target_sys}
     [ $? != 0 ] && { echo "Error setting prefix" >&2 ; exit 1 ; }
     mkdir -p ${prefix}
 
@@ -366,7 +467,7 @@ for cpu in ${sid_cpus}
 do
     # FIXME: arm-eabi is preferred over arm-elf
     target_sys=${cpu}-elf
-    prefix=$(cd ${reltop} && pwd -P)/rel-${target_sys}
+    prefix=$(cd ${REL_DIR} && pwd -P)/rel-${target_sys}
     [ $? != 0 ] && { echo "Error setting prefix" >&2 ; exit 1 ; }
     mkdir -p ${prefix}
 

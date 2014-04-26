@@ -1,7 +1,6 @@
 /* Auxiliary vector support for GDB, the GNU debugger.
 
-   Copyright (C) 2004, 2005, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2004-2012 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -26,6 +25,7 @@
 #include "valprint.h"
 #include "gdb_assert.h"
 #include "gdbcore.h"
+#include "observer.h"
 
 #include "auxv.h"
 #include "elf/common.h"
@@ -34,8 +34,8 @@
 #include <fcntl.h>
 
 
-/* This function handles access via /proc/PID/auxv, which is a common method
-   for native targets.  */
+/* This function handles access via /proc/PID/auxv, which is a common
+   method for native targets.  */
 
 static LONGEST
 procfs_xfer_auxv (gdb_byte *readbuf,
@@ -90,15 +90,39 @@ ld_so_xfer_auxv (gdb_byte *readbuf,
   if (MSYMBOL_SIZE (msym) != ptr_size)
     return -1;
 
-  /* POINTER_ADDRESS is a location where the `_dl_auxv' variable resides.
-     DATA_ADDRESS is the inferior value present in `_dl_auxv', therefore the
-     real inferior AUXV address.  */
+  /* POINTER_ADDRESS is a location where the `_dl_auxv' variable
+     resides.  DATA_ADDRESS is the inferior value present in
+     `_dl_auxv', therefore the real inferior AUXV address.  */
 
   pointer_address = SYMBOL_VALUE_ADDRESS (msym);
 
-  data_address = read_memory_typed_address (pointer_address, ptr_type);
+  /* The location of the _dl_auxv symbol may no longer be correct if
+     ld.so runs at a different address than the one present in the
+     file.  This is very common case - for unprelinked ld.so or with a
+     PIE executable.  PIE executable forces random address even for
+     libraries already being prelinked to some address.  PIE
+     executables themselves are never prelinked even on prelinked
+     systems.  Prelinking of a PIE executable would block their
+     purpose of randomizing load of everything including the
+     executable.
 
-  /* Possibly still not initialized such as during an inferior startup.  */
+     If the memory read fails, return -1 to fallback on another
+     mechanism for retrieving the AUXV.
+
+     In most cases of a PIE running under valgrind there is no way to
+     find out the base addresses of any of ld.so, executable or AUXV
+     as everything is randomized and /proc information is not relevant
+     for the virtual executable running under valgrind.  We think that
+     we might need a valgrind extension to make it work.  This is PR
+     11440.  */
+
+  if (target_read_memory (pointer_address, ptr_buf, ptr_size) != 0)
+    return -1;
+
+  data_address = extract_typed_address (ptr_buf, ptr_type);
+
+  /* Possibly still not initialized such as during an inferior
+     startup.  */
   if (data_address == 0)
     return -1;
 
@@ -112,8 +136,8 @@ ld_so_xfer_auxv (gdb_byte *readbuf,
 	return -1;
     }
 
-  /* Stop if trying to read past the existing AUXV block.  The final AT_NULL
-     was already returned before.  */
+  /* Stop if trying to read past the existing AUXV block.  The final
+     AT_NULL was already returned before.  */
 
   if (offset >= auxv_pair_size)
     {
@@ -134,9 +158,10 @@ ld_so_xfer_auxv (gdb_byte *readbuf,
       if (block > len)
 	block = len;
 
-      /* Reading sizes smaller than AUXV_PAIR_SIZE is not supported.  Tails
-	 unaligned to AUXV_PAIR_SIZE will not be read during a call (they
-	 should be completed during next read with new/extended buffer).  */
+      /* Reading sizes smaller than AUXV_PAIR_SIZE is not supported.
+	 Tails unaligned to AUXV_PAIR_SIZE will not be read during a
+	 call (they should be completed during next read with
+	 new/extended buffer).  */
 
       block &= -auxv_pair_size;
       if (block == 0)
@@ -154,8 +179,9 @@ ld_so_xfer_auxv (gdb_byte *readbuf,
       data_address += block;
       len -= block;
 
-      /* Check terminal AT_NULL.  This function is being called indefinitely
-         being extended its READBUF until it returns EOF (0).  */
+      /* Check terminal AT_NULL.  This function is being called
+         indefinitely being extended its READBUF until it returns EOF
+         (0).  */
 
       while (block >= auxv_pair_size)
 	{
@@ -187,9 +213,12 @@ memory_xfer_auxv (struct target_ops *ops,
   gdb_assert (object == TARGET_OBJECT_AUXV);
   gdb_assert (readbuf || writebuf);
 
-   /* ld_so_xfer_auxv is the only function safe for virtual executables being
-      executed by valgrind's memcheck.  As using ld_so_xfer_auxv is problematic
-      during inferior startup GDB does call it only for attached processes.  */
+   /* ld_so_xfer_auxv is the only function safe for virtual
+      executables being executed by valgrind's memcheck.  Using
+      ld_so_xfer_auxv during inferior startup is problematic, because
+      ld.so symbol tables have not yet been relocated.  So GDB uses
+      this function only when attaching to a process.
+      */
 
   if (current_inferior ()->attach_flag != 0)
     {
@@ -240,11 +269,84 @@ target_auxv_parse (struct target_ops *ops, gdb_byte **readptr,
                   gdb_byte *endptr, CORE_ADDR *typep, CORE_ADDR *valp)
 {
   struct target_ops *t;
+
   for (t = ops; t != NULL; t = t->beneath)
     if (t->to_auxv_parse != NULL)
       return t->to_auxv_parse (t, readptr, endptr, typep, valp);
   
   return default_auxv_parse (ops, readptr, endptr, typep, valp);
+}
+
+
+/* Per-inferior data key for auxv.  */
+static const struct inferior_data *auxv_inferior_data;
+
+/*  Auxiliary Vector information structure.  This is used by GDB
+    for caching purposes for each inferior.  This helps reduce the
+    overhead of transfering data from a remote target to the local host.  */
+struct auxv_info
+{
+  LONGEST length;
+  gdb_byte *data;
+};
+
+/* Handles the cleanup of the auxv cache for inferior INF.  ARG is ignored.
+   Frees whatever allocated space there is to be freed and sets INF's auxv cache
+   data pointer to NULL.
+
+   This function is called when the following events occur: inferior_appeared,
+   inferior_exit and executable_changed.  */
+
+static void
+auxv_inferior_data_cleanup (struct inferior *inf, void *arg)
+{
+  struct auxv_info *info;
+
+  info = inferior_data (inf, auxv_inferior_data);
+  if (info != NULL)
+    {
+      xfree (info->data);
+      xfree (info);
+      set_inferior_data (inf, auxv_inferior_data, NULL);
+    }
+}
+
+/* Invalidate INF's auxv cache.  */
+
+static void
+invalidate_auxv_cache_inf (struct inferior *inf)
+{
+  auxv_inferior_data_cleanup (inf, NULL);
+}
+
+/* Invalidate current inferior's auxv cache.  */
+
+static void
+invalidate_auxv_cache (void)
+{
+  invalidate_auxv_cache_inf (current_inferior ());
+}
+
+/* Fetch the auxv object from inferior INF.  If auxv is cached already,
+   return a pointer to the cache.  If not, fetch the auxv object from the
+   target and cache it.  This function always returns a valid INFO pointer.  */
+
+static struct auxv_info *
+get_auxv_inferior_data (struct target_ops *ops)
+{
+  struct auxv_info *info;
+  struct inferior *inf = current_inferior ();
+
+  info = inferior_data (inf, auxv_inferior_data);
+  if (info == NULL)
+    {
+      info = XZALLOC (struct auxv_info);
+      info->length = target_read_alloc (ops, TARGET_OBJECT_AUXV,
+					NULL, &info->data);
+      set_inferior_data (inf, auxv_inferior_data, info);
+    }
+
+  return info;
 }
 
 /* Extract the auxiliary vector entry with a_type matching MATCH.
@@ -256,29 +358,30 @@ target_auxv_search (struct target_ops *ops, CORE_ADDR match, CORE_ADDR *valp)
 {
   CORE_ADDR type, val;
   gdb_byte *data;
-  LONGEST n = target_read_alloc (ops, TARGET_OBJECT_AUXV, NULL, &data);
-  gdb_byte *ptr = data;
-  int ents = 0;
+  gdb_byte *ptr;
+  struct auxv_info *info;
 
-  if (n <= 0)
-    return n;
+  info = get_auxv_inferior_data (ops);
+
+  data = info->data;
+  ptr = data;
+
+  if (info->length <= 0)
+    return info->length;
 
   while (1)
-    switch (target_auxv_parse (ops, &ptr, data + n, &type, &val))
+    switch (target_auxv_parse (ops, &ptr, data + info->length, &type, &val))
       {
       case 1:			/* Here's an entry, check it.  */
 	if (type == match)
 	  {
-	    xfree (data);
 	    *valp = val;
 	    return 1;
 	  }
 	break;
       case 0:			/* End of the vector.  */
-	xfree (data);
 	return 0;
       default:			/* Bogosity.  */
-	xfree (data);
 	return -1;
       }
 
@@ -286,21 +389,24 @@ target_auxv_search (struct target_ops *ops, CORE_ADDR match, CORE_ADDR *valp)
 }
 
 
-/* Print the contents of the target's AUXV on the specified file. */
+/* Print the contents of the target's AUXV on the specified file.  */
 int
 fprint_target_auxv (struct ui_file *file, struct target_ops *ops)
 {
   CORE_ADDR type, val;
   gdb_byte *data;
-  LONGEST len = target_read_alloc (ops, TARGET_OBJECT_AUXV, NULL,
-				   &data);
-  gdb_byte *ptr = data;
+  gdb_byte *ptr;
+  struct auxv_info *info;
   int ents = 0;
 
-  if (len <= 0)
-    return len;
+  info = get_auxv_inferior_data (ops);
 
-  while (target_auxv_parse (ops, &ptr, data + len, &type, &val) > 0)
+  data = info->data;
+  ptr = data;
+  if (info->length <= 0)
+    return info->length;
+
+  while (target_auxv_parse (ops, &ptr, data + info->length, &type, &val) > 0)
     {
       const char *name = "???";
       const char *description = "";
@@ -374,11 +480,12 @@ fprint_target_auxv (struct ui_file *file, struct target_ops *ops)
 	case str:
 	  {
 	    struct value_print_options opts;
+
 	    get_user_print_options (&opts);
 	    if (opts.addressprint)
 	      fprintf_filtered (file, "%s", paddress (target_gdbarch, val));
 	    val_print_string (builtin_type (target_gdbarch)->builtin_char,
-			      val, -1, file, &opts);
+			      NULL, val, -1, file, &opts);
 	    fprintf_filtered (file, "\n");
 	  }
 	  break;
@@ -387,8 +494,6 @@ fprint_target_auxv (struct ui_file *file, struct target_ops *ops)
       if (type == AT_NULL)
 	break;
     }
-
-  xfree (data);
 
   return ents;
 }
@@ -401,6 +506,7 @@ info_auxv_command (char *cmd, int from_tty)
   else
     {
       int ents = fprint_target_auxv (gdb_stdout, &current_target);
+
       if (ents < 0)
 	error (_("No auxiliary vector found, or failed reading it."));
       else if (ents == 0)
@@ -417,4 +523,13 @@ _initialize_auxv (void)
   add_info ("auxv", info_auxv_command,
 	    _("Display the inferior's auxiliary vector.\n\
 This is information provided by the operating system at program startup."));
+
+  /* Set an auxv cache per-inferior.  */
+  auxv_inferior_data
+    = register_inferior_data_with_cleanup (auxv_inferior_data_cleanup);
+
+  /* Observers used to invalidate the auxv cache when needed.  */
+  observer_attach_inferior_exit (invalidate_auxv_cache_inf);
+  observer_attach_inferior_appeared (invalidate_auxv_cache_inf);
+  observer_attach_executable_changed (invalidate_auxv_cache);
 }

@@ -24,6 +24,9 @@ int overload1arg (unsigned long);
 int overload1arg (float);
 int overload1arg (double);
 
+int overload1arg (int*);
+int overload1arg (void*);
+
 int overloadfnarg (void);
 int overloadfnarg (int);
 int overloadfnarg (int, int (*) (int));
@@ -42,13 +45,21 @@ int overloadargs (int a1, int a2, int a3, int a4, int a5, int a6, int a7,
 int overloadargs (int a1, int a2, int a3, int a4, int a5, int a6, int a7,
                    int a8, int a9, int a10, int a11);
 
-
 };
 
-int intToChar (char c)
-{
-  return 297;
-}
+struct K {
+  static int staticoverload ();
+  static int staticoverload (int);
+  static int staticoverload (int, int);
+};
+
+namespace N {
+  int nsoverload () { return 1; }
+  int nsoverload (int x) { return x; }
+  int nsoverload (int x, int y) { return x + y; }
+};
+
+int intToChar (char c) { return 297; }
 
 void marker1()
 {}
@@ -78,6 +89,14 @@ namespace XXX {
   void marker2() {}
 }
 
+class A {};
+class B: public A {};
+class C: public B {};
+class D: C {};
+
+int bar (A) { return 11; }
+int bar (B) { return 22; }
+
 int main () 
 {
     char arg2 = 2;
@@ -91,16 +110,30 @@ int main ()
     unsigned long arg10 =10;
     float arg11 =100.0;
     double arg12 = 200.0;
+    int arg13 = 200;
+    char arg14 = 'a';
+
+    A a;
+    B b;
+    C c;
+    D d;
+
+    bar (a);
+    bar (b);
+    bar (c);
 
     char *str = (char *) "A";
     foo foo_instance1(111);
     foo foo_instance2(222, str);
     foo foo_instance3(foo_instance2);
 
-    #ifdef usestubs
-       set_debug_traps();
-       breakpoint();
-    #endif
+    // Some calls to ensure all the functions are emitted.
+    K::staticoverload();
+    K::staticoverload(2);
+    K::staticoverload(2, 3);
+    N::nsoverload();
+    N::nsoverload(2);
+    N::nsoverload(2, 3);
 
     overloadNamespace (1);
     overloadNamespace (dummyInstance);
@@ -111,6 +144,7 @@ int main ()
 
     marker1(); // marker1-returns-here
     XXX::marker2(); // marker1-returns-here
+
     return 0;
 }
 
@@ -134,6 +168,8 @@ int foo::overload1arg (long arg)            { arg = 0; return 9;}
 int foo::overload1arg (unsigned long arg)   { arg = 0; return 10;}
 int foo::overload1arg (float arg)           { arg = 0; return 11;}
 int foo::overload1arg (double arg)          { arg = 0; return 12;}
+int foo::overload1arg (int* arg)            { arg = 0; return 13;}
+int foo::overload1arg (void* arg)           { arg = 0; return 14;}
 
 /* Test to see that we can explicitly request overloaded functions
    with function pointers in the prototype. */
@@ -196,3 +232,6 @@ int foo::overloadargs (int a1, int a2, int a3, int a4, int a5, int a6, int a7,
 
 
 
+int K::staticoverload () { return 1; }
+int K::staticoverload (int x) { return x; }
+int K::staticoverload (int x, int y) { return x + y; }

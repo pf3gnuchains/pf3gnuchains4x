@@ -1,7 +1,7 @@
 /* path.h: path data structures
 
    Copyright 1996, 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
+   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -12,16 +12,11 @@ details. */
 #include "devices.h"
 #include "mount.h"
 #include "cygheap_malloc.h"
+#include "nfs.h"
 
 #include <sys/ioctl.h>
 #include <fcntl.h>
-
-#define isproc_dev(devn) \
-  (devn == FH_PROC || devn == FH_REGISTRY || devn == FH_PROCESS || \
-   devn == FH_PROCNET)
-
-#define isvirtual_dev(devn) \
-  (isproc_dev (devn) || devn == FH_CYGDRIVE || devn == FH_NETDRIVE)
+#include <alloca.h>
 
 inline bool
 has_attribute (DWORD attributes, DWORD attribs_to_test)
@@ -51,12 +46,15 @@ enum pathconv_arg
 {
   PC_SYM_FOLLOW		= 0x0001,
   PC_SYM_NOFOLLOW	= 0x0002,
+  PC_SYM_NOFOLLOW_REP	= 0x0004,
   PC_SYM_CONTENTS	= 0x0008,
   PC_NOFULL		= 0x0010,
   PC_NULLEMPTY		= 0x0020,
-  PC_CHECK_EA		= 0x0040,
   PC_POSIX		= 0x0080,
   PC_NOWARN		= 0x0100,
+  PC_OPEN		= 0x0200,	/* use open semantics */
+  PC_CTTY		= 0x0400,	/* could later be used as ctty */
+  PC_KEEP_HANDLE	= 0x00400000,
   PC_NO_ACCESS_CHECK	= 0x00800000
 };
 
@@ -75,8 +73,12 @@ enum path_types
   PATH_RO		= MOUNT_RO,
   PATH_NOACL		= MOUNT_NOACL,
   PATH_NOPOSIX		= MOUNT_NOPOSIX,
+  PATH_DOS		= MOUNT_DOS,
+  PATH_IHASH		= MOUNT_IHASH,
   PATH_ALL_EXEC		= (PATH_CYGWIN_EXEC | PATH_EXEC),
   PATH_NO_ACCESS_CHECK	= PC_NO_ACCESS_CHECK,
+  PATH_CTTY		= 0x00400000,	/* could later be used as ctty */
+  PATH_OPEN		= 0x00800000,	/* use open semantics */
   PATH_LNK		= 0x01000000,
   PATH_TEXT		= 0x02000000,
   PATH_REP		= 0x04000000,
@@ -85,6 +87,48 @@ enum path_types
 };
 
 class symlink_info;
+struct _FILE_NETWORK_OPEN_INFORMATION;
+
+class path_conv_handle
+{
+  HANDLE      hdl;
+  union {
+    /* Identical to FILE_NETWORK_OPEN_INFORMATION.  We don't want to pull in
+       ntdll.h here, though. */
+    struct {
+      LARGE_INTEGER CreationTime;
+      LARGE_INTEGER LastAccessTime;
+      LARGE_INTEGER LastWriteTime;
+      LARGE_INTEGER ChangeTime;
+      LARGE_INTEGER AllocationSize;
+      LARGE_INTEGER EndOfFile;
+      ULONG FileAttributes;
+    } _fnoi;
+    /* For NFS. */
+    fattr3 _fattr3;
+  } attribs;
+public:
+  path_conv_handle () : hdl (NULL) {}
+  inline void set (HANDLE h) { hdl = h; }
+  inline void close ()
+  {
+    if (hdl)
+      CloseHandle (hdl);
+    set (NULL);
+  }
+  inline void dup (const path_conv_handle &pch)
+  {
+    if (!DuplicateHandle (GetCurrentProcess (), pch.handle (),
+			  GetCurrentProcess (), &hdl,
+			  0, TRUE, DUPLICATE_SAME_ACCESS))
+      hdl = NULL;
+  }
+  inline HANDLE handle () const { return hdl; }
+  inline struct _FILE_NETWORK_OPEN_INFORMATION *fnoi ()
+  { return (struct _FILE_NETWORK_OPEN_INFORMATION *) &attribs._fnoi; }
+  inline struct fattr3 *nfsattr ()
+  { return (struct fattr3 *) &attribs._fattr3; }
+};
 
 class path_conv
 {
@@ -96,6 +140,7 @@ class path_conv
   void add_ext_from_sym (symlink_info&);
   DWORD symlink_length;
   const char *path;
+  path_conv_handle conv_handle;
  public:
   unsigned path_flags;
   const char *known_suffix;
@@ -106,10 +151,12 @@ class path_conv
   bool isremote () const {return fs.is_remote_drive ();}
   ULONG objcaseinsensitive () const {return caseinsensitive;}
   bool has_acls () const {return !(path_flags & PATH_NOACL) && fs.has_acls (); }
-  bool hasgood_inode () const {return fs.hasgood_inode (); }
+  bool hasgood_inode () const {return !(path_flags & PATH_IHASH); }
   bool isgood_inode (__ino64_t ino) const;
   int has_symlinks () const {return path_flags & PATH_HAS_SYMLINKS;}
+  int has_dos_filenames_only () const {return path_flags & PATH_DOS;}
   int has_buggy_open () const {return fs.has_buggy_open ();}
+  int has_buggy_reopen () const {return fs.has_buggy_reopen ();}
   int has_buggy_fileid_dirinfo () const {return fs.has_buggy_fileid_dirinfo ();}
   int has_buggy_basic_info () const {return fs.has_buggy_basic_info ();}
   int binmode () const
@@ -123,16 +170,18 @@ class path_conv
   int issymlink () const {return path_flags & PATH_SYMLINK;}
   int is_lnk_symlink () const {return path_flags & PATH_LNK;}
   int is_rep_symlink () const {return path_flags & PATH_REP;}
-  int isdevice () const {return dev.devn && dev.devn != FH_FS && dev.devn != FH_FIFO;}
-  int isfifo () const {return dev == FH_FIFO;}
-  int isspecial () const {return dev.devn && dev.devn != FH_FS;}
-  int iscygdrive () const {return dev.devn == FH_CYGDRIVE;}
+  int isdevice () const {return dev.not_device (FH_FS) && dev.not_device (FH_FIFO);}
+  int isfifo () const {return dev.is_device (FH_FIFO);}
+  int isspecial () const {return dev.not_device (FH_FS);}
+  int iscygdrive () const {return dev.is_device (FH_CYGDRIVE);}
   int is_auto_device () const {return isdevice () && !is_fs_special ();}
   int is_fs_device () const {return isdevice () && is_fs_special ();}
   int is_fs_special () const {return dev.is_fs_special ();}
   int is_lnk_special () const {return is_fs_device () || isfifo () || is_lnk_symlink ();}
-  int issocket () const {return dev.devn == FH_UNIX;}
+  int issocket () const {return dev.is_device (FH_UNIX);}
   int iscygexec () const {return path_flags & PATH_CYGWIN_EXEC;}
+  int isopen () const {return path_flags & PATH_OPEN;}
+  int isctty_capable () const {return path_flags & PATH_CTTY;}
   void set_cygexec (bool isset)
   {
     if (isset)
@@ -175,21 +224,24 @@ class path_conv
 
   path_conv (int, const char *src, unsigned opt = PC_SYM_FOLLOW,
 	     const suffix_info *suffixes = NULL)
-  : wide_path (NULL), path (NULL), normalized_path (NULL)
+  : fileattr (INVALID_FILE_ATTRIBUTES), wide_path (NULL), path (NULL),
+    path_flags (0), known_suffix (NULL), normalized_path (NULL), error (0)
   {
     check (src, opt, suffixes);
   }
 
   path_conv (const UNICODE_STRING *src, unsigned opt = PC_SYM_FOLLOW,
 	     const suffix_info *suffixes = NULL)
-  : wide_path (NULL), path (NULL), normalized_path (NULL)
+  : fileattr (INVALID_FILE_ATTRIBUTES), wide_path (NULL), path (NULL),
+    path_flags (0), known_suffix (NULL), normalized_path (NULL), error (0)
   {
     check (src, opt | PC_NULLEMPTY, suffixes);
   }
 
   path_conv (const char *src, unsigned opt = PC_SYM_FOLLOW,
 	     const suffix_info *suffixes = NULL)
-  : wide_path (NULL), path (NULL), normalized_path (NULL)
+  : fileattr (INVALID_FILE_ATTRIBUTES), wide_path (NULL), path (NULL),
+    path_flags (0), known_suffix (NULL), normalized_path (NULL), error (0)
   {
     check (src, opt | PC_NULLEMPTY, suffixes);
   }
@@ -202,8 +254,26 @@ class path_conv
   ~path_conv ();
   inline const char *get_win32 () { return path; }
   PUNICODE_STRING get_nt_native_path ();
-  POBJECT_ATTRIBUTES get_object_attr (OBJECT_ATTRIBUTES &attr,
-				      SECURITY_ATTRIBUTES &sa);
+  inline POBJECT_ATTRIBUTES get_object_attr (OBJECT_ATTRIBUTES &attr,
+					     SECURITY_ATTRIBUTES &sa)
+  {
+    if (!get_nt_native_path ())
+      return NULL;
+    InitializeObjectAttributes (&attr, &uni_path,
+				objcaseinsensitive ()
+				| (sa.bInheritHandle ? OBJ_INHERIT : 0),
+				NULL, sa.lpSecurityDescriptor);
+    return &attr;
+  }
+  inline void init_reopen_attr (POBJECT_ATTRIBUTES attr, HANDLE h)
+  {
+    if (has_buggy_reopen ())
+      InitializeObjectAttributes (attr, get_nt_native_path (),
+				  objcaseinsensitive (), NULL, NULL)
+    else
+      InitializeObjectAttributes (attr, &ro_u_empty, objcaseinsensitive (),
+				  h, NULL);
+  }
   inline size_t get_wide_win32_path_len ()
   {
     get_nt_native_path ();
@@ -213,16 +283,63 @@ class path_conv
   PWCHAR get_wide_win32_path (PWCHAR wc);
   operator DWORD &() {return fileattr;}
   operator int () {return fileattr; }
-  path_conv &operator =(path_conv& pc)
+# define cfree_and_null(x) \
+  if (x) \
+    { \
+      cfree ((void *) (x)); \
+      (x) = NULL; \
+    }
+  void free_strings ()
   {
+    cfree_and_null (path);
+    cfree_and_null (normalized_path);
+    cfree_and_null (wide_path);
+  }
+  path_conv& eq_worker (const path_conv& pc, const char *in_path,
+			const char *in_normalized_path)
+  {
+    free_strings ();
     memcpy (this, &pc, sizeof pc);
-    path = cstrdup (pc.path);
-    set_normalized_path (pc.normalized_path);
-    wide_path = NULL;
+    path = cstrdup (in_path);
+    conv_handle.dup (pc.conv_handle);
+    normalized_path = cstrdup(pc.normalized_path);
+    if (pc.wide_path)
+      {
+	wide_path = cwcsdup (uni_path.Buffer);
+	if (!wide_path)
+	  api_fatal ("cwcsdup would have returned NULL");
+	uni_path.Buffer = wide_path;
+      }
     return *this;
   }
-  DWORD get_devn () const {return dev.devn;}
-  short get_unitn () const {return dev.minor;}
+
+  path_conv &operator << (const path_conv& pc)
+  {
+    const char *save_path;
+    const char *save_normalized_path;
+    if (!path)
+      save_path = pc.path;
+    else
+      {
+	save_path = (char *) alloca (strlen (path) + 1);
+	strcpy ((char *) save_path, path);
+      }
+    if (!normalized_path)
+      save_normalized_path = pc.normalized_path;
+    else
+      {
+	save_normalized_path = (char *) alloca (strlen (normalized_path) + 1);
+	strcpy ((char *) save_normalized_path, path);
+      }
+    return eq_worker (pc, save_path, save_normalized_path);
+  }
+
+  path_conv &operator =(const path_conv& pc)
+  {
+    return eq_worker (pc, pc.path, pc.normalized_path);
+  }
+  DWORD get_devn () {return (DWORD) dev;}
+  short get_unitn () const {return dev.get_minor ();}
   DWORD file_attributes () const {return fileattr;}
   void file_attributes (DWORD new_attr) {fileattr = new_attr;}
   DWORD fs_flags () {return fs.flags ();}
@@ -234,6 +351,9 @@ class path_conv
   bool fs_is_netapp () const {return fs.is_netapp ();}
   bool fs_is_cdrom () const {return fs.is_cdrom ();}
   bool fs_is_mvfs () const {return fs.is_mvfs ();}
+  bool fs_is_cifs () const {return fs.is_cifs ();}
+  bool fs_is_nwfs () const {return fs.is_nwfs ();}
+  bool fs_is_ncfsd () const {return fs.is_ncfsd ();}
   ULONG fs_serial_number () const {return fs.serial_number ();}
   inline const char *set_path (const char *p)
   {
@@ -245,7 +365,16 @@ class path_conv
   }
   bool is_binary ();
 
+  HANDLE handle () const { return conv_handle.handle (); }
+  struct _FILE_NETWORK_OPEN_INFORMATION *fnoi () { return conv_handle.fnoi (); }
+  struct fattr3 *nfsattr () { return conv_handle.nfsattr (); }
+  void reset_conv_handle () { conv_handle.set (NULL); }
+  void close_conv_handle () { conv_handle.close (); }
+
+  __ino64_t get_ino_by_handle (HANDLE h);
+#if 0 /* obsolete, method still exists in fhandler_disk_file.cc */
   unsigned __stdcall ndisk_links (DWORD);
+#endif
   void set_normalized_path (const char *) __attribute__ ((regparm (2)));
   DWORD get_symlink_length () { return symlink_length; };
  private:
@@ -260,8 +389,6 @@ class path_conv
 
 /* Interix symlink marker */
 #define INTERIX_SYMLINK_COOKIE  "IntxLNK\1"
-
-int __stdcall slash_unc_prefix_p (const char *path) __attribute__ ((regparm(1)));
 
 enum fe_types
 {
@@ -298,9 +425,10 @@ int path_prefix_p (const char *path1, const char *path2, int len1,
 		   bool caseinsensitive) __attribute__ ((regparm (3)));
 
 bool is_floppy (const char *);
+NTSTATUS file_get_fnoi (HANDLE, bool, struct _FILE_NETWORK_OPEN_INFORMATION *);
 int normalize_win32_path (const char *, char *, char *&);
 int normalize_posix_path (const char *, char *, char *&);
-PUNICODE_STRING get_nt_native_path (const char *, UNICODE_STRING&);
+PUNICODE_STRING get_nt_native_path (const char *, UNICODE_STRING&, bool) __attribute__ ((regparm (3)));
 
 /* FIXME: Move to own include file eventually */
 

@@ -1,7 +1,7 @@
 /* fhandler.cc.  See console.cc for fhandler_console functions.
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -28,23 +28,28 @@ details. */
 #include "ntdll.h"
 #include "cygtls.h"
 #include "sigproc.h"
-#include "nfs.h"
+#include "shared_info.h"
+#include <asm/socket.h>
 
-static NO_COPY const int CHUNK_SIZE = 1024; /* Used for crlf conversions */
+#define MAX_OVERLAPPED_WRITE_LEN (64 * 1024 * 1024)
+#define MIN_OVERLAPPED_WRITE_LEN (1 * 1024 * 1024)
+
+static const int CHUNK_SIZE = 1024; /* Used for crlf conversions */
 
 struct __cygwin_perfile *perfile_table;
 
-inline fhandler_base&
-fhandler_base::operator =(fhandler_base& x)
+HANDLE NO_COPY fhandler_base_overlapped::asio_done;
+LONG NO_COPY fhandler_base_overlapped::asio_close_counter;
+
+void
+fhandler_base::reset (const fhandler_base *from)
 {
-  memcpy (this, &x, sizeof *this);
-  pc = x.pc;
+  pc << from->pc;
   rabuf = NULL;
   ralen = 0;
   raixget = 0;
   raixput = 0;
   rabuflen = 0;
-  return *this;
 }
 
 int
@@ -147,7 +152,7 @@ fhandler_base::get_readahead_into_buffer (char *buf, size_t buflen)
 void
 fhandler_base::set_name (path_conv &in_pc)
 {
-  pc = in_pc;
+  pc << in_pc;
 }
 
 char *fhandler_base::get_proc_fd_name (char *buf)
@@ -161,8 +166,8 @@ char *fhandler_base::get_proc_fd_name (char *buf)
 
 /* Detect if we are sitting at EOF for conditions where Windows
    returns an error but UNIX doesn't.  */
-static int __stdcall
-is_at_eof (HANDLE h, DWORD err)
+int __stdcall
+is_at_eof (HANDLE h)
 {
   IO_STATUS_BLOCK io;
   FILE_POSITION_INFORMATION fpi;
@@ -174,7 +179,6 @@ is_at_eof (HANDLE h, DWORD err)
 					     FilePositionInformation))
       && fsi.EndOfFile.QuadPart == fpi.CurrentByteOffset.QuadPart)
     return 1;
-  SetLastError (err);
   return 0;
 }
 
@@ -235,7 +239,7 @@ retry:
 	  /* `bytes_read' is supposedly valid.  */
 	  break;
 	case ERROR_NOACCESS:
-	  if (is_at_eof (get_handle (), errcode))
+	  if (is_at_eof (get_handle ()))
 	    {
 	      bytes_read = 0;
 	      break;
@@ -275,14 +279,15 @@ retry:
 
 /* Cover function to WriteFile to provide Posix interface and semantics
    (as much as possible).  */
-static LARGE_INTEGER off_current = { QuadPart:FILE_USE_FILE_POINTER_POSITION };
-static LARGE_INTEGER off_append = { QuadPart:FILE_WRITE_TO_END_OF_FILE };
-
 ssize_t __stdcall
 fhandler_base::raw_write (const void *ptr, size_t len)
 {
   NTSTATUS status;
   IO_STATUS_BLOCK io;
+  static _RDATA LARGE_INTEGER off_current =
+			  { QuadPart:FILE_USE_FILE_POINTER_POSITION };
+  static _RDATA LARGE_INTEGER off_append =
+			  { QuadPart:FILE_WRITE_TO_END_OF_FILE };
 
   status = NtWriteFile (get_output_handle (), NULL, NULL, NULL, &io,
 			(PVOID) ptr, len,
@@ -290,14 +295,11 @@ fhandler_base::raw_write (const void *ptr, size_t len)
 			NULL);
   if (!NT_SUCCESS (status))
     {
-      if (status == STATUS_DISK_FULL && io.Information > 0)
-	goto written;
       __seterrno_from_nt_status (status);
       if (get_errno () == EPIPE)
 	raise (SIGPIPE);
       return -1;
     }
-written:
   return io.Information;
 }
 
@@ -451,6 +453,51 @@ done:
   return res;
 }
 
+int
+fhandler_base::open_with_arch (int flags, mode_t mode)
+{
+  int res;
+  if (!(res = (archetype && archetype->io_handle)
+	|| open (flags, (mode & 07777) & ~cygheap->umask)))
+    {
+      if (archetype)
+	delete archetype;
+    }
+  else if (archetype)
+    {
+      if (!archetype->get_io_handle ())
+	{
+	  copyto (archetype);
+	  archetype_usecount (1);
+	  archetype->archetype = NULL;
+	  usecount = 0;
+	}
+      else
+	{
+	  char *name;
+	  /* Preserve any name (like /dev/tty) derived from build_fh_pc. */
+	  if (!get_name ())
+	    name = NULL;
+	  else
+	    {
+	      name = (char *) alloca (strlen (get_name ()) + 1);
+	      strcpy (name, get_name ());
+	    }
+	  fhandler_base *arch = archetype;
+	  archetype->copyto (this);
+	  if (name)
+	    set_name (name);
+	  archetype = arch;
+	  archetype_usecount (1);
+	  usecount = 0;
+	}
+      open_setup (flags);
+    }
+
+  close_on_exec (flags & O_CLOEXEC);
+  return res;
+}
+
 /* Open system call handler function. */
 int
 fhandler_base::open (int flags, mode_t mode)
@@ -460,7 +507,6 @@ fhandler_base::open (int flags, mode_t mode)
   ULONG file_attributes = 0;
   ULONG shared = (get_major () == DEV_TAPE_MAJOR ? 0 : FILE_SHARE_VALID_FLAGS);
   ULONG create_disposition;
-  ULONG create_options = FILE_OPEN_FOR_BACKUP_INTENT;
   OBJECT_ATTRIBUTES attr;
   IO_STATUS_BLOCK io;
   NTSTATUS status;
@@ -471,6 +517,7 @@ fhandler_base::open (int flags, mode_t mode)
 
   pc.get_object_attr (attr, *sec_none_cloexec (flags));
 
+  options = FILE_OPEN_FOR_BACKUP_INTENT;
   switch (query_open ())
     {
       case query_read_control:
@@ -481,6 +528,9 @@ fhandler_base::open (int flags, mode_t mode)
 	break;
       case query_write_control:
 	access = READ_CONTROL | WRITE_OWNER | WRITE_DAC | FILE_WRITE_ATTRIBUTES;
+	break;
+      case query_write_dac:
+	access = READ_CONTROL | WRITE_DAC | FILE_WRITE_ATTRIBUTES;
 	break;
       case query_write_attributes:
 	access = READ_CONTROL | FILE_WRITE_ATTRIBUTES;
@@ -493,50 +543,45 @@ fhandler_base::open (int flags, mode_t mode)
 	else
 	  access = GENERIC_READ | GENERIC_WRITE;
 	if (flags & O_SYNC)
-	  create_options |= FILE_WRITE_THROUGH;
+	  options |= FILE_WRITE_THROUGH;
 	if (flags & O_DIRECT)
-	  create_options |= FILE_NO_INTERMEDIATE_BUFFERING;
+	  options |= FILE_NO_INTERMEDIATE_BUFFERING;
 	if (get_major () != DEV_SERIAL_MAJOR && get_major () != DEV_TAPE_MAJOR)
 	  {
-	    create_options |= FILE_SYNCHRONOUS_IO_NONALERT;
+	    options |= FILE_SYNCHRONOUS_IO_NONALERT;
 	    access |= SYNCHRONIZE;
 	  }
 	break;
     }
 
-  if (query_open () && pc.fs_is_nfs ())
-    {
-      /* Make sure we can read EAs of files on an NFS share.  Also make
-	 sure that we're going to act on the file itself, even if it'a
-	 a symlink. */
-      access |= FILE_READ_EA;
-      if (query_open () >= query_write_control)
-	access |=  FILE_WRITE_EA;
-      plen = sizeof nfs_aol_ffei;
-      p = (PFILE_FULL_EA_INFORMATION) &nfs_aol_ffei;
-    }
-
-  if ((flags & O_TRUNC) && ((flags & O_ACCMODE) != O_RDONLY))
-    {
-      if (flags & O_CREAT)
-	create_disposition = FILE_OVERWRITE_IF;
-      else
-	create_disposition = FILE_OVERWRITE;
-    }
-  else if (flags & O_CREAT)
-    create_disposition = FILE_OPEN_IF;
-  else
-    create_disposition = FILE_OPEN;
-
+  /* Don't use the FILE_OVERWRITE{_IF} flags here.  See below for an
+     explanation, why that's not such a good idea. */
   if ((flags & O_EXCL) && (flags & O_CREAT))
     create_disposition = FILE_CREATE;
+  else
+    create_disposition = (flags & O_CREAT) ? FILE_OPEN_IF : FILE_OPEN;
 
   if (get_device () == FH_FS)
     {
       /* Add the reparse point flag to native symlinks, otherwise we open the
 	 target, not the symlink.  This would break lstat. */
       if (pc.is_rep_symlink ())
-	create_options |= FILE_OPEN_REPARSE_POINT;
+	options |= FILE_OPEN_REPARSE_POINT;
+
+      if (pc.fs_is_nfs ())
+	{
+	  /* Make sure we can read EAs of files on an NFS share.  Also make
+	     sure that we're going to act on the file itself, even if it's a
+	     a symlink. */
+	  access |= FILE_READ_EA;
+	  if (query_open ())
+	    {
+	      if (query_open () >= query_write_control)
+		access |=  FILE_WRITE_EA;
+	      plen = sizeof nfs_aol_ffei;
+	      p = (PFILE_FULL_EA_INFORMATION) &nfs_aol_ffei;
+	    }
+	}
 
       /* Starting with Windows 2000, when trying to overwrite an already
 	 existing file with FILE_ATTRIBUTE_HIDDEN and/or FILE_ATTRIBUTE_SYSTEM
@@ -577,11 +622,18 @@ fhandler_base::open (int flags, mode_t mode)
 	    file_attributes |= FILE_ATTRIBUTE_READONLY;
 	  /* The file attributes are needed for later use in, e.g. fchmod. */
 	  pc.file_attributes (file_attributes);
+	  /* Never set the WRITE_DAC flag here.  Calls to fstat may return
+	     wrong st_ctime information after calls to fchmod, fchown, etc
+	     because Windows only guarantees the update of metadata when
+	     the handle is closed or flushed.  However, flushing the file
+	     on every fstat to enforce POSIXy stat behaviour is excessivly
+	     slow, compared to an extra open/close to change the file's
+	     security descriptor. */
 	}
     }
 
   status = NtCreateFile (&fh, access, &attr, &io, NULL, file_attributes, shared,
-			 create_disposition, create_options, p, plen);
+			 create_disposition, options, p, plen);
   if (!NT_SUCCESS (status))
     {
       /* Trying to create a directory should return EISDIR, not ENOENT. */
@@ -618,6 +670,32 @@ fhandler_base::open (int flags, mode_t mode)
   if (io.Information == FILE_CREATED && has_acls ())
     set_file_attribute (fh, pc, ILLEGAL_UID, ILLEGAL_GID, S_JUSTCREATED | mode);
 
+  /* If you O_TRUNC a file on Linux, the data is truncated, but the EAs are
+     preserved.  If you open a file on Windows with FILE_OVERWRITE{_IF} or
+     FILE_SUPERSEDE, all streams are truncated, including the EAs.  So we don't
+     use the FILE_OVERWRITE{_IF} flags, but instead just open the file and set
+     the size of the data stream explicitely to 0.  Apart from being more Linux
+     compatible, this implementation has the pleasant side-effect to be more
+     than 5% faster than using FILE_OVERWRITE{_IF} (tested on W7 32 bit). */
+  if ((flags & O_TRUNC)
+      && (flags & O_ACCMODE) != O_RDONLY
+      && io.Information != FILE_CREATED
+      && get_device () == FH_FS)
+    {
+      FILE_END_OF_FILE_INFORMATION feofi = { EndOfFile:{ QuadPart:0 } };
+      status = NtSetInformationFile (fh, &io, &feofi, sizeof feofi,
+				     FileEndOfFileInformation);
+      /* In theory, truncating the file should never fail, since the opened
+	 handle has FILE_WRITE_DATA permissions, which is all you need to
+	 be allowed to truncate a file.  Better safe than sorry. */
+      if (!NT_SUCCESS (status))
+	{
+	  __seterrno_from_nt_status (status);
+	  NtClose (fh);
+	  goto done;
+	}
+    }
+
   set_io_handle (fh);
   set_flags (flags, pc.binmode ());
 
@@ -627,9 +705,9 @@ done:
   debug_printf ("%x = NtCreateFile "
 		"(%p, %x, %S, io, NULL, %x, %x, %x, %x, NULL, 0)",
 		status, fh, access, pc.get_nt_native_path (), file_attributes,
-		shared, create_disposition, create_options);
+		shared, create_disposition, options);
 
-  syscall_printf ("%d = fhandler_base::open (%S, %p)",
+  syscall_printf ("%d = fhandler_base::open(%S, %p)",
 		  res, pc.get_nt_native_path (), flags);
   return res;
 }
@@ -648,7 +726,7 @@ fhandler_base::read (void *in_ptr, size_t& len)
   char *ptr = (char *) in_ptr;
   ssize_t copied_chars = get_readahead_into_buffer (ptr, len);
 
-  if (copied_chars && is_slow ())
+  if (copied_chars)
     {
       len = (size_t) copied_chars;
       goto out;
@@ -761,16 +839,13 @@ fhandler_base::write (const void *ptr, size_t len)
 	  NTSTATUS status;
 	  status = NtFsControlFile (get_output_handle (), NULL, NULL, NULL,
 				    &io, FSCTL_SET_SPARSE, NULL, 0, NULL, 0);
-	  syscall_printf ("%p = NtFsControlFile(%S, FSCTL_SET_SPARSE)",
-			  status, pc.get_nt_native_path ());
+	  debug_printf ("%p = NtFsControlFile(%S, FSCTL_SET_SPARSE)",
+			status, pc.get_nt_native_path ());
 	}
     }
 
   if (wbinary ())
-    {
-      debug_printf ("binary write");
-      res = raw_write (ptr, len);
-    }
+    res = raw_write (ptr, len);
   else
     {
       debug_printf ("text write");
@@ -1019,25 +1094,136 @@ fhandler_base::pwrite (void *, size_t, _off64_t)
 }
 
 int
+fhandler_base::close_with_arch ()
+{
+  int res;
+  fhandler_base *fh;
+  if (usecount)
+    {
+      if (!--usecount)
+	debug_printf ("closing passed in archetype, usecount %d", usecount);
+      else
+	{
+	  debug_printf ("not closing passed in archetype, usecount %d", usecount);
+	  return 0;
+	}
+      fh = this;
+    }
+  else if (!archetype)
+    fh = this;
+  else
+    {
+      cleanup ();
+      if (archetype_usecount (-1) == 0)
+	{
+	  debug_printf ("closing archetype");
+	  fh = archetype;
+	}
+      else
+	{
+	  debug_printf ("not closing archetype");
+	  return 0;
+	}
+    }
+
+  res = fh->close ();
+  if (archetype)
+    {
+      cygheap->fdtab.delete_archetype (archetype);
+      archetype = NULL;
+    }
+  return res;
+}
+
+int
 fhandler_base::close ()
 {
   int res = -1;
 
   syscall_printf ("closing '%s' handle %p", get_name (), get_handle ());
-  /* Delete all POSIX locks on the file.  Delete all flock locks on the
-     file if this is the last reference to this file. */
-  if (unique_id)
-    del_my_locks (on_close);
   if (nohandle () || CloseHandle (get_handle ()))
     res = 0;
   else
     {
-      paranoid_printf ("CloseHandle (%d <%s>) failed", get_handle (),
-		       get_name ());
-
+      paranoid_printf ("CloseHandle failed, %E");
       __seterrno ();
     }
-  destroy_overlapped ();
+  return res;
+}
+
+DWORD WINAPI
+flush_async_io (void *arg)
+{
+  fhandler_base_overlapped *fh = (fhandler_base_overlapped *) arg;
+  debug_only_printf ("waiting for %s I/O for %s",
+		     (fh->get_access () & GENERIC_WRITE) ? "write" : "read",
+		     fh->get_name ());
+  SetEvent (fh->get_overlapped ()->hEvent); /* force has_ongoing_io to block */
+  bool res = fh->has_ongoing_io ();
+  debug_printf ("finished waiting for I/O from %s, res %d", fh->get_name (),
+		res);
+  fh->close ();
+  delete fh;
+
+  InterlockedDecrement (&fhandler_base_overlapped::asio_close_counter);
+  SetEvent (fhandler_base_overlapped::asio_done);
+
+  _my_tls._ctinfo->auto_release ();
+  return 0;
+}
+
+void
+fhandler_base_overlapped::flush_all_async_io ()
+{
+  while (asio_close_counter > 0)
+    if (WaitForSingleObject (asio_done, INFINITE) != WAIT_OBJECT_0)
+      {
+	system_printf ("WaitForSingleObject failed, possible data loss in pipe, %E");
+	break;
+      }
+  asio_close_counter = 0;
+  if (asio_done)
+    CloseHandle (asio_done);
+}
+
+/* Start a thread to handle closing of overlapped asynchronous I/O since
+   Windows amazingly does not seem to always flush I/O on close.  */
+void
+fhandler_base_overlapped::check_later ()
+{
+  set_close_on_exec (true);
+  char buf[MAX_PATH];
+  if (!asio_done
+      && !(asio_done = CreateEvent (&sec_none_nih, false, false,
+				    shared_name (buf, "asio",
+						 GetCurrentProcessId ()))))
+    api_fatal ("CreateEvent failed, %E");
+
+  InterlockedIncrement (&asio_close_counter);
+  if (!new cygthread(flush_async_io, this, "flasio"))
+    api_fatal ("couldn't create a thread to track async I/O, %E");
+  debug_printf ("started thread to handle asynchronous closing for %s", get_name ());
+}
+
+int
+fhandler_base_overlapped::close ()
+{
+  int res;
+  /* Need to treat non-blocking I/O specially because Windows appears to
+     be brain-dead  */
+  if (is_nonblocking () && has_ongoing_io ())
+    {
+      clone (HEAP_3_FHANDLER)->check_later ();
+      res = 0;
+    }
+  else
+    {
+     /* Cancelling seems to be necessary for cases where a reader is
+         still executing when a signal handler performs a close.  */
+      CancelIo (get_io_handle ());
+      destroy_overlapped ();
+      res = fhandler_base::close ();
+    }
   return res;
 }
 
@@ -1052,13 +1238,18 @@ fhandler_base::ioctl (unsigned int cmd, void *buf)
       set_nonblocking (*(int *) buf);
       res = 0;
       break;
+    case FIONREAD:
+    case TIOCSCTTY:
+      set_errno (ENOTTY);
+      res = -1;
+      break;
     default:
       set_errno (EINVAL);
       res = -1;
       break;
     }
 
-  syscall_printf ("%d = ioctl (%x, %p)", res, cmd, buf);
+  syscall_printf ("%d = ioctl(%x, %p)", res, cmd, buf);
   return res;
 }
 
@@ -1072,8 +1263,6 @@ fhandler_base::lock (int, struct __flock64 *)
 int __stdcall
 fhandler_base::fstat (struct __stat64 *buf)
 {
-  debug_printf ("here");
-
   if (is_fs_special ())
     return fstat_fs (buf);
 
@@ -1100,9 +1289,15 @@ fhandler_base::fstat (struct __stat64 *buf)
   buf->st_gid = getegid32 ();
   buf->st_nlink = 1;
   buf->st_blksize = PREFERRED_IO_BLKSIZE;
+
   buf->st_ctim.tv_sec = 1164931200L;	/* Arbitrary value: 2006-12-01 */
   buf->st_ctim.tv_nsec = 0L;
-  buf->st_atim = buf->st_mtim = buf->st_birthtim = buf->st_ctim;
+  buf->st_birthtim = buf->st_ctim;
+  buf->st_mtim.tv_sec = time (NULL);	/* Arbitrary value: current time,
+					   like Linux */
+  buf->st_mtim.tv_nsec = 0L;
+  buf->st_atim = buf->st_mtim;
+
   return 0;
 }
 
@@ -1111,7 +1306,7 @@ fhandler_base::fstatvfs (struct statvfs *sfs)
 {
   /* If we hit this base implementation, it's some device in /dev.
      Just call statvfs on /dev for simplicity. */
-  path_conv pc ("/dev");
+  path_conv pc ("/dev", PC_KEEP_HANDLE);
   fhandler_disk_file fh (pc);
   return fh.fstatvfs (sfs);
 }
@@ -1136,12 +1331,12 @@ fhandler_base::init (HANDLE f, DWORD a, mode_t bin)
 }
 
 int
-fhandler_base::dup (fhandler_base *child)
+fhandler_base::dup (fhandler_base *child, int)
 {
   debug_printf ("in fhandler_base dup");
 
   HANDLE nh;
-  if (!nohandle ())
+  if (!nohandle () && !archetype)
     {
       if (!DuplicateHandle (GetCurrentProcess (), get_handle (),
 			    GetCurrentProcess (), &nh,
@@ -1156,9 +1351,15 @@ fhandler_base::dup (fhandler_base *child)
       VerifyHandle (nh);
       child->set_io_handle (nh);
     }
-  if (get_overlapped ())
-    child->setup_overlapped ();
   return 0;
+}
+
+int
+fhandler_base_overlapped::dup (fhandler_base *child, int flags)
+{
+  int res = fhandler_base::dup (child, flags) ||
+	    ((fhandler_base_overlapped *) child)->setup_overlapped ();
+  return res;
 }
 
 int fhandler_base::fcntl (int cmd, void *arg)
@@ -1261,10 +1462,18 @@ fhandler_base::tcgetpgrp ()
   return -1;
 }
 
-void
-fhandler_base::operator delete (void *p)
+int
+fhandler_base::tcgetsid ()
 {
-  cfree (p);
+  set_errno (ENOTTY);
+  return -1;
+}
+
+int
+fhandler_base::ptsname_r (char *, size_t)
+{
+  set_errno (ENOTTY);
+  return ENOTTY;
 }
 
 /* Normal I/O constructor */
@@ -1274,6 +1483,7 @@ fhandler_base::fhandler_base () :
   access (0),
   io_handle (NULL),
   ino (0),
+  _refcnt (0),
   openflags (0),
   rabuf (NULL),
   ralen (0),
@@ -1284,6 +1494,7 @@ fhandler_base::fhandler_base () :
   archetype (NULL),
   usecount (0)
 {
+  isclosed (false);
 }
 
 /* Normal I/O destructor */
@@ -1329,8 +1540,6 @@ fhandler_base::fork_fixup (HANDLE parent, HANDLE &h, const char *name)
 	VerifyHandle (h);
       res = true;
     }
-  if (get_overlapped ())
-    setup_overlapped ();
   return res;
 }
 
@@ -1349,21 +1558,30 @@ fhandler_base::fixup_after_fork (HANDLE parent)
   debug_printf ("inheriting '%s' from parent", get_name ());
   if (!nohandle ())
     fork_fixup (parent, io_handle, "io_handle");
-  if (get_overlapped ())
-    setup_overlapped ();
   /* POSIX locks are not inherited across fork. */
   if (unique_id)
     del_my_locks (after_fork);
 }
 
 void
+fhandler_base_overlapped::fixup_after_fork (HANDLE parent)
+{
+  setup_overlapped ();
+  fhandler_base::fixup_after_fork (parent);
+}
+
+void
 fhandler_base::fixup_after_exec ()
 {
   debug_printf ("here for '%s'", get_name ());
-  if (get_overlapped ())
-    setup_overlapped ();
   if (unique_id && close_on_exec ())
     del_my_locks (after_exec);
+}
+void
+fhandler_base_overlapped::fixup_after_exec ()
+{
+  setup_overlapped ();
+  fhandler_base::fixup_after_exec ();
 }
 
 bool
@@ -1415,7 +1633,7 @@ fhandler_base::readdir (DIR *, dirent *)
   return ENOTDIR;
 }
 
-_off64_t
+long
 fhandler_base::telldir (DIR *)
 {
   set_errno (ENOTDIR);
@@ -1423,7 +1641,7 @@ fhandler_base::telldir (DIR *)
 }
 
 void
-fhandler_base::seekdir (DIR *, _off64_t)
+fhandler_base::seekdir (DIR *, long)
 {
   set_errno (ENOTDIR);
 }
@@ -1560,7 +1778,14 @@ fhandler_base::fsync ()
     return 0;
   if (FlushFileBuffers (get_handle ()))
     return 0;
-  __seterrno ();
+
+  /* Ignore ERROR_INVALID_FUNCTION because FlushFileBuffers() always fails
+     with this code on raw devices which are unbuffered by default.  */
+  DWORD errcode = GetLastError();
+  if (errcode == ERROR_INVALID_FUNCTION)
+    return 0;
+
+  __seterrno_from_win_error (errcode);
   return -1;
 }
 
@@ -1638,168 +1863,222 @@ fhandler_base::fpathconf (int v)
 
 /* Overlapped I/O */
 
-bool
-fhandler_base::setup_overlapped (bool doit)
+int __stdcall __attribute__ ((regparm (1)))
+fhandler_base_overlapped::setup_overlapped ()
 {
   OVERLAPPED *ov = get_overlapped_buffer ();
   memset (ov, 0, sizeof (*ov));
-  bool res;
-  if (doit)
-    {
-      set_overlapped (ov);
-      res = !!(ov->hEvent = CreateEvent (&sec_none_nih, true, true, NULL));
-    }
-  else
-    {
-      set_overlapped (NULL);
-      res = false;
-    }
-  return res;
+  set_overlapped (ov);
+  ov->hEvent = CreateEvent (&sec_none_nih, true, true, NULL);
+  io_pending = false;
+  return ov->hEvent ? 0 : -1;
 }
 
-void
-fhandler_base::destroy_overlapped ()
+void __stdcall __attribute__ ((regparm (1)))
+fhandler_base_overlapped::destroy_overlapped ()
 {
   OVERLAPPED *ov = get_overlapped ();
   if (ov && ov->hEvent)
     {
+      SetEvent (ov->hEvent);
       CloseHandle (ov->hEvent);
       ov->hEvent = NULL;
     }
+  io_pending = false;
+  get_overlapped () = NULL;
 }
 
-int
-fhandler_base::wait_overlapped (bool inres, bool writing, DWORD *bytes, DWORD len)
+bool __stdcall __attribute__ ((regparm (1)))
+fhandler_base_overlapped::has_ongoing_io ()
 {
-  if (!get_overlapped ())
-    return inres;
+  if (!io_pending)
+    return false;
 
-  int res = 0;
-
-  DWORD err = GetLastError ();
-  if (is_nonblocking ())
-    {
-      if (inres || err == ERROR_IO_PENDING)
-	{
-	  if (writing && !inres)
-	    *bytes = len;	/* This really isn't true but it seems like
-				   this is a corner-case for linux's
-				   non-blocking I/O implementation.  How can
-				   you know how many bytes were written until
-				   the I/O operation really completes? */
-	  res = 1;
-	  err = 0;
-	}
-    }
-  else if (inres || err == ERROR_IO_PENDING)
-    {
-#ifdef DEBUGGING
-      if (!get_overlapped ()->hEvent)
-	system_printf ("hEvent is zero?");
-#endif
-      DWORD n = 1;
-      HANDLE w4[2];
-      w4[0] = get_overlapped ()->hEvent;
-      if (&_my_tls == _main_tls)
-	w4[n++] = signal_arrived;
-      HANDLE h = writing ? get_output_handle () : get_handle ();
-      DWORD wfres = WaitForMultipleObjects (n, w4, false, INFINITE);
-      if (wfres != WAIT_OBJECT_0)
-	CancelIo (h);
-      BOOL wores = GetOverlappedResult (h, get_overlapped (), bytes, false);
-      bool signalled = !wores && (wfres == WAIT_OBJECT_0 + 1);
-      if (signalled)
-	{
-	  debug_printf ("got a signal");
-	  set_errno (EINTR);
-	  *bytes = (DWORD) -1;
-	  res = 0;
-	  err = 0;
-	}
-      else if (!wores)
-	{
-	  err = GetLastError ();
-	  debug_printf ("GetOverLappedResult failed");
-	}
-      else
-	{
-	  debug_printf ("normal %s, %u bytes", writing ? "write" : "read", *bytes);
-	  res = 1;
-	  err = 0;
-	}
-    }
-
-  if (!err)
-    /* nothing to do */;
-  else if (err != ERROR_HANDLE_EOF && err != ERROR_BROKEN_PIPE)
-    {
-      debug_printf ("err %u", err);
-      __seterrno_from_win_error (err);
-      *bytes = (DWORD) -1;
-      res = 0;
-    }
-  else
-    {
-      res = 1;
-      *bytes = 0;
-      err = 0;
-      debug_printf ("EOF");
-    }
-
-  if (writing && (err == ERROR_NO_DATA || err == ERROR_BROKEN_PIPE))
-    raise (SIGPIPE);
-  return res;
-}
-
-bool __stdcall
-fhandler_base::has_ongoing_io (bool testit)
-{
-  if (testit && get_overlapped () && get_overlapped ()->hEvent
-      && WaitForSingleObject (get_overlapped ()->hEvent, 0) != WAIT_OBJECT_0)
-    {
-      set_errno (EAGAIN);
-      return true;
-    }
+  if (!IsEventSignalled (get_overlapped ()->hEvent))
+    return true;
+  io_pending = false;
+  DWORD nbytes;
+  GetOverlappedResult (get_output_handle (), get_overlapped (), &nbytes, true);
   return false;
 }
 
-void __stdcall
-fhandler_base::read_overlapped (void *ptr, size_t& len)
+fhandler_base_overlapped::wait_return __stdcall __attribute__ ((regparm (3)))
+fhandler_base_overlapped::wait_overlapped (bool inres, bool writing, DWORD *bytes, bool nonblocking, DWORD len)
+{
+  if (!get_overlapped ())
+    return inres ? overlapped_success : overlapped_error;
+
+  wait_return res = overlapped_unknown;
+  DWORD err;
+  if (inres)
+    /* handle below */;
+  else if ((err = GetLastError ()) != ERROR_IO_PENDING)
+    res = overlapped_error;
+  else if (!nonblocking)
+    /* handle below */;
+  else if (!writing)
+    SetEvent (get_overlapped ()->hEvent);	/* Force immediate WFMO return */
+  else
+    {
+      *bytes = len;				/* Assume that this worked */
+      io_pending = true;			/*  but don't allow subsequent */
+      res = overlapped_success;			/*  writes until completed */
+    }
+  if (res == overlapped_unknown)
+    {
+      DWORD wfres = cygwait (get_overlapped ()->hEvent);
+      HANDLE h = writing ? get_output_handle () : get_handle ();
+      BOOL wores;
+      if (isclosed ())
+	{
+	  switch (wfres)
+	    {
+	    case WAIT_OBJECT_0:
+	      err = ERROR_INVALID_HANDLE;
+	      break;
+	    case WAIT_OBJECT_0 + 1:
+	      err = ERROR_INVALID_AT_INTERRUPT_TIME;
+	      break;
+	    default:
+	      err = GetLastError ();
+	      break;
+	    }
+	  res = overlapped_error;
+	}
+      else
+	{
+	  /* Cancelling here to prevent races.  It's possible that the I/O has
+	     completed already, in which case this is a no-op.  Otherwise,
+	     WFMO returned because 1) This is a non-blocking call, 2) a signal
+	     arrived, or 3) the operation was cancelled.  These cases may be
+	     overridden by the return of GetOverlappedResult which could detect
+	     that I/O completion occurred.  */
+	  CancelIo (h);
+	  wores = GetOverlappedResult (h, get_overlapped (), bytes, false);
+	  err = GetLastError ();
+	  ResetEvent (get_overlapped ()->hEvent);	/* Probably not needed but CYA */
+	  debug_printf ("wfres %d, wores %d, bytes %u", wfres, wores, *bytes);
+	  if (wores)
+	    res = overlapped_success;	/* operation succeeded */
+	  else if (wfres == WAIT_OBJECT_0 + 1)
+	    {
+	      err = ERROR_INVALID_AT_INTERRUPT_TIME; /* forces an EINTR below */
+	      debug_printf ("signal");
+	      res = overlapped_error;
+	    }
+	  else if (wfres == WAIT_OBJECT_0 + 2)
+	    pthread::static_cancel_self ();		/* never returns */
+	  else if (nonblocking)
+	    res = overlapped_nonblocking_no_data;	/* more handling below */
+	  else
+	    {
+	      debug_printf ("GetOverLappedResult failed, h %p, bytes %u, %E", h, *bytes);
+	      res = overlapped_error;
+	    }
+	}
+    }
+
+  if (res == overlapped_success)
+    debug_printf ("normal %s, %u bytes", writing ? "write" : "read", *bytes);
+  else if (res == overlapped_nonblocking_no_data)
+    {
+      *bytes = (DWORD) -1;
+      set_errno (EAGAIN);
+      debug_printf ("no data to read for nonblocking I/O");
+    }
+  else if (err == ERROR_HANDLE_EOF || err == ERROR_BROKEN_PIPE)
+    {
+      debug_printf ("EOF, %E");
+      *bytes = 0;
+      res = overlapped_success;
+      if (writing && err == ERROR_BROKEN_PIPE)
+	raise (SIGPIPE);
+    }
+  else
+    {
+      debug_printf ("res %u, Win32 Error %u", (unsigned) res, err);
+      *bytes = (DWORD) -1;
+      __seterrno_from_win_error (err);
+      if (writing && err == ERROR_NO_DATA)
+	raise (SIGPIPE);
+    }
+
+  return res;
+}
+
+void __stdcall __attribute__ ((regparm (3)))
+fhandler_base_overlapped::raw_read (void *ptr, size_t& len)
 {
   DWORD nbytes;
-  while (1)
+  bool keep_looping;
+  do
     {
-      if (has_ongoing_io (is_nonblocking ()))
-	{
-	  nbytes = (DWORD) -1;
-	  break;
-	}
       bool res = ReadFile (get_handle (), ptr, len, &nbytes,
 			   get_overlapped ());
-      int wres = wait_overlapped (res, false, &nbytes);
-      if (wres || !_my_tls.call_signal_handler ())
-	break;
+      switch (wait_overlapped (res, false, &nbytes, is_nonblocking ()))
+	{
+	default:	/* Added to quiet gcc */
+	case overlapped_success:
+	case overlapped_error:
+	  keep_looping = false;
+	  break;
+	}
     }
+  while (keep_looping);
   len = (size_t) nbytes;
 }
 
-ssize_t __stdcall
-fhandler_base::write_overlapped (const void *ptr, size_t len)
+ssize_t __stdcall __attribute__ ((regparm (3)))
+fhandler_base_overlapped::raw_write (const void *ptr, size_t len)
 {
-  DWORD nbytes;
-  while (1)
+  size_t nbytes;
+  if (has_ongoing_io ())
     {
-      if (has_ongoing_io (is_nonblocking ()))
-	{
-	  nbytes = (DWORD) -1;
-	  break;
-	}
-      bool res = WriteFile (get_output_handle (), ptr, len, &nbytes,
-			    get_overlapped ());
-      int wres = wait_overlapped (res, true, &nbytes, (size_t) len);
-      if (wres || !_my_tls.call_signal_handler ())
-	break;
+      set_errno (EAGAIN);
+      nbytes = (DWORD) -1;
     }
-  debug_printf ("returning %u", nbytes);
+  else
+    {
+      size_t chunk;
+      if (!max_atomic_write || len < max_atomic_write)
+	chunk = len;
+      else if (is_nonblocking ())
+	chunk = len = max_atomic_write;
+      else
+	chunk = max_atomic_write;
+
+      nbytes = 0;
+      DWORD nbytes_now = 0;
+      /* Write to fd in smaller chunks, accumlating a total.
+	 If there's an error, just return the accumulated total
+	 unless the first write fails, in which case return value
+	 from wait_overlapped(). */
+      while (nbytes < len)
+	{
+	  size_t left = len - nbytes;
+	  size_t len1;
+	  if (left > chunk)
+	    len1 = chunk;
+	  else
+	    len1 = left;
+	  bool res = WriteFile (get_output_handle (), ptr, len1, &nbytes_now,
+				get_overlapped ());
+	  switch (wait_overlapped (res, true, &nbytes_now,
+				   is_nonblocking (), len1))
+	    {
+	    case overlapped_success:
+	      ptr = ((char *) ptr) + chunk;
+	      nbytes += nbytes_now;
+	      /* fall through intentionally */
+	    case overlapped_error:
+	      len = 0;		/* terminate loop */
+	    case overlapped_unknown:
+	    case overlapped_nonblocking_no_data:
+	      break;
+	    }
+	}
+      if (!nbytes)
+	nbytes = nbytes_now;
+    }
   return nbytes;
 }

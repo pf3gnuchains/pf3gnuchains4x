@@ -1,6 +1,6 @@
 /* stdlib.h
 
-   Copyright 2005, 2006, 2007, 2008, 2009 Red Hat Inc.
+   Copyright 2005, 2006, 2007, 2008, 2009, 2011 Red Hat Inc.
 
 This file is part of Cygwin.
 
@@ -30,6 +30,8 @@ long random (void);
 char *setstate (const char *state);
 void srandom (unsigned);
 char *ptsname (int);
+int ptsname_r(int, char *, size_t);
+int getpt (void);
 int grantpt (int);
 int unlockpt (int);
 #endif /*__STRICT_ANSI__*/

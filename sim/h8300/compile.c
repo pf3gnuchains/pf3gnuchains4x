@@ -4616,7 +4616,7 @@ sim_trace (SIM_DESC sd)
 }
 
 int
-sim_write (SIM_DESC sd, SIM_ADDR addr, unsigned char *buffer, int size)
+sim_write (SIM_DESC sd, SIM_ADDR addr, const unsigned char *buffer, int size)
 {
   int i;
 
@@ -4715,7 +4715,7 @@ sim_store_register (SIM_DESC sd, int rn, unsigned char *value, int length)
       h8_set_ticks (sd, longval);
       break;
     }
-  return -1;
+  return length;
 }
 
 int
@@ -5105,13 +5105,6 @@ sim_create_inferior (SIM_DESC sd, struct bfd *abfd, char **argv, char **env)
     }
   
   return SIM_RC_OK;
-}
-
-void
-sim_do_command (SIM_DESC sd, char *cmd)
-{
-  (*sim_callback->printf_filtered) (sim_callback,
-				    "This simulator does not accept any commands.\n");
 }
 
 void

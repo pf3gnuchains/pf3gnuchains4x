@@ -15,7 +15,7 @@ AM_CPPFLAGS = \
 	-I$(srcdir) -I$(srcdir)/../include -I$(srcdir)/../elfcpp \
 	-DLOCALEDIR="\"$(datadir)/locale\"" \
 	-DBINDIR="\"$(bindir)\"" -DTOOLBINDIR="\"$(tooldir)/bin\"" \
-	@INCINTL@
+	-DTOOLLIBDIR="\"$(tooldir)/lib\"" @INCINTL@
 
 LIBIBERTY = ../libiberty/libiberty.a
 
@@ -84,6 +84,7 @@ CCFILES = \
 	workqueue-threads.cc
 
 HFILES = \
+	arm-reloc-property.h \
 	archive.h \
 	attributes.h \
 	binary.h \
@@ -134,26 +135,30 @@ HFILES = \
 YFILES = \
 	yyscript.y
 
+DEFFILES = arm-reloc.def
+
 EXTRA_DIST = yyscript.c yyscript.h
 
 TARGETSOURCES = \
-	i386.cc x86_64.cc sparc.cc powerpc.cc arm.cc
+	i386.cc x86_64.cc sparc.cc powerpc.cc arm.cc arm-reloc-property.cc
 
 ALL_TARGETOBJS = \
 	i386.$(OBJEXT) x86_64.$(OBJEXT) sparc.$(OBJEXT) powerpc.$(OBJEXT) \
-	arm.$(OBJEXT)
+	arm.$(OBJEXT) arm-reloc-property.$(OBJEXT)
 
-libgold_a_SOURCES = $(CCFILES) $(HFILES) $(YFILES)
+libgold_a_SOURCES = $(CCFILES) $(HFILES) $(YFILES) $(DEFFILES)
 libgold_a_LIBADD = $(LIBOBJS)
 
 sources_var = main.cc
 deps_var = $(TARGETOBJS) libgold.a $(LIBIBERTY) $(LIBINTL_DEP)
-ldadd_var = $(TARGETOBJS) libgold.a $(LIBIBERTY) $(LIBINTL) \
+ldadd_var = $(TARGETOBJS) libgold.a $(LIBIBERTY) $(GOLD_LDADD) $(LIBINTL) \
 	 $(THREADSLIB) $(LIBDL)
+ldflags_var = $(GOLD_LDFLAGS)
 
 ld_new_SOURCES = $(sources_var)
 ld_new_DEPENDENCIES = $(deps_var)
 ld_new_LDADD = $(ldadd_var)
+ld_new_LDFLAGS = $(ldflags_var)
 
 EXTRA_ld_new_SOURCES = $(TARGETSOURCES)
 
@@ -175,12 +180,23 @@ check: libgold.a
 
 install-exec-local: ld-new$(EXEEXT)
 	$(mkinstalldirs) $(DESTDIR)$(bindir) $(DESTDIR)$(tooldir)/bin
-	n=`echo ld | sed '$(transform)'`; \
+	n=`echo $(installed_linker) | sed '$(transform)'`; \
 	$(INSTALL_PROGRAM) ld-new$(EXEEXT) $(DESTDIR)$(bindir)/$${n}$(EXEEXT); \
 	if test "$(bindir)" != "$(tooldir)/bin"; then \
-	  rm -f $(DESTDIR)$(tooldir)/bin/ld$(EXEEXT); \
-	  ln $(DESTDIR)$(bindir)/$${n}$(EXEEXT) $(DESTDIR)$(tooldir)/bin/ld$(EXEEXT) >/dev/null 2>/dev/null \
+	  rm -f $(DESTDIR)$(tooldir)/bin/$(installed_linker)$(EXEEXT); \
+	  ln $(DESTDIR)$(bindir)/$${n}$(EXEEXT) $(DESTDIR)$(tooldir)/bin/$(installed_linker)$(EXEEXT) >/dev/null 2>/dev/null \
+	  || $(INSTALL_PROGRAM) ld-new$(EXEEXT) $(DESTDIR)$(tooldir)/bin/$(installed_linker)$(EXEEXT); \
+	fi; \
+	if test "x$(install_as_default)" = "xyes"; then \
+	  ld=`echo ld | sed '$(transform)'`; \
+	  rm -f $(DESTDIR)$(bindir)/$${ld}$(EXEEXT); \
+	  ln $(DESTDIR)$(bindir)/$${n}$(EXEEXT) $(DESTDIR)$(bindir)/$${ld}$(EXEEXT) >/dev/null 2>/dev/null \
+	  || $(INSTALL_PROGRAM) ld-new$(EXEEXT) $(DESTDIR)$(bindir)/$${ld}$(EXEEXT); \
+	  if test "$(bindir)" != "$(tooldir)/bin"; then \
+	    rm -f $(DESTDIR)$(tooldir)/bin/ld$(EXEEXT); \
+	    ln $(DESTDIR)$(bindir)/$${n}$(EXEEXT) $(DESTDIR)$(tooldir)/bin/ld$(EXEEXT) >/dev/null 2>/dev/null \
 	    || $(INSTALL_PROGRAM) ld-new$(EXEEXT) $(DESTDIR)$(tooldir)/bin/ld$(EXEEXT); \
+	  fi; \
 	fi
 
 # We want install to imply install-info as per GNU standards, despite

@@ -1,3 +1,603 @@
+2012-01-13  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document support for the %m
+	conversion flag in printf functions.
+
+2012-01-12  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document tgmath.h.
+
+2012-01-06  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document pthread_sigqueue.
+
+2012-01-01  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document get_current_dir_name.
+
+2011-12-30  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document getpt.
+
+2011-12-12  Ken Brown  <kbrown@cornell.edu>
+
+	* faq-using.xml: Remove obsolete entry about the standard console
+	window.
+	* new-features.sgml: Remove obsolete entry which references cygwin.bat.
+	* setup-net.sgml: Clarify new shortcut behavior for the "Cygwin
+	Terminal".
+
+2011-11-21  Andy Koppe  <andy.koppe@gmail.com>
+
+	* faq-using.xml (faq.using.weirdchars): Rewrite.
+
+2011-11-17  Corinna Vinschen  <corinna@vinschen.de>
+
+	* faq-using.xml (faq.using.converting-paths): Remove reference to
+	cygwin.bat.
+	(faq.using.emacs): Drop "CYGWIN=tty" setting.
+	* pathnames.sgml (pathnames-posixdevices): Align list of device names
+	with changes in 1.7.10.
+	* setup2.sgml (setup-env-ov): Drop text which assumes that Cygwin
+	processes are started in console window.  Align wording to lessened
+	relevance of $CYGWIN.  Don't use dropped CYGWIN setting in example.
+	(setup-locale-how): Put using console and Cygwin.bat file into
+	perspective.
+	(setup-locale-problems): Ditto.
+
+2011-11-08  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.10): Document ptsname_r.
+
+2011-11-05  Jon TURNEY  <jon.turney@dronecode.org.uk>
+
+	* faq-using.xml (faq.using.fixing-fork-failures): Add new FAQ.
+	* overview2.sgml (ov-hi-process-problems): Describe some difficulties
+	in implementing fork()
+
+2011-10-28  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.10): Document getgrouplist.
+
+2011-10-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygserver.sgml: Change -v to -V, same as in sources.
+
+2011-08-19  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document /proc/devices
+	and /proc/misc.
+
+2011-08-16  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.10): Document new RTLD flags.
+
+2011-08-12  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.10): Document large address awareness
+	of heap and new way to set the default heap size per executable.
+	* setup2.sgml (setup-maxmem): Revamp to explain new method of
+	allocating more heap on a per-executable basis.  Drop outdated stuff.
+	Keep shortened description of heap_chunk_in_mb as note.
+
+2011-08-04  Corinna Vinschen  <corinna@vinschen.de>
+
+	* faq-using.xml (faq.using.bloda): Add NVIDIA.  Change wording slightly.
+
+2011-08-03  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document new POSIX Clock Selection
+	option APIs.
+
+2011-07-20  Andy Koppe  <andy.koppe@gmail.com>
+
+	* setup-net.sgml (setup-packages): Reflect removal of Prev button.
+	Also document Keep button and improve description of Exp button.
+
+2011-07-19  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document getconf(1).
+
+2011-07-15  Christopher Faylor  <me.cygwin2011@cgf.cx>
+
+	* cygwinenv.sgml (using-cygwinenv): Clarify how "glob" works.
+
+2011-06-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygwinenv.sgml (using-cygwinenv): Move envcache, strip_title, title,
+	tty, and upcaseenv options to list of obsolete options.
+	* effectively.sgml (using-console): Remove section.
+	* new-features.sgml (ov-new1.7.10): Document removed CYGWIN options.
+	Document removed tty mode.
+
+2011-05-25  Eric Blake  <eblake@redhat.com>
+
+	* new-features.sgml (ov-new1.7.10): Document strerror changes.
+
+2011-05-25  Corinna Vinschen  <corinna@vinschen.de>
+
+	* legal.sgml: Drop an old paragraph.  Reactivate copyright note for
+	documentation.
+
+2011-05-19  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document __fpurge.
+
+2011-05-17  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document error.h functions.
+
+2011-05-17  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document CPU-time clock support.
+	Move pthread stack management APIs to separate listitem.
+
+2011-05-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.10): Document pthread_attr_getguardsize,
+	pthread_attr_setstack, pthread_attr_setstackaddr and
+	pthread_attr_setguardsize.
+
+2011-05-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygwinenv.sgml: Move "forkchunk:xxx" to the removed options section.
+	Change text accordingly.
+
+2011-05-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* setup2.sgml (setup-env-ov): Make sure everybody knows that the
+	CYGWIN settings are just an example.
+
+2011-05-08  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document clock_settime.
+
+2011-05-06  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document sysinfo.
+
+2011-05-04  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document psiginfo, psignal,
+	and sys_siglist.
+
+2011-05-02  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document new pthread APIs.
+
+2011-05-02  Corinna Vinschen  <corinna@vinschen.de>
+
+	Throughout remove NT4 from documentation.
+
+	* new-features.sgml (ov-new1.7.10): Document change in passwd command.
+
+2011-04-18  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.10): Document ppoll.
+
+2011-04-10  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document /proc/swaps.
+
+2011-04-04  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.10): Document dropped NT4 support.
+
+2011-04-04  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document additional information
+	in /proc/version.
+
+2011-04-01  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): Document /proc/sysvipc/.
+
+2011-04-01  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.10): /proc/loadavg now shows
+	current running/total processes count.
+
+2011-03-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.10): Document pthread spinlocks.
+
+2011-03-28  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.9): Add "new API" paragraph.
+
+2011-02-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.8): Fix typo.
+
+2011-02-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* legal.sgml: Bump date.
+	* new-features.sgml (ov-new1.7.8): Move dropped NT4 pre-SP4 support
+	up to be the first paragraph.
+
+2011-02-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.8): Document /proc/sys.
+
+2011-02-10  Eric Blake  <eblake@redhat.com>
+
+	* new-features.sgml (ov-new1.7.8): Document strerror_r fixes.
+
+2011-02-10  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.8): Document pthread_yield.
+
+2011-01-12  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.8): Add "new API" paragraph.
+
+2011-01-05  Jon TURNEY  <jon.turney@dronecode.org.uk>
+
+	* faq-setup.xml (faq.setup.cli): Correct description of -pubkey option
+
+2010-10-18  Andy Koppe <andy.koppe@gmail.com>
+
+	* setup2.sgml (setup-locale-ov): Document CJK ambiguous width change
+	for non-Unicode charsets.
+	* new-features.sgml (ov-new1.7.8): Mention CJK ambiguous width change.
+	Drop redundant NT4 pre-SP4 support entry.
+
+2010-10-09  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.8): Document reinstantiation of the
+	original 1.7 CWD handling.
+
+2010-10-08  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.8): Document new C99 complex API.
+
+2010-09-27  Corinna Vinschen  <corinna@vinschen.de>
+
+	* pathnames.sgml (mount-table): Fix pathnames-mount-ex example.  Change
+	an expression.
+
+2010-09-27  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.8): Document dropped NT4 pre-SP4 support.
+	* faq-what.xml (faq.what.supported): Change accordingly.
+	* ntsec.sgml (ntsec-mapping): Add 2008 R2.
+
+2010-09-18  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* overview2.sgml: Remove cheerful paragraph which implied that it was
+	ok to casually mix Windows and POSIX. Add more words about mixing
+	POSIX/Windows.
+
+2010-09-18  Corinna Vinschen  <corinna@vinschen.de>
+
+	* setup2.sgml (setup-locale-how): Fix typo.
+
+2010-09-11  Dave Korn  <dave.korn.cygwin@gmail.com>
+
+	* new-features.sgml: Mention fenv support.
+
+2010-09-06  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.8): Document /proc/sys.
+
+2010-08-30  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.7): Document change to binmode/textmode
+	link libs.
+	* textbinary.sgml (textbin-devel): Ditto.
+
+2010-08-28  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.7): Document change to avoid DLL
+	hijacking.
+
+2010-08-27  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.7): Change to describe partial
+	reversion to pre-1.7.6 behaviour.
+	(ov-new1.7.6): Deprecate description of CWD handling.
+	* pathnames.sgml (pathnames-win32-api): Rewrite to reflect new CWD
+	behaviour.
+
+2010-08-19  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.7): New section.
+	* pathnames.sgml: Throughout, align style of screen elements.
+	Throughout, make all emphasis elements bold.
+	(pathnames-win32-api): Rewrite section.
+
+2010-08-18  Corinna Vinschen  <corinna@vinschen.de>
+
+	* pathnames.sgml (pathnames-win32-api): Try to use a more clear wording.
+
+2010-08-13  Corinna Vinschen  <corinna@vinschen.de>
+
+	* faq-programming.xml (faq.programming.win32-api): Remove simplicity.
+	Add note and xrefs to User's Guide chapters explaining restrictions
+	using the Win32 API.
+	* new-features.sgml (ov-new1.7.6): Add note about Win CWD.
+	* overview2.sgml (ov-hi-intro): Add note and xrefs about Win32 API
+	restrictions.  Tone down flexibility.
+	* pathnames.sgml (pathnames-intro): Add xref to pathnames-win32-api
+	section.
+	(pathnames-win32-api): New section describing Win32 CWD restriction.
+	* setup2.sgml (setup-env-ov): New sub-section.
+	(setup-env-win32): Ditto, describing Win32 environment restriction.
+
+2010-08-11  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.6): Document "bind" option.
+	* pathnames.sgml (mount-table): Add "bind" option with example.
+
+2010-08-09  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.6): Document POSIX monotonic clock.
+
+2010-08-09  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.6): Document /proc/filesystems.
+
+2010-07-26  Andy Koppe  <andy.koppe@gmail.com>
+
+	* setup-net.sgml, faq-setup.xml: Rename setup.exe's "Partial"
+	view to "Pending"	
+
+2010-07-19  Eric Blake  <eblake@redhat.com>
+
+	* textbinary.sgml (textbin-devel): Document temp file behavior.
+	(textbin-issue): Use sed rather than cat as an example of a
+	default-mode application.
+	* new-features.sgml (ov-new1.7.6): Document mkostemp[s].
+
+2010-06-27  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* Makefile.in: Use "xmlto pdf" instead of docbook2pdf.
+	Force the dblatex backend, as the default passivetex does not work.
+	* README: Replace docbook-utils dependency with dblatex.
+	Update required docbook-xml version.
+	* faq-programming.xml (building-cygwin): Ditto.
+
+2010-06-26  Ken Brown  <kbrown@cornell.edu>
+
+	* setup-net.sgml: Add a paragraph describing now to avoid unintentional
+	upgrades.
+
+2010-04-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.6): Add new "dos" and "inode" mount
+	options.
+	* pathnames.sgml (mount-table): Ditto.
+	(pathnames-specialchars): Change description order.  Add paragraph
+	to explain new behaviour in terms of leading spaces and trailing dots
+	and spaces in pathnames.
+
+2010-04-28  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.6): Add locale wide-char changes.
+
+2010-04-22  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cygserver.sgml: Note the fact that slave tty/pty handle dispersal is
+	unsed as of Cygwin 1.7.6.
+	* new-features.sgml (ov-new1.7.6): New section.  Add tty/pty and
+	setrlimit changes.
+
+2010-04-11  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* cygwin.dsl: Remove comments.
+
+2010-04-11  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.5): New section.
+
+2010-04-11  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* cygwin-api.in.sgml: Update to DocBook SGML 4.5 DTD.
+	* cygwin-ug-net.in.sgml: Ditto.
+	* cygwin-ug.in.sgml: Ditto.
+	* faq-sections.xml: Ditto.
+	* faq.xml: Ditto.
+
+2010-04-01  Charles Wilson  <cygwin@cwilson.fastmail.fm>
+
+	* setup-net.sgml: Remove more mentions of rxvt.
+
+2010-03-31  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* cygwinenv.sgml: Remove/deprecate mention of rxvt.
+	* effectively.sgml: Ditto.
+	* faq-using.xml: Ditto.
+	* setup-net.sgml: Ditto.
+
+2010-03-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.3): New section.
+
+2010-03-27  Corinna Vinschen  <corinna@vinschen.de>
+
+	* setup2.sgml (setup-locale-charsetlist): Add EUC-CN and GB2312.
+
+2010-03-27  Corinna Vinschen  <corinna@vinschen.de>
+
+	* textbinary.sgml: Add missing </para>.
+
+2010-03-27  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* textbinary.sgml: Remove tr example and just mention u2d and d2u
+	instead.
+
+2010-03-25  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* pathnames.sgml: Clarify wording of user-specific fstab files.  Fix
+	typo.
+
+2010-03-24  Corinna Vinschen  <corinna@vinschen.de>
+
+	* legal.sgml: Bump copyright date.
+
+2010-03-17  Corinna Vinschen  <corinna@vinschen.de>
+
+	* faq-using.xml (faq.using.unicode): Remove old examples.
+
+2010-03-12  Corinna Vinschen  <corinna@vinschen.de>
+
+	* effectively.sgml (using-shortcuts): Match chapter with reality.
+
+2010-03-11  Corinna Vinschen  <corinna@vinschen.de>
+
+	* faq-using.xml (faq.using.bloda): Add "Credant Guardian Shield".
+
+2010-03-05  Corinna Vinschen  <corinna@vinschen.de>
+
+	* setup2.sgml (setup-env): Add cross reference to using-cygwinenv.
+	Change description for locale environment variables to comply with
+	changes in 1.7.2.
+
+2010-03-02  Charles Wilson  <cygwin@cwilson.fastmail.fm>
+
+	* new-features.sgml (ov-new1.7.2): Describe XDR support.
+
+2010-02-26  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Add strptime changes.
+
+2010-02-26  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Add strftime/wcsftime changes.
+
+2010-02-25  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7.2): Add SIGPWR support.
+
+2010-02-25  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Move stty erase support into
+	correct category.  Change "console window" to "Windows console".
+
+2010-02-17  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Accommodate name change of getlocale
+	to locale.
+	* setup2.sgml (setup-locale-how): Ditto.
+
+2010-02-15  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Add native DOS path and UNC path
+	change.
+	* pathnames.sgml (pathnames-intro): Make the Win32 path text a note
+	and xref to new pathnames-win32 section.
+	(cygdrive): Add description how the cygdrive mount flags apply to
+	UNC paths starting with slashes.
+	(pathnames-win32): New section describing native path handling.
+
+2010-02-11  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Rephrase getlocale entry.
+
+2010-02-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Add LC_MESSAGES support.
+	* setup2.sgml (setup-locale-ov): Change "@euro" modifier description.
+	(setup-locale-missing): Remove.
+
+2010-02-07  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* new-features.sgml (ov-new1.7-misc): Fix typo.
+
+2010-02-07  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Add support for locales from
+	/usr/share/locale/locale.alias.
+	* setup2.sgml (setup-locale-ov): Ditto.
+
+2010-02-06  Corinna Vinschen  <corinna@vinschen.de>
+
+	* setup2.sgml (setup-locale-ov): Align description of working modifiers
+	to latest changes.
+
+2010-02-06  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Add support for new charsets.
+	Change text for modifier support.
+	(setup-locale-charsetlist): Add new GEORGIAN-PS and PT154 charsets
+	to list of supported charsets.  Reorder list for non-ISO, non-CP
+	charsets alphabetically.
+
+2010-02-05  Corinna Vinschen  <corinna@vinschen.de>
+
+	* setup2.sgml (setup-locale-ov): Add description for "uz_UZ@cyrillic"
+	and "tt_RU@iqtelif" modifiers.  Slightly rephrase locale specifier
+	description in terms of the modifier string.
+
+2010-02-05  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Add grouping for printf/wprintf.
+
+2010-02-04  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Add multibyte-awareness of regcomp
+	and regexec.
+
+2010-02-01  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* README: Update for Cygwin docbook-utils package.
+	* faq-programming.xml: Ditto.
+
+2010-01-26  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* faq-api.xml: d2u/u2d are from cygutils, not util-linux.
+
+2010-01-26  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* Makefile.in: Skip validation in xmlto step.
+
+2010-01-26  Christopher Faylor  <me+cygwin@cgf.cx>
+
+	* overview.sgml: Clarify language in "A brief history of Cygwin".
+
+2010-01-26  Thomas Wolff  <towo@towo.net>
+
+	* new-features.sgml (ov-new1.7.2): Add console enhancements.
+
+2010-01-25  Corinna Vinschen  <corinna@vinschen.de>
+
+	* faq-setup.xml: Drop references to non-NT systems.
+	* faq-using.xml: Ditto.
+	(faq.using.sshd-in-domain): New FAQ entry.
+
+2010-01-25  Andy Koppe  <andy.koppe@gmail.com>
+
+	* faq-using.xml: Fix typos and remove incorrect locale-specific
+	documentation.
+	* new-features.sgml: Ditto.
+	* pathnames.sgml: Ditto.
+
+2010-01-24  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml: Rework layout to use itemizedlist.  Fix typo.
+	Add two missing entries.
+
+2010-01-23  Corinna Vinschen  <corinna@vinschen.de>
+
+	* setup2.sgml (setup-locale-charsetlist): Add CP932.  Change description
+	for SJIS.
+
+2010-01-23  Corinna Vinschen  <corinna@vinschen.de>
+
+	* setup2.sgml (setup-locale-charsetlist): Add ASCII and TIS-620.  Add
+	various aliases and case differences.
+
+2010-01-22  Corinna Vinschen  <corinna@vinschen.de>
+
+	* new-features.sgml (ov-new1.7.2): Add chapter for news in 1.7.2.
+	* setup2.sgml (setup-locale-ov): Describe how valid locales are
+	determined by Windows locale support.  Change description for modifiers
+	in locale environment variables.
+	(setup-locale-how): Describe new charset behaviour.  Mention new
+	getlocale tool to fetch valid locale information from Windows.
+	(setup-locale-missing): Drop now implemented LC_foo options.
+	Explain missing LC_MESSAGES in more detail.
+
 2010-01-17  Corinna Vinschen  <corinna@vinschen.de>
 
 	* setup2.sgml (setup-locale): Mention three character codes per

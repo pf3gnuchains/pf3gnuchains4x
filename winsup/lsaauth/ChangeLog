@@ -1,3 +1,41 @@
+2011-05-10  Corinna Vinschen  <corinna@vinschen.de>
+
+	* Makefile.in: Don't override CC.
+	* cyglsa.c: Don't include wchar.h.  Declare wcscpy and wcslen instead.
+	* cyglsa64.dll: Rebuild.
+
+2011-03-31  Corinna Vinschen  <corinna@vinschen.de>
+
+	* Makefile.in (LIBS): Remove advapi32.dll.
+	(clean): Remove cyglsa.def.
+	* cyglsa.c: Drop definitions required for VC++.  Don't include ntddk.h.
+	Declare functions from NTDLL here.  Explain why.  Use NTDLL functions
+	in place of ADVAPI32 functions.
+	* cyglsa64.def: New file.
+	* cyglsa64.dll: Regenerate.
+	* make-64bit-version-with-mingw-w64.sh (LIBS): Remove advapi32.dll.
+	Reference cyglsa64.def instead of mslsa.def.
+	* make-64bit-version-with-visual-c.bat: Remove.
+	* mslsa.def: Remove.
+
+2011-03-31  Yaakov Selkowitz  <yselkowitz@users.sourceforge.net>
+
+	* cyglsa.c: Fix compilation with MinGW-w64 toolchains.
+	* make-64bit-version-with-mingw-w64.sh: New file.
+	* cyglsa64.dll: Regenerate with MinGW-w64-gc.
+
+2010-12-10  Illia Bobyr <Illia.Bobyr@ronin-capital.com>
+
+	* cyglsa-config: Unset GREP_OPTIONS when calling grep.
+
+2010-01-29  Corinna Vinschen  <corinna@vinschen.de>
+
+	* cyglsa.c: Include lmcons.h instead of lm.h to make newer WinDDK happy.
+	(LsaApLogonUserEx): Use CYG_LSA_MAGIC as checksum start value to 
+	decouple from Cygwin release.
+	* make-64bit-version-with-visual-c.bat: Avoid compiler warning.
+	* cyglsa64.dll: New build.
+
 2009-02-23  Sjors Gielen <mailinglist@dazjorz.com>
 
 	* Makefile.in: Add DESTDIR functionality.

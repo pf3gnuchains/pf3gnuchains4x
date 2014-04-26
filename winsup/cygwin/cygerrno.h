@@ -1,6 +1,6 @@
 /* cygerrno.h: main Cygwin header file.
 
-   Copyright 2000, 2001, 2002, 2003, 2004 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -13,22 +13,19 @@ details. */
 #include <errno.h>
 
 void __stdcall seterrno_from_win_error (const char *file, int line, DWORD code) __attribute__ ((regparm(3)));
+void __stdcall seterrno_from_nt_status (const char *file, int line, NTSTATUS status) __attribute__ ((regparm(3)));
 void __stdcall seterrno (const char *, int line) __attribute__ ((regparm(2)));
 int __stdcall geterrno_from_win_error (DWORD code = GetLastError (), int deferrno = 13 /*EACCESS*/) __attribute__ ((regparm(2)));
+int __stdcall geterrno_from_nt_status (NTSTATUS status, int deferrno = 13 /*EACCESS*/) __attribute__ ((regparm(2)));
 
 #define __seterrno() seterrno (__FILE__, __LINE__)
 #define __seterrno_from_win_error(val) seterrno_from_win_error (__FILE__, __LINE__, val)
-#define __seterrno_from_nt_status(status) \
-	({ \
-	  DWORD winerr = RtlNtStatusToDosError (status); \
-	  SetLastError (winerr); \
-	  __seterrno_from_win_error (winerr); \
-	})
+#define __seterrno_from_nt_status(status) seterrno_from_nt_status (__FILE__, __LINE__, status)
 
 inline int
 __set_errno (const char *fn, int ln, int val)
 {
-  debug_printf ("%s:%d val %d", fn, ln, val);
+  debug_printf ("%s:%d setting errno %d", fn, ln, val);
   return errno = _impure_ptr->_errno = val;
 }
 #define set_errno(val) __set_errno (__PRETTY_FUNCTION__, __LINE__, (val))

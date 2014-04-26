@@ -1,6 +1,6 @@
 /* macro.c - macro support for gas
    Copyright 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003,
-   2004, 2005, 2006, 2007, 2008 Free Software Foundation, Inc.
+   2004, 2005, 2006, 2007, 2008, 2011 Free Software Foundation, Inc.
 
    Written by Steve and Judy Chamberlain of Cygnus Support,
       sac@cygnus.com
@@ -119,7 +119,7 @@ buffer_and_nest (const char *from, const char *to, sb *ptr,
 
   int more = get_line (ptr);
 
-  if (to_len == 4 && strcasecmp(to, "ENDR") == 0)
+  if (to_len == 4 && strcasecmp (to, "ENDR") == 0)
     {
       from = NULL;
       from_len = 0;
@@ -384,7 +384,7 @@ get_any_string (int idx, sb *in, sb *out)
 	}
       else
 	{
-	  char *br_buf = (char *) xmalloc(1);
+	  char *br_buf = (char *) xmalloc (1);
 	  char *in_br = br_buf;
 
 	  *in_br = '\0';
@@ -407,7 +407,10 @@ get_any_string (int idx, sb *in, sb *out)
 			 && in->ptr[idx] != tchar)
 		    sb_add_char (out, in->ptr[idx++]);
 		  if (idx == in->len)
-		    return idx;
+		    {
+		      free (br_buf);
+		      return idx;
+		    }
 		  break;
 		case '(':
 		case '[':
@@ -415,9 +418,9 @@ get_any_string (int idx, sb *in, sb *out)
 		    --in_br;
 		  else
 		    {
-		      br_buf = (char *) xmalloc(strlen(in_br) + 2);
-		      strcpy(br_buf + 1, in_br);
-		      free(in_br);
+		      br_buf = (char *) xmalloc (strlen (in_br) + 2);
+		      strcpy (br_buf + 1, in_br);
+		      free (in_br);
 		      in_br = br_buf;
 		    }
 		  *in_br = tchar;
@@ -434,7 +437,7 @@ get_any_string (int idx, sb *in, sb *out)
 	      sb_add_char (out, tchar);
 	      ++idx;
 	    }
-	  free(br_buf);
+	  free (br_buf);
 	}
     }
 
@@ -488,6 +491,7 @@ do_formals (macro_entry *macro, int idx, sb *in)
 	{
 	  if (macro->formal_count)
 	    --idx;
+	  del_formal (formal);	/* 'formal' goes out of scope.  */
 	  break;
 	}
       idx = sb_skip_white (idx, in);
@@ -748,6 +752,8 @@ sub_actual (int start, sb *in, sb *t, struct hash_control *formal_hash,
       /* Doing this permits people to use & in macro bodies.  */
       sb_add_char (out, '&');
       sb_add_sb (out, t);
+      if (src != start && in->ptr[src - 1] == '&')
+	sb_add_char (out, '&');
     }
   else if (copyifnotthere)
     {
@@ -788,9 +794,8 @@ macro_expand_body (sb *in, sb *out, formal_entry *formals,
 	    }
 	  else
 	    {
-	      /* FIXME: Why do we do this?  */
-	      /* At least in alternate mode this seems correct; without this
-	         one can't append a literal to a parameter.  */
+	      /* Permit macro parameter substition delineated with
+		 an '&' prefix and optional '&' suffix.  */
 	      src = sub_actual (src + 1, in, &t, formal_hash, '&', out, 0);
 	    }
 	}
@@ -868,7 +873,9 @@ macro_expand_body (sb *in, sb *out, formal_entry *formals,
 	  if (! macro
 	      || src + 5 >= in->len
 	      || strncasecmp (in->ptr + src, "LOCAL", 5) != 0
-	      || ! ISWHITE (in->ptr[src + 5]))
+	      || ! ISWHITE (in->ptr[src + 5])
+	      /* PR 11507: Skip keyword LOCAL if it is found inside a quoted string.  */
+	      || inquote)
 	    {
 	      sb_reset (&t);
 	      src = sub_actual (src, in, &t, formal_hash,
@@ -1070,9 +1077,13 @@ macro_expand (int idx, sb *in, macro_entry *m, sb *out)
 	  /* Lookup the formal in the macro's list.  */
 	  ptr = (formal_entry *) hash_find (m->formal_hash, sb_terminate (&t));
 	  if (!ptr)
-	    as_bad (_("Parameter named `%s' does not exist for macro `%s'"),
-		    t.ptr,
-		    m->name);
+	    {
+	      as_bad (_("Parameter named `%s' does not exist for macro `%s'"),
+		      t.ptr,
+		      m->name);
+	      sb_reset (&t);
+	      idx = get_any_string (idx + 1, in, &t);
+	    }
 	  else
 	    {
 	      /* Insert this value into the right place.  */

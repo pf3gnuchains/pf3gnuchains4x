@@ -1,118 +1,155 @@
-2010-01-18  Tristan Gingold  <gingold@adacore.com>
+2012-01-20  H.J. Lu  <hongjiu.lu@intel.com>
 
-	* config/tc-ia64.c (ia64_vms_note): Generate 24 bytes note headers.
-	
-2010-01-15  Sebastian Pop  <sebastian.pop@amd.com>
+	* config/tc-i386.c (_i386_insn): Replace disp32_encoding with
+	disp_encoding.
+	(md_assemble): Updated.
+	(output_branch): Likewise.
+	(parse_insn): Support .d8 suffix.
+	(build_modrm_byte): Fake zero displacement for .d8 and .d32
+	suffixes.
 
-	* config/tc-i386.c (md_assemble): Before accessing the IMM field
-	check that it's not an XOP insn.
+	* doc/c-i386.texi: Document .d8 suffix.
 
-2010-01-14  Jie Zhang  <jie.zhang@analog.com>
+2012-01-17  Andrew Burgess  <aburgess@broadcom.com>
 
-	* config/bfin-aux.h: Remove argument names in function
-	declarations.
-	* config/bfin-lex.l (parse_int): Fix shadowed variable name
-	warning.
-	* config/bfin-parse.y (value_match): Remove argument names
-	in declaration.
-	(notethat): Likewise.
-	(yyerror): Likewise.
+	* write.c (fix_new_internal): Don't mark used parameter as unused.
 
-2010-01-13  Daniel Jacobowitz  <dan@codesourcery.com>
+2012-01-17  Alan Modra  <amodra@gmail.com>
 
-	* config/tc-arm.c (do_t_nop): Correct check for Thumb-2 NOP.
+	* as.c (parse_args): Update copyright message year.
 
-2010-01-13  Nick Clifton  <nickc@redhat.com>
+2012-01-13  H.J. Lu  <hongjiu.lu@intel.com>
 
-	* config/tc-h8300.c (h8300_elf_section): New function - issue a
-	warning message if a new section is created without setting any
-	attributes for it.
-	(md_pseudo_table): Intercept section creation pseudos.
-	(md_pcrel_from): Replace abort with an error message.
-	* config/obj-elf.c (obj_elf_section_name): Export this function.
-	* config/obj-elf.h (obj_elf_section_name): Prototype.
+	* config/tc-i386.c (cpu_arch): Add ".vmfunc".
 
-2010-01-12  Alan Modra  <amodra@gmail.com>
+	* doc/c-i386.texi: Document vmfunc.
 
-	PR 11122
-	* listing.c (print_source): Add one to line number.
+2012-01-13  Tristan Gingold  <gingold@adacore.com>
 
-2010-01-09  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
+	* config/obj-macho.c (obj_mach_o_reorder_section_relocs): New.
+	* config/obj-macho.h (SET_SECTION_RELOCS): Define.
+	(obj_mach_o_reorder_section_relocs): Declare.
 
-	* Makefile.in: Regenerate.
-	* configure: Regenerate.
-	* doc/Makefile.in: Regenerate.
+2012-01-13  Iain Sandoe  <idsandoe@googlemail.com>
 
-2010-01-08  H.J. Lu  <hongjiu.lu@intel.com>
+	* config/obj-macho.c (obj_mach_o_set_indirect_symbols): Handle
+	absolute indirect symbols.
 
-	* version.c (parse_args): Change to "Copyright 2010".
+2012-01-13  Iain Sandoe  <idsandoe@googlemail.com>
 
-2010-01-06  Quentin Neill  <quentin.neill@amd.com>
+	* config/obj-macho.c (obj_mach_o_set_vma_data): New type.
+	(obj_mach_o_set_section_vma): New.
+	(obj_mach_o_post_relax_hook): New.
+	* config/obj-macho.h (md_post_relax_hook): Define.
+	(obj_mach_o_post_relax_hook): Declare.
 
-	* config/tc-i386.c (cpu_arch): Add amdfam15.
-	(i386_align_code): Add PROCESSOR_AMDFAM15 cases.
-	* config/tc-i386.h (processor_type): Add PROCESSOR_AMDFAM15.
-	* doc/c-i386.texi: Add amdfam15.
+2012-01-12  Iain Sandoe  <idsandoe@googlemail.com>
 
-2010-01-04  Daniel Gutson  <dgutson@codesourcery.com>
+	* config/obj-macho.c (obj_mach_o_set_symbol_qualifier): Switch off
+	lazy when the symbol is private_extern.
+	(obj_mach_o_indirect_sym): New type.
+	(obj_mach_o_indirect_symbol): New.
+	(mach_o_pseudo_table): Use obj_mach_o_indirect_symbol.
+	(obj_macho_frob_label): Adjust to avoid adding bsyms for locals.
+	(obj_macho_frob_label): Likewise.  Adjust external and comm
+	symbol tests.
+	(obj_mach_o_set_indirect_symbols): New.
+	(obj_mach_o_frob_file_after_relocs): New.
+	*config/obj-macho.h (obj_frob_file_after_relocs): Define.
+	(obj_mach_o_frob_file_after_relocs): Declare.
 
-	* config/tc-arm.c (do_neon_logic): Accept imm value
-	in the third operand too.
-	(operand_parse_code): OP_RNDQ_IMVNb renamed to
-	OP_RNDQ_Ibig.
-	(parse_operands): OP_NILO case removed, applied renaming.
-	(insns): Neon shape changed for some logic instructions.
+2012-01-12  Tristan Gingold  <gingold@adacore.com>
 
-2010-01-04  Daniel Gutson  <dgutson@codesourcery.com>
+	PR gas/13591
+	* config/obj-coff.h (sy_obj): Rename macro to avoid a name conflict.
 
-	* config/tc-arm.c (do_neon_ldx_stx): Added
-	validation for vector load/store insns.
+2012-01-10  Tristan Gingold  <gingold@adacore.com>
 
-2010-01-04  Edmar Wienskoski  <edmar@freescale.com>
+	* struc-symbol.h (struct symbol_flags): New struct, created from...
+	(struct symbol): ... this one.  Add sy_flags field, remove flag fields.
+	(struct local_symbol): Replace lsy_marker field by lsy_flags.
+	Adjust comment.
+	(local_symbol_resolved_p): Adjust.
+	(local_symbol_mark_resolved): Likewise.
+	* symbols.c (LOCAL_SYMBOL_CHECK): Adjust.
+	(local_symbol_make, local_symbol_convert, colon)
+	(symbol_clone_if_forward_ref, verify_symbol_chain)
+	(resolve_symbol_value, snapshot_symbol, S_GET_VALUE)
+	(S_IS_WEAKREFR, S_IS_WEAKREFD, S_IS_VOLATILE, S_IS_FORWARD_REF)
+	(S_SET_WEAKREFR, S_CLEAR_WEAKREFR, S_SET_WEAKREFD)
+	(S_CLEAR_WEAKREFD, S_SET_VOLATILE, S_CLEAR_VOLATILE)
+	(S_SET_FORWARD_REF, symbol_same_p, symbol_mark_used)
+	(symbol_clear_used, symbol_used_p, symbol_mark_used_in_reloc)
+	(symbol_clear_used_in_reloc, symbol_used_in_reloc_p)
+	(symbol_mark_mri_common, symbol_clear_mri_common)
+	(symbol_mri_common_p, symbol_mark_written, symbol_clear_written)
+	(symbol_written_p, symbol_mark_resolved, symbol_resolved_p)
+	(symbol_equated_reloc_p, dot_symbol_init)
+	(print_symbol_value_1): Adjust.
 
-	* config/tc-ppc.c (md_show_usage): Document -me500mc64.
+2012-01-09  Iain Sandoe  <idsandoe@googlemail.com>
 
-2010-01-03  Daniel Gutson  <dgutson@codesourcery.com>
+	* config/obj-macho.c (obj_mach_o_weak): Remove.
+	(obj_mach_o_common_parse): Set symbol qualifiers.
+	(LAZY, REFE): New macros.
+	(obj_mach_o_symbol_type): New enum.
+	(obj_mach_o_set_symbol_qualifier): New.
+	(obj_mach_o_sym_qual): New.
+	(mach_o_pseudo_table): Add symbol qualifiers, set indirect_symbol to
+	a dummy function.
+	(obj_mach_o_type_for_symbol): New.
+	(obj_macho_frob_label): New.
+	(obj_macho_frob_symbol): New.
+	* config/obj-macho.h (S_SET_ALIGN): Amend temorary var name.
+	(obj_frob_label, obj_macho_frob_label): Declare.
+	(obj_frob_symbol, obj_macho_frob_symbol): Declare.
 
-	* config/tc-arm.c (struct arm_it): New flag 'is_neon'.
-	(NEON_ENC_*): Macros renamed to _NEON_ENC_*.
-	(NEON_ENCODE): New macro.
-	(check_neon_suffixes): New macro.
-	(do_vfp_cond_or_thumb): Set the 'is_neon' flag.
-	(do_vfp_nsyn_opcode): Likewise.
-	(do_vfp_nsyn_nmul): Use the new 'NEON_ENCODE' macro.
-	(do_vfp_nsyn_cmp): Likewise.
-	(do_neon_shl_imm): Likewise.
-	(do_neon_qshl_imm): Likewise.
-	(neon_dyadic_misc): Likewise.
-	(do_neon_mac_maybe_scalar): Likewise.
-	(do_neon_qdmulh): Likewise.
-	(do_neon_qmovn): Likewise.
-	(do_neon_qmovun): Likewise.
-	(do_neon_movn): Likewise.
-	(neon_mac_reg_scalar_long): Likewise.
-	(do_neon_vmull): Likewise.
-	(do_neon_trn): Likewise.
-	(do_neon_ldx_stx): Likewise.
-	(neon_dp_fixup): Changed signature and set the flag.
-	(neon_three_same): Call the above with new signature.
-	(neon_two_same): Likewise.
-	(neon_imm_shift): Likewise.
-	(neon_mul_mac): Likewise.
-	(do_neon_abs_neg): Likewise.
-	(neon_mixed_length): Likewise.
-	(do_neon_ext): Likewise.
-	(do_neon_mov): Likewise.
-	(do_neon_tbl_tbx): Likewise.
-	(do_neon_logic): Likewise, and use the new 'NEON_ENCODE' macro.
-	(neon_compare): Likewise.
-	(do_neon_shll): Likewise.
-	(do_neon_cvt): Likewise.
-	(do_neon_mvn): Likewise.
-	(do_neon_dup): Likewise.
-	(md_assemble): Call check_neon_suffixes ().
+2012-01-08  Richard Sandiford  <rdsandiford@googlemail.com>
 
-For older changes see ChangeLog-2009
+	* config/tc-mips.c (s_tls_rel_directive): Call mips_clear_insn_labels.
+
+2012-01-08  Andrew Pinski  <andrew.pinski@caviumnetworks.com>
+	    Richard Sandiford  <rdsandiford@googlemail.com>
+
+	* config/tc-mips.c (mips_move_labels): Take the list of labels and
+	textness as parameters.
+	(mips_move_text_labels): New function.
+	(append_insn): Use it instead of mips_move_labels.
+	(mips_emit_delays, start_noreorder): Likewise.
+	(mips_align): Take the labels rather than just one label.
+	Move all labels to after the .align.
+	(s_align): Change the last argument to mips_align.
+	(s_cons): Likewise.
+	(s_float_cons): Likewise.
+	(s_gpword): Likewise.
+	(s_gpdword): Likewise.
+
+2012-01-06  Tristan Gingold  <gingold@adacore.com>
+
+	* config/tc-i386.c: Update copyright year.
+	(lex_got): Also defined for Mach-O.
+	Add a guard for non-ELF configuration.
+	(md_longopts): Also handle -64 for Mach-O.
+	(md_parse_option): Likewise.
+	(i386_target_format): Adjust for x86_64-darwin.
+
+2012-01-04  Iain Sandoe  <idsandoe@googlemail.com>
+
+	* config/obj-macho.c (obj_mach_o_segT_from_bfd_name): Tidy definition.
+	(obj_mach_o_get_section_names): New (split from obj_mach_o_section).
+	(obj_mach_o_make_or_get_sect): Likewise.
+	(obj_mach_o_section): Split out the functionality shared with zerofill.
+	(obj_mach_o_zerofill): New.
+	(obj_mach_o_common_parse): Ensure whitespace is skipped.
+	(mach_o_pseudo_table): Add .zerofill.
+
+2012-01-03  Iain Sandoe  <idsandoe@googlemail.com>
+
+	* config/obj-macho.c (obj_macho_process_stab): New.
+	* config/obj-macho.h (OBJ_PROCESS_STAB): Define.
+	(obj_macho_process_stab): Declare.
+
+For older changes see ChangeLog-2011
 
 Local Variables:
 mode: change-log

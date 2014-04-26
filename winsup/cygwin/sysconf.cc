@@ -1,7 +1,7 @@
 /* sysconf.cc
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2009 Red Hat, Inc.
+   2006, 2007, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -17,6 +17,7 @@ details. */
 #include "path.h"
 #include "fhandler.h"
 #include "dtable.h"
+#include "pinfo.h"
 #include "ntdll.h"
 
 static long
@@ -31,20 +32,21 @@ get_open_max (int in)
 static long
 get_page_size (int in)
 {
-  return getpagesize ();
+  return wincap.allocation_granularity ();
 }
 
 static long
 get_nproc_values (int in)
 {
-  NTSTATUS ret;
+  NTSTATUS status;
   SYSTEM_BASIC_INFORMATION sbi;
-  if ((ret = NtQuerySystemInformation (SystemBasicInformation, (PVOID) &sbi,
-				       sizeof sbi, NULL)) != STATUS_SUCCESS)
+
+  status = NtQuerySystemInformation (SystemBasicInformation, (PVOID) &sbi,
+				     sizeof sbi, NULL);
+  if (!NT_SUCCESS (status))
     {
-      __seterrno_from_nt_status (ret);
-      debug_printf ("NtQuerySystemInformation: ret %d, Dos(ret) %E",
-		    ret);
+      __seterrno_from_nt_status (status);
+      debug_printf ("NtQuerySystemInformation: status %p, %E", status);
       return -1;
     }
   switch (in)
@@ -62,7 +64,7 @@ get_nproc_values (int in)
       }
     case _SC_PHYS_PAGES:
       return sbi.NumberOfPhysicalPages
-	     / (getpagesize () / getsystempagesize ());
+	     / (wincap.allocation_granularity () / wincap.page_size ());
     }
   return -1;
 }
@@ -70,18 +72,19 @@ get_nproc_values (int in)
 static long
 get_avphys (int in)
 {
-  NTSTATUS ret;
+  NTSTATUS status;
   SYSTEM_PERFORMANCE_INFORMATION spi;
-  if ((ret = NtQuerySystemInformation (SystemPerformanceInformation,
-				       (PVOID) &spi, sizeof spi, NULL))
-      != STATUS_SUCCESS)
+
+  status = NtQuerySystemInformation (SystemPerformanceInformation,
+				     (PVOID) &spi, sizeof spi, NULL);
+  if (!NT_SUCCESS (status))
     {
-      __seterrno_from_nt_status (ret);
-      debug_printf ("NtQuerySystemInformation: ret %d, Dos(ret) %E",
-		    ret);
+      __seterrno_from_nt_status (status);
+      debug_printf ("NtQuerySystemInformation: status %d, %E", status);
       return -1;
     }
-  return spi.AvailablePages / (getpagesize () / getsystempagesize ());
+  return spi.AvailablePages
+	 / (wincap.allocation_granularity () / wincap.page_size ());
 }
 
 enum sc_type { nsup, cons, func };
@@ -139,8 +142,8 @@ static struct
   {cons, {c:-1L}},			/*  40, _SC_THREAD_THREADS_MAX */
   {cons, {c:TTY_NAME_MAX}},		/*  41, _SC_TTY_NAME_MAX */
   {cons, {c:_POSIX_THREADS}},		/*  42, _SC_THREADS */
-  {cons, {c:-1L}},			/*  43, _SC_THREAD_ATTR_STACKADDR */
-  {cons, {c:_POSIX_THREAD_ATTR_STACKSIZE}},	/*  44, _SC_THREAD_ATTR_STACKSIZE */
+  {cons, {c:_POSIX_THREAD_ATTR_STACKADDR}},/*  43, _SC_THREAD_ATTR_STACKADDR */
+  {cons, {c:_POSIX_THREAD_ATTR_STACKSIZE}},/*  44, _SC_THREAD_ATTR_STACKSIZE */
   {cons, {c:_POSIX_THREAD_PRIORITY_SCHEDULING}},	/*  45, _SC_THREAD_PRIORITY_SCHEDULING */
   {cons, {c:-1L}},			/*  46, _SC_THREAD_PRIO_INHERIT */
   {cons, {c:-1L}},			/*  47, _SC_THREAD_PRIO_PROTECT */
@@ -157,26 +160,26 @@ static struct
   {cons, {c:BC_DIM_MAX}},		/*  58, _SC_BC_DIM_MAX */
   {cons, {c:BC_SCALE_MAX}},		/*  59, _SC_BC_SCALE_MAX */
   {cons, {c:BC_STRING_MAX}},		/*  60, _SC_BC_STRING_MAX */
-  {cons, {c:-1L}},			/*  61, _SC_CLOCK_SELECTION */
+  {cons, {c:_POSIX_CLOCK_SELECTION}},	/*  61, _SC_CLOCK_SELECTION */
   {nsup, {c:0}},			/*  62, _SC_COLL_WEIGHTS_MAX */
-  {cons, {c:-1L}},			/*  63, _SC_CPUTIME */
+  {cons, {c:_POSIX_CPUTIME}},		/*  63, _SC_CPUTIME */
   {cons, {c:EXPR_NEST_MAX}},		/*  64, _SC_EXPR_NEST_MAX */
   {cons, {c:HOST_NAME_MAX}},		/*  65, _SC_HOST_NAME_MAX */
   {cons, {c:IOV_MAX}},			/*  66, _SC_IOV_MAX */
   {cons, {c:_POSIX_IPV6}},		/*  67, _SC_IPV6 */
   {cons, {c:LINE_MAX}},			/*  68, _SC_LINE_MAX */
-  {cons, {c:-1L}},			/*  69, _SC_MONOTONIC_CLOCK */
+  {cons, {c:_POSIX_MONOTONIC_CLOCK}},	/*  69, _SC_MONOTONIC_CLOCK */
   {cons, {c:_POSIX_RAW_SOCKETS}},	/*  70, _SC_RAW_SOCKETS */
   {cons, {c:_POSIX_READER_WRITER_LOCKS}},	/*  71, _SC_READER_WRITER_LOCKS */
   {cons, {c:_POSIX_REGEXP}},		/*  72, _SC_REGEXP */
   {cons, {c:RE_DUP_MAX}},		/*  73, _SC_RE_DUP_MAX */
   {cons, {c:_POSIX_SHELL}},		/*  74, _SC_SHELL */
   {cons, {c:-1L}},			/*  75, _SC_SPAWN */
-  {cons, {c:-1L}},			/*  76, _SC_SPIN_LOCKS */
+  {cons, {c:_POSIX_SPIN_LOCKS}},	/*  76, _SC_SPIN_LOCKS */
   {cons, {c:-1L}},			/*  77, _SC_SPORADIC_SERVER */
   {nsup, {c:0}},			/*  78, _SC_SS_REPL_MAX */
   {cons, {c:SYMLOOP_MAX}},		/*  79, _SC_SYMLOOP_MAX */
-  {cons, {c:-1L}},			/*  80, _SC_THREAD_CPUTIME */
+  {cons, {c:_POSIX_THREAD_CPUTIME}},	/*  80, _SC_THREAD_CPUTIME */
   {cons, {c:-1L}},			/*  81, _SC_THREAD_SPORADIC_SERVER */
   {cons, {c:-1L}},			/*  82, _SC_TIMEOUTS */
   {cons, {c:-1L}},			/*  83, _SC_TRACE */
@@ -218,10 +221,13 @@ static struct
   {cons, {c:_POSIX2_SW_DEV}},		/* 119, _SC_2_SW_DEV */
   {cons, {c:_POSIX2_UPE}},		/* 120, _SC_2_UPE */
   {cons, {c:_POSIX2_VERSION}},		/* 121, _SC_2_VERSION */
+  {cons, {c:-1L}},			/* 122, _SC_THREAD_ROBUST_PRIO_INHERIT */
+  {cons, {c:-1L}},			/* 123, _SC_THREAD_ROBUST_PRIO_PROTECT */
+  {cons, {c:-1L}},			/* 124, _SC_XOPEN_UUCP */
 };
 
 #define SC_MIN _SC_ARG_MAX
-#define SC_MAX _SC_2_VERSION
+#define SC_MAX _SC_XOPEN_UUCP
 
 /* sysconf: POSIX 4.8.1.1 */
 /* Allows a portable app to determine quantities of resources or
@@ -258,7 +264,7 @@ static struct
   {0, NULL},				/* _CS_POSIX_V6_ILP32_OFF32_CFLAGS */
   {0, NULL},				/* _CS_POSIX_V6_ILP32_OFF32_LDFLAGS */
   {0, NULL},				/* _CS_POSIX_V6_ILP32_OFF32_LIBS */
-  {0, NULL},				/* _CS_POSIX_V6_ILP32_OFF32_LINTFLAGS */
+  {0, NULL},				/* _CS_XBS5_ILP32_OFF32_LINTFLAGS */
   {ls ("")},				/* _CS_POSIX_V6_ILP32_OFFBIG_CFLAGS */
   {ls ("")},				/* _CS_POSIX_V6_ILP32_OFFBIG_LDFLAGS */
   {ls ("")},				/* _CS_POSIX_V6_ILP32_OFFBIG_LIBS */
@@ -272,10 +278,13 @@ static struct
   {0, NULL},				/* _CS_POSIX_V6_LPBIG_OFFBIG_LIBS */
   {0, NULL},				/* _CS_XBS5_LPBIG_OFFBIG_LINTFLAGS */
   {ls ("POSIX_V6_ILP32_OFFBIG")},	/* _CS_POSIX_V6_WIDTH_RESTRICTED_ENVS */
+  {ls ("")},				/* _CS_POSIX_V7_THREADS_CFLAGS */
+  {ls ("")},				/* _CS_POSIX_V7_THREADS_LDFLAGS */
+  {ls ("POSIXLY_CORRECT=1")},		/* _CS_V7_ENV */
 };
 
 #define CS_MIN _CS_PATH
-#define CS_MAX _CS_POSIX_V6_WIDTH_RESTRICTED_ENVS
+#define CS_MAX _CS_V7_ENV
 
 extern "C" size_t
 confstr (int in, char *buf, size_t len)
@@ -316,4 +325,100 @@ extern "C" long
 get_avphys_pages (void)
 {
   return get_avphys (_SC_AVPHYS_PAGES);
+}
+
+extern "C" int
+sysinfo (struct sysinfo *info)
+{
+  unsigned long long uptime = 0ULL, totalram = 0ULL, freeram = 0ULL,
+		totalswap = 0ULL, freeswap = 0ULL;
+  MEMORYSTATUSEX memory_status;
+  PSYSTEM_PAGEFILE_INFORMATION spi = NULL;
+  ULONG sizeof_spi = 512;
+  PSYSTEM_TIME_OF_DAY_INFORMATION stodi = NULL;
+  const ULONG sizeof_stodi = sizeof (SYSTEM_TIME_OF_DAY_INFORMATION);
+  NTSTATUS status = STATUS_SUCCESS;
+  winpids pids ((DWORD) 0);
+
+  if (!info)
+    {
+      set_errno (EFAULT);
+      return -1;
+    }
+
+  stodi = (PSYSTEM_TIME_OF_DAY_INFORMATION) malloc (sizeof_stodi);
+  status = NtQuerySystemInformation (SystemTimeOfDayInformation, (PVOID) stodi,
+				     sizeof_stodi, NULL);
+  if (NT_SUCCESS (status))
+    uptime = (stodi->CurrentTime.QuadPart - stodi->BootTime.QuadPart)
+	     / 10000000ULL;
+  else
+    debug_printf ("NtQuerySystemInformation(SystemTimeOfDayInformation), "
+		  "status %p", status);
+
+  if (stodi)
+    free (stodi);
+
+  memory_status.dwLength = sizeof (MEMORYSTATUSEX);
+  GlobalMemoryStatusEx (&memory_status);
+  totalram = memory_status.ullTotalPhys / wincap.page_size ();
+  freeram = memory_status.ullAvailPhys / wincap.page_size ();
+
+  spi = (PSYSTEM_PAGEFILE_INFORMATION) malloc (sizeof_spi);
+  if (spi)
+    {
+      status = NtQuerySystemInformation (SystemPagefileInformation, (PVOID) spi,
+					 sizeof_spi, &sizeof_spi);
+      if (status == STATUS_INFO_LENGTH_MISMATCH)
+	{
+	  free (spi);
+	  spi = (PSYSTEM_PAGEFILE_INFORMATION) malloc (sizeof_spi);
+	  if (spi)
+	    status = NtQuerySystemInformation (SystemPagefileInformation,
+					       (PVOID) spi, sizeof_spi,
+					       &sizeof_spi);
+	}
+    }
+  if (!spi || !NT_SUCCESS (status))
+    {
+      debug_printf ("NtQuerySystemInformation(SystemPagefileInformation), "
+		    "status %p", status);
+      totalswap = (memory_status.ullTotalPageFile - memory_status.ullTotalPhys)
+		  / wincap.page_size ();
+      freeswap = (memory_status.ullAvailPageFile - memory_status.ullTotalPhys)
+		 / wincap.page_size ();
+    }
+  else
+    {
+      PSYSTEM_PAGEFILE_INFORMATION spp = spi;
+      do
+	{
+	  totalswap += spp->CurrentSize;
+	  freeswap += spp->CurrentSize - spp->TotalUsed;
+	}
+      while (spp->NextEntryOffset
+	     && (spp = (PSYSTEM_PAGEFILE_INFORMATION)
+			   ((char *) spp + spp->NextEntryOffset)));
+    }
+  if (spi)
+    free (spi);
+
+  info->uptime = (long) uptime;
+  info->totalram = (unsigned long) totalram;
+  info->freeram = (unsigned long) freeram;
+  info->totalswap = (unsigned long) totalswap;
+  info->freeswap = (unsigned long) freeswap;
+  info->procs = (unsigned short) pids.npids;
+  info->mem_unit = (unsigned int) wincap.page_size ();
+
+  /* FIXME: unsupported */
+  info->loads[0] = 0UL;
+  info->loads[1] = 0UL;
+  info->loads[2] = 0UL;
+  info->sharedram = 0UL;
+  info->bufferram = 0UL;
+  info->totalhigh = 0UL;
+  info->freehigh = 0UL;
+
+  return 0;
 }

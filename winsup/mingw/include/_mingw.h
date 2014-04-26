@@ -22,13 +22,15 @@
  */
 #define __MINGW_H
 
-#define __MINGW32_VERSION           3.17
+#define __MINGW32_VERSION           3.20
 #define __MINGW32_MAJOR_VERSION     3
-#define __MINGW32_MINOR_VERSION     17
+#define __MINGW32_MINOR_VERSION     20
 #define __MINGW32_PATCHLEVEL        0
 
 #if __GNUC__ >= 3
+#ifndef __PCC__
 #pragma GCC system_header
+#endif
 #endif
 
 /* These are defined by the user (or the compiler)
@@ -194,6 +196,12 @@
 #  define __CRT_INLINE extern __inline__
 # endif
 #endif
+
+# ifdef __GNUC__
+#  define _CRTALIAS __CRT_INLINE __attribute__ ((__always_inline__))
+# else
+#  define _CRTALIAS __CRT_INLINE
+# endif
 
 #ifdef __cplusplus
 # define __UNUSED_PARAM(x)

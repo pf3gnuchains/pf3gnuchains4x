@@ -1,6 +1,6 @@
 /* tc-m68k.c -- Assemble for the m68k family
    Copyright 1987, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999,
-   2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
+   2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010
    Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
@@ -1335,12 +1335,10 @@ tc_gen_reloc (asection *section ATTRIBUTE_UNUSED, fixS *fixp)
   *reloc->sym_ptr_ptr = symbol_get_bfdsym (fixp->fx_addsy);
   reloc->address = fixp->fx_frag->fr_address + fixp->fx_where;
 #ifndef OBJ_ELF
-  if (fixp->fx_pcrel)
-    reloc->addend = fixp->fx_addnumber;
-  else if (OUTPUT_FLAVOR == bfd_target_aout_flavour
-	   && fixp->fx_addsy
-	   && S_IS_WEAK (fixp->fx_addsy)
-	   && ! bfd_is_und_section (S_GET_SEGMENT (fixp->fx_addsy)))
+  if (OUTPUT_FLAVOR == bfd_target_aout_flavour
+      && fixp->fx_addsy
+      && S_IS_WEAK (fixp->fx_addsy)
+      && ! bfd_is_und_section (S_GET_SEGMENT (fixp->fx_addsy)))
     {
       /* PR gas/3041 References to weak symbols must be treated as extern
 	 in order to be overridable by the linker, even if they are defined
@@ -1364,6 +1362,8 @@ tc_gen_reloc (asection *section ATTRIBUTE_UNUSED, fixS *fixp)
 		      - (S_GET_VALUE (fixp->fx_addsy)
 			 + S_GET_SEGMENT (fixp->fx_addsy)->vma);
     }
+  else if (fixp->fx_pcrel)
+    reloc->addend = fixp->fx_addnumber;
   else
     reloc->addend = 0;
 #else
@@ -7713,7 +7713,6 @@ md_show_usage (FILE *stream)
 {
   const char *default_cpu = TARGET_CPU;
   int i;
-  unsigned int default_arch;
 
   /* Get the canonical name for the default target CPU.  */
   if (*default_cpu == 'm')
@@ -7722,7 +7721,6 @@ md_show_usage (FILE *stream)
     {
       if (strcasecmp (default_cpu, m68k_cpus[i].name) == 0)
 	{
-	  default_arch = m68k_cpus[i].arch;
 	  while (m68k_cpus[i].alias > 0)
 	    i--;
 	  while (m68k_cpus[i].alias < 0)

@@ -57,6 +57,7 @@ struct Version_expression_list;
 struct Version_tree;
 struct Version_expression;
 class Lazy_demangler;
+class Incremental_script_entry;
 
 // This class represents an expression in a linker script.
 
@@ -86,20 +87,31 @@ class Expression
   // value is defined.  If the value is absolute *RESULT_SECTION will
   // be NULL.  Note that the returned value is still an absolute
   // value; to get a section relative value the caller must subtract
-  // the section address.
+  // the section address.  If RESULT_ALIGNMENT is not NULL, this sets
+  // *RESULT_ALIGNMENT to the alignment of the value of that alignment
+  // is larger than *RESULT_ALIGNMENT; this will only be non-zero if
+  // this is an ALIGN expression.  If IS_SECTION_DOT_ASSIGMENT is true,
+  // we are evaluating an assignment to dot within an output section,
+  // and an absolute value should be interpreted as an offset within
+  // the section.
   uint64_t
   eval_with_dot(const Symbol_table*, const Layout*, bool check_assertions,
 		uint64_t dot_value, Output_section* dot_section,
-		Output_section** result_section);
+		Output_section** result_section, uint64_t* result_alignment,
+		bool is_section_dot_assignment);
 
   // Return the value of an expression which may or may not be
   // permitted to refer to the dot symbol, depending on
-  // is_dot_available.
+  // is_dot_available.  If IS_SECTION_DOT_ASSIGMENT is true,
+  // we are evaluating an assignment to dot within an output section,
+  // and an absolute value should be interpreted as an offset within
+  // the section.
   uint64_t
   eval_maybe_dot(const Symbol_table*, const Layout*, bool check_assertions,
 		 bool is_dot_available, uint64_t dot_value,
 		 Output_section* dot_section,
-		 Output_section** result_section);
+		 Output_section** result_section, uint64_t* result_alignment,
+		 bool is_section_dot_assignment);
 
   // Print the expression to the FILE.  This is for debugging.
   virtual void
@@ -335,12 +347,16 @@ class Symbol_assignment
   finalize_with_dot(Symbol_table*, const Layout*, uint64_t dot_value,
 		    Output_section* dot_section);
 
-  // Set the symbol value, but only if the value is absolute.  This is
-  // used while processing a SECTIONS clause.  We assume that dot is
-  // an absolute value here.  We do not check assertions.
+  // Set the symbol value, but only if the value is absolute or relative to
+  // DOT_SECTION.  This is used while processing a SECTIONS clause.
+  // We assume that dot is an absolute value here.  We do not check assertions.
   void
   set_if_absolute(Symbol_table*, const Layout*, bool is_dot_available,
-		  uint64_t dot_value);
+		  uint64_t dot_value, Output_section* dot_section);
+
+  const std::string&
+  name() const
+  { return this->name_; }
 
   // Print the assignment to the FILE.  This is for debugging.
   void
@@ -420,6 +436,14 @@ class Script_options
   add_symbol_assignment(const char* name, size_t length, bool is_defsym,
 			Expression* value, bool provide, bool hidden);
 
+  // Look for an assigned symbol.
+  bool
+  is_pending_assignment(const char* name);
+  
+  // Add a reference to a symbol.
+  void
+  add_symbol_reference(const char* name, size_t length);
+
   // Add an assertion.
   void
   add_assertion(Expression* check, const char* message, size_t messagelen);
@@ -435,6 +459,32 @@ class Script_options
   // Add all symbol definitions to the symbol table.
   void
   add_symbols_to_table(Symbol_table*);
+
+  // Used to iterate over symbols which are referenced in expressions
+  // but not defined.
+  typedef Unordered_set<std::string>::const_iterator referenced_const_iterator;
+
+  referenced_const_iterator
+  referenced_begin() const
+  { return this->symbol_references_.begin(); }
+
+  referenced_const_iterator
+  referenced_end() const
+  { return this->symbol_references_.end(); }
+
+  // Return whether a symbol is referenced but not defined.
+  bool
+  is_referenced(const std::string& name) const
+  {
+    return (this->symbol_references_.find(name)
+	    != this->symbol_references_.end());
+  }
+
+  // Return whether there are any symbols which were referenced but
+  // not defined.
+  bool
+  any_unreferenced() const
+  { return !this->symbol_references_.empty(); }
 
   // Finalize the symbol values.  Also check assertions.
   void
@@ -494,32 +544,16 @@ class Script_options
   std::string entry_;
   // Symbols to set.
   Symbol_assignments symbol_assignments_;
+  // Symbols defined in an expression, for faster lookup.
+  Unordered_set<std::string> symbol_definitions_;
+  // Symbols referenced in an expression.
+  Unordered_set<std::string> symbol_references_;
   // Assertions to check.
   Assertions assertions_;
   // Version information parsed from a version script.
   Version_script_info version_script_info_;
   // Information from any SECTIONS clauses.
   Script_sections script_sections_;
-};
-
-// Information about a script input that will persist during the whole linker
-// run. Needed only during an incremental build to retrieve the input files
-// added by this script.
-
-class Script_info
-{
- public:
-  Script_info(Input_arguments* inputs)
-    : inputs_(inputs)
-  { }
-
-  // Returns the input files included because of this script.
-  Input_arguments*
-  inputs()
-  { return this->inputs_; }
-
- private:
-  Input_arguments* inputs_;
 };
 
 // FILE was found as an argument on the command line, but was not

@@ -1,6 +1,7 @@
 /* wait.cc: Posix wait routines.
 
-   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004 Red Hat, Inc.
+   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
+   2005, 2009, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -78,9 +79,9 @@ wait4 (int intpid, int *status, int options, struct rusage *r)
       if ((waitfor = w->ev) == NULL)
 	goto nochildren;
 
-      res = cancelable_wait (waitfor, INFINITE);
+      res = cancelable_wait (waitfor);
 
-      sigproc_printf ("%d = WaitForSingleObject (...)", res);
+      sigproc_printf ("%d = cancelable_wait (...)", res);
 
       if (w->ev == NULL)
 	{
@@ -108,10 +109,7 @@ wait4 (int intpid, int *status, int options, struct rusage *r)
       break;
     }
 
-  sigproc_printf ("intpid %d, status %p, w->status %d, options %d, res %d",
-		  intpid, status, w->status, options, res);
+  syscall_printf ("%R = wait4(%d, %p, %d, %p)", res, intpid, w->status, options, r);
   w->status = -1;
-  if (res < 0)
-    sigproc_printf ("*** errno %d", get_errno ());
   return res;
 }

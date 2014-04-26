@@ -1,6 +1,6 @@
 /* fhandler_virtual.cc: base fhandler class for virtual filesystems
 
-   Copyright 2002, 2003, 2004, 2005, 2007, 2008, 2009 Red Hat, Inc.
+   Copyright 2002, 2003, 2004, 2005, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -16,6 +16,8 @@ details. */
 #include "fhandler.h"
 #include "dtable.h"
 #include "cygheap.h"
+#include "sync.h"
+#include "child_info.h"
 
 #include <dirent.h>
 
@@ -59,6 +61,7 @@ fhandler_virtual::opendir (int fd)
   else if ((dir->__d_dirent =
       (struct dirent *) malloc (sizeof (struct dirent))) == NULL)
     {
+      free (dir->__d_dirname);
       free (dir);
       set_errno (ENOMEM);
     }
@@ -97,13 +100,14 @@ fhandler_virtual::opendir (int fd)
   return res;
 }
 
-_off64_t fhandler_virtual::telldir (DIR * dir)
+long
+fhandler_virtual::telldir (DIR * dir)
 {
   return dir->__d_position;
 }
 
 void
-fhandler_virtual::seekdir (DIR * dir, _off64_t loc)
+fhandler_virtual::seekdir (DIR * dir, long loc)
 {
   dir->__flags |= dirent_saw_dot | dirent_saw_dot_dot;
   dir->__d_position = loc;
@@ -150,18 +154,15 @@ fhandler_virtual::lseek (_off64_t offset, int whence)
 }
 
 int
-fhandler_virtual::dup (fhandler_base * child)
+fhandler_virtual::dup (fhandler_base * child, int flags)
 {
-  int ret = fhandler_base::dup (child);
+  int ret = fhandler_base::dup (child, flags);
 
   if (!ret)
     {
       fhandler_virtual *fhproc_child = (fhandler_virtual *) child;
       fhproc_child->filebuf = (char *) cmalloc_abort (HEAP_BUF, filesize);
-      fhproc_child->filesize = filesize;
-      fhproc_child->position = position;
       memcpy (fhproc_child->filebuf, filebuf, filesize);
-      fhproc_child->set_flags (get_flags ());
     }
   return ret;
 }
@@ -169,7 +170,7 @@ fhandler_virtual::dup (fhandler_base * child)
 int
 fhandler_virtual::close ()
 {
-  if (!hExeced)
+  if (!have_execed)
     {
       if (filebuf)
 	{
@@ -224,10 +225,10 @@ fhandler_virtual::open (int flags, mode_t mode)
   return 1;
 }
 
-int
+virtual_ftype_t
 fhandler_virtual::exists ()
 {
-  return 0;
+  return virt_none;
 }
 
 bool

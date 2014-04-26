@@ -1,7 +1,7 @@
 /* mount.cc
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2005,
-   2008, 2009, 2010 Red Hat, Inc.
+   2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -15,6 +15,7 @@ details. */
 #include <mntent.h>
 #include <windows.h>
 #include <sys/cygwin.h>
+#include <cygwin/version.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <getopt.h>
@@ -39,7 +40,6 @@ static int mount_already_exists (const char *posix_path, int flags);
 // static short create_missing_dirs = FALSE;
 static bool force = false;
 
-static const char version[] = "$Revision: 1.14 $";
 static const char *progname;
 
 static void
@@ -83,10 +83,11 @@ do_mount (const char *dev, const char *where, int flags)
   else if (!(statbuf.st_mode & S_IFDIR))
     {
       if (!force)
-	fprintf (stderr, "%s: warning: %s is not a directory.\n", progname, where);
+	fprintf (stderr, "%s: warning: %s is not a directory.\n",
+		 progname, where);
     }
 
-  if (!force && !(flags & EXEC_FLAGS) && strlen (dev))
+  if (!force && !(flags & (EXEC_FLAGS | MOUNT_BIND)) && strlen (dev))
     {
       char devtmp[1 + 2 * strlen (dev)];
       strcpy (devtmp, dev);
@@ -100,9 +101,10 @@ do_mount (const char *dev, const char *where, int flags)
       strcat (devtmp, "\\");
       if (GetDriveType (devtmp) == DRIVE_REMOTE)
 	{
-	  fprintf (stderr, "%s: defaulting to 'notexec' mount option for speed since native path\n"
-		   "%*creferences a remote share.  Use '-f' option to override.\n", progname,
-		   strlen(progname) + 2, ' ');
+	  fprintf (stderr,
+      "%s: defaulting to 'notexec' mount option for speed since native path\n"
+      "%*creferences a remote share.  Use '-f' option to override.\n",
+		   progname, strlen(progname) + 2, ' ');
 	  flags |= MOUNT_NOTEXEC;
 	}
     }
@@ -130,7 +132,7 @@ from_fstab (bool user)
   while (fgets (buf, 65536, fh))
     {
       char *c = strrchr (buf, '\n');
-      if (*c)
+      if (c)
       	*c = '\0';
       if (from_fstab_line (m, buf, user))
 	++m;
@@ -201,40 +203,21 @@ static struct option longopts[] =
   {"mount-entries", no_argument, NULL, 'm'},
   {"options", required_argument, NULL, 'o'},
   {"show-cygdrive-prefix", no_argument, NULL, 'p'},
-  {"version", no_argument, NULL, 'v'},
+  {"version", no_argument, NULL, 'V'},
   {NULL, 0, NULL, 0}
 };
 
-static char opts[] = "acfhmpvo:";
-
-struct opt
-{
-  const char *name;
-  unsigned val;
-  bool clear;
-} oopts[] =
-{
-  {"acl", MOUNT_NOACL, true},
-  {"auto", 0, false},
-  {"binary", MOUNT_BINARY, false},
-  {"cygexec", MOUNT_CYGWIN_EXEC, false},
-  {"exec", MOUNT_EXEC, false},
-  {"noacl", MOUNT_NOACL, false},
-  {"nosuid", 0, false},
-  {"notexec", MOUNT_NOTEXEC, false},
-  {"override", MOUNT_OVERRIDE, true},
-  {"posix=0", MOUNT_NOPOSIX, false},
-  {"posix=1", MOUNT_NOPOSIX, true},
-  {"text", MOUNT_BINARY, true},
-  {"user", MOUNT_SYSTEM, true}
-};
+static char opts[] = "acfhmpVo:";
 
 static void
 usage (FILE *where = stderr)
 {
-  fprintf (where, "Usage: %s [OPTION] [<win32path> <posixpath>]\n\
-       %s -a\n\
-       %s <posixpath>\n\
+  char *options;
+
+  fprintf (where, "Usage: %1$s [OPTION] [<win32path> <posixpath>]\n\
+       %1$s -a\n\
+       %1$s <posixpath>\n\
+\n\
 Display information about mounted filesystems, or mount a filesystem\n\
 \n\
   -a, --all                     mount all filesystems mentioned in fstab\n\
@@ -246,36 +229,25 @@ Display information about mounted filesystems, or mount a filesystem\n\
 				and cygdrive prefixes\n\
   -o, --options X[,X...]	specify mount options\n\
   -p, --show-cygdrive-prefix    show user and/or system cygdrive path prefix\n\
-  -v, --version                 output version information and exit\n\
-\n\
-Valid options are:\n\n  ", progname, progname, progname);
-  for (opt *o = oopts; o < (oopts + (sizeof (oopts) / sizeof (oopts[0]))); o++)
-    fprintf (where, "%s%s", o == oopts ? "" : ",", o->name);
-  fputs ("\n\n", where);
+  -V, --version                 output version information and exit\n\n",
+  progname);
+  if (!cygwin_internal (CW_LST_MNT_OPTS, &options))
+    fprintf (where, "Valid options are: %s\n\n", options);
   exit (where == stderr ? 1 : 0);
 }
 
 static void
 print_version ()
 {
-  const char *v = strchr (version, ':');
-  int len;
-  if (!v)
-    {
-      v = "?";
-      len = 1;
-    }
-  else
-    {
-      v += 2;
-      len = strchr (v, ' ') - v;
-    }
-  printf ("\
-%s (cygwin) %.*s\n\
-Filesystem Utility\n\
-Copyright 1996-2008 Red Hat, Inc.\n\
-Compiled on %s\n\
-", progname, len, v, __DATE__);
+  printf ("mount (cygwin) %d.%d.%d\n"
+	  "Mount filesystem utility\n"
+	  "Copyright (C) 1996 - %s Red Hat, Inc.\n"
+	  "This is free software; see the source for copying conditions.  There is NO\n"
+	  "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n",
+	  CYGWIN_VERSION_DLL_MAJOR / 1000,
+	  CYGWIN_VERSION_DLL_MAJOR % 1000,
+	  CYGWIN_VERSION_DLL_MINOR,
+	  strrchr (__DATE__, ' ') + 1);
 }
 
 static char *
@@ -301,13 +273,7 @@ main (int argc, char **argv)
     saw_mount_all,
   } do_what = nada;
 
-  progname = strrchr (argv[0], '/');
-  if (progname == NULL)
-    progname = strrchr (argv[0], '\\');
-  if (progname == NULL)
-    progname = argv[0];
-  else
-    progname++;
+  progname = program_invocation_short_name;
 
   if (argc == 1)
     {
@@ -356,41 +322,25 @@ main (int argc, char **argv)
 	else
 	  usage ();
 	break;
-      case 'v':
+      case 'V':
 	print_version ();
 	return 0;
 	break;
       default:
-	usage ();
+	fprintf (stderr, "Try `%s --help' for more information.\n", progname);
+	return 1;
       }
 
-  while (*options)
+  if (cygwin_internal (CW_CVT_MNT_OPTS, &options, &flags))
     {
-      char *p = strchr (options, ',');
-      if (p)
-	*p++ = '\0';
-      else
-	p = strchr (options, '\0');
-
-      for (opt *o = oopts; o < (oopts + (sizeof (oopts) / sizeof (oopts[0]))); o++)
-	if (strcmp (options, o->name) == 0)
-	  {
-	    if (o->clear)
-	      flags &= ~o->val;
-	    else
-	      flags |= o->val;
-	    goto gotit;
-	  }
       fprintf (stderr, "%s: invalid option - '%s'\n", progname, options);
       exit (1);
-
-    gotit:
-      options = p;
     }
 
   if (flags & MOUNT_NOTEXEC && flags & (MOUNT_EXEC | MOUNT_CYGWIN_EXEC))
     {
-      fprintf (stderr, "%s: invalid combination of executable options\n", progname);
+      fprintf (stderr, "%s: invalid combination of executable options\n",
+	       progname);
       exit (1);
     }
 
@@ -416,7 +366,7 @@ main (int argc, char **argv)
       break;
     case saw_mount_all:
       if (optind <= argc)
-      	usage ();
+	usage ();
       do_mount_from_fstab (NULL);
       break;
     default:
@@ -466,10 +416,14 @@ mount_entries (void)
 
   // write fstab entries for normal mount points
   while ((p = getmntent (m)) != NULL)
-    // Only list non-cygdrives
+    // Only list non-cygdrives and non-automounts
     if (!strstr (p->mnt_opts, ",noumount") && !strstr (p->mnt_opts, ",auto"))
       {
 	char fsname[NT_MAX_PATH], dirname[NT_MAX_PATH];
+	/* Drop the "bind" option since it can't be reverted. */
+	char *c = strstr (p->mnt_opts, ",bind");
+	if (c)
+	  memmove (c, c + 5, strlen (c + 5) + 1);
 	printf (format_mnt, convert_spaces (fsname, p->mnt_fsname),
 			    convert_spaces (dirname, p->mnt_dir),
 			    p->mnt_type, p->mnt_opts);
@@ -482,7 +436,7 @@ mount_entries (void)
     {
       char *noumount;
       if ((noumount = strstr (p->mnt_opts, ",noumount")))
-      	{
+	{
 	  char dirname[NT_MAX_PATH];
 	  char opts[strlen (p->mnt_opts) + 1];
 
@@ -502,7 +456,7 @@ mount_entries (void)
 	}
     }
   endmntent (m);
-      
+
   exit(0);
 }
 
@@ -552,13 +506,13 @@ mount_already_exists (const char *posix_path, int flags)
 	      else
 		fprintf (stderr,
 			 "%s: warning: user mount point of '%s' "
-			 "masks system mount.\n",
-			 progname, posix_path);
+			 "masks system mount.\n", progname, posix_path);
 	      break;
 	    }
 	  else
 	    {
-	      fprintf (stderr, "%s: warning: couldn't determine mount type.\n", progname);
+	      fprintf (stderr, "%s: warning: couldn't determine mount type.\n",
+		       progname);
 	      break;
 	    }
 	}

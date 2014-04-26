@@ -1,6 +1,6 @@
 /* Posix dirent.h for WIN32.
 
-   Copyright 2001, 2002, 2003, 2005, 2006, 2007 Red Hat, Inc.
+   Copyright 2001, 2002, 2003, 2005, 2006, 2007, 2010 Red Hat, Inc.
 
    This software is a copyrighted work licensed under the terms of the
    Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
@@ -17,7 +17,6 @@
 #define __DIRENT_VERSION	2
 
 #pragma pack(push,4)
-#if defined(__INSIDE_CYGWIN__) || defined (__CYGWIN_USE_BIG_TYPES__)
 #define _DIRENT_HAVE_D_TYPE
 struct dirent
 {
@@ -28,17 +27,9 @@ struct dirent
   __uint32_t __d_internal1;
   char d_name[NAME_MAX + 1];
 };
-#else
-struct dirent
-{
-  long d_version;
-  long d_reserved[2];
-  long d_fd;
-  ino_t d_ino;
-  char d_name[NAME_MAX + 1];
-};
-#endif
 #pragma pack(pop)
+
+#define d_fileno d_ino			/* BSD compatible definition */
 
 #define __DIRENT_COOKIE 0xdede4242
 
@@ -49,7 +40,7 @@ typedef struct __DIR
   unsigned long __d_cookie;
   struct dirent *__d_dirent;
   char *__d_dirname;			/* directory name with trailing '*' */
-  _off_t __d_position;			/* used by telldir/seekdir */
+  long __d_position;			/* used by telldir/seekdir */
   int __d_fd;
   unsigned __d_internal;
   void *__handle;
@@ -69,8 +60,8 @@ int dirfd (DIR *);
 
 #ifndef _POSIX_SOURCE
 #ifndef __INSIDE_CYGWIN__
-off_t telldir (DIR *);
-void seekdir (DIR *, off_t loc);
+long telldir (DIR *);
+void seekdir (DIR *, long loc);
 #endif
 
 int scandir (const char *__dir,

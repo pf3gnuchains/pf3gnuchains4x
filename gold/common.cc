@@ -1,6 +1,6 @@
 // common.cc -- handle common symbols for gold
 
-// Copyright 2006, 2007, 2008 Free Software Foundation, Inc.
+// Copyright 2006, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
 // Written by Ian Lance Taylor <iant@google.com>.
 
 // This file is part of gold.
@@ -36,24 +36,21 @@ namespace gold
 
 // Allocate_commons_task methods.
 
-// This task allocates the common symbols.  We need a lock on the
-// symbol table.
+// This task allocates the common symbols.  We arrange to run it
+// before anything else which needs to access the symbol table.
 
 Task_token*
 Allocate_commons_task::is_runnable()
 {
-  if (!this->symtab_lock_->is_writable())
-    return this->symtab_lock_;
   return NULL;
 }
 
-// Return the locks we hold: one on the symbol table, and one blocker.
+// Release a blocker.
 
 void
 Allocate_commons_task::locks(Task_locker* tl)
 {
   tl->add(this, this->blocker_);
-  tl->add(this, this->symtab_lock_);
 }
 
 // Allocate the common symbols.
@@ -91,16 +88,7 @@ bool
 Sort_commons<size>::operator()(const Symbol* pa, const Symbol* pb) const
 {
   if (pa == NULL)
-    {
-      if (pb == NULL)
-	{
-	  // Stabilize sort.  The order really doesn't matter, because
-	  // these entries will be discarded, but we want to return
-	  // the same result every time we compare pa and pb.
-	  return pa < pb;
-	}
-      return false;
-    }
+    return false;
   if (pb == NULL)
     return true;
 
@@ -298,11 +286,23 @@ Symbol_table::do_allocate_commons_list(
       gold_unreachable();
     }
 
-  Output_data_space *poc = new Output_data_space(addralign, ds_name);
-  Output_section *os = layout->add_output_section_data(name,
-						       elfcpp::SHT_NOBITS,
-						       flags, poc, false,
-						       false, false, false);
+  Output_data_space* poc;
+  Output_section* os;
+
+  if (!parameters->incremental_update())
+    {
+      poc = new Output_data_space(addralign, ds_name);
+      os = layout->add_output_section_data(name, elfcpp::SHT_NOBITS, flags,
+					   poc, ORDER_INVALID, false);
+    }
+  else
+    {
+      // When doing an incremental update, we need to allocate each common
+      // directly from the output section's free list.
+      poc = NULL;
+      os = layout->find_output_section(name);
+    }
+
   if (os != NULL)
     {
       if (commons_section_type == COMMONS_SMALL)
@@ -340,12 +340,26 @@ Symbol_table::do_allocate_commons_list(
       if (mapfile != NULL)
 	mapfile->report_allocate_common(sym, ssym->symsize());
 
-      off = align_address(off, ssym->value());
-      ssym->allocate_common(poc, off);
-      off += ssym->symsize();
+      if (poc != NULL)
+	{
+	  off = align_address(off, ssym->value());
+	  ssym->allocate_common(poc, off);
+	  off += ssym->symsize();
+	}
+      else
+	{
+	  // For an incremental update, allocate from the free list.
+	  off = os->allocate(ssym->symsize(), ssym->value());
+	  if (off == -1)
+	    gold_fallback(_("out of patch space in section %s; "
+			    "relink with --incremental-full"),
+			  os->name());
+	  ssym->allocate_common(os, off);
+	}
     }
 
-  poc->set_current_data_size(off);
+  if (poc != NULL)
+    poc->set_current_data_size(off);
 
   commons->clear();
 }

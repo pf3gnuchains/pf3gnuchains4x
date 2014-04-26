@@ -1,6 +1,6 @@
 /* tc-mn10300.c -- Assembler code for the Matsushita 10300
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009 Free Software Foundation, Inc.
+   2006, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
 
    This file is part of GAS, the GNU Assembler.
 
@@ -689,6 +689,8 @@ md_convert_frag (bfd *abfd ATTRIBUTE_UNUSED,
       fragP->fr_literal[offset] = 0xdd;
       fragP->fr_literal[offset + 5] = fragP->fr_literal[offset + 3];
       fragP->fr_literal[offset + 6] = fragP->fr_literal[offset + 4];
+      fragP->fr_literal[offset + 3] = 0;
+      fragP->fr_literal[offset + 4] = 0;
 
       fix_new (fragP, fragP->fr_fix + 1, 4, fragP->fr_symbol,
 	       fragP->fr_offset + 1, 1, BFD_RELOC_32_PCREL);
@@ -2065,7 +2067,6 @@ keep_going:
 	    {
 	      reloc_howto_type *reloc_howto;
 	      int offset;
-	      fixS *fixP;
 
 	      reloc_howto = bfd_reloc_type_lookup (stdoutput,
 						   fixups[i].reloc);
@@ -2079,10 +2080,10 @@ keep_going:
 		abort ();
 
 	      offset = 4 - size;
-	      fixP = fix_new_exp (frag_now, f - frag_now->fr_literal + offset,
-				  reloc_size, &fixups[i].exp,
-				  reloc_howto->pc_relative,
-				  fixups[i].reloc);
+	      fix_new_exp (frag_now, f - frag_now->fr_literal + offset,
+			   reloc_size, &fixups[i].exp,
+			   reloc_howto->pc_relative,
+			   fixups[i].reloc);
 	    }
 	  else
 	    {
@@ -2190,8 +2191,6 @@ tc_gen_reloc (asection *seg ATTRIBUTE_UNUSED, fixS *fixp)
       asec = S_GET_SEGMENT (fixp->fx_addsy);
       ssec = S_GET_SEGMENT (fixp->fx_subsy);
 
-      reloc->sym_ptr_ptr = NULL;
-
       /* If we have a difference between two (non-absolute) symbols we must
 	 generate two relocs (one for each symbol) and allow the linker to
 	 resolve them - relaxation may change the distances between symbols,
@@ -2211,10 +2210,15 @@ tc_gen_reloc (asection *seg ATTRIBUTE_UNUSED, fixS *fixp)
 
 	  reloc->addend = fixp->fx_offset; 
 	  if (asec == absolute_section)
-	    reloc->addend += S_GET_VALUE (fixp->fx_addsy);
-
-	  reloc->sym_ptr_ptr = xmalloc (sizeof (asymbol *));
-	  *reloc->sym_ptr_ptr = symbol_get_bfdsym (fixp->fx_addsy);
+	    {
+	      reloc->addend += S_GET_VALUE (fixp->fx_addsy);
+	      reloc->sym_ptr_ptr = bfd_abs_section_ptr->symbol_ptr_ptr;
+	    }
+	  else
+	    {
+	      reloc->sym_ptr_ptr = xmalloc (sizeof (asymbol *));
+	      *reloc->sym_ptr_ptr = symbol_get_bfdsym (fixp->fx_addsy);
+	    }
 
 	  fixp->fx_pcrel = 0;
 	  fixp->fx_done = 1;
@@ -2251,8 +2255,6 @@ tc_gen_reloc (asection *seg ATTRIBUTE_UNUSED, fixS *fixp)
 	      return relocs;
 	    }
 
-	  if (reloc->sym_ptr_ptr)
-	    free (reloc->sym_ptr_ptr);
 	  free (reloc);
 	  return & no_relocs;
 	}

@@ -1,6 +1,6 @@
 /* tc-arm.c -- Assemble for the ARM
    Copyright 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003,
-   2004, 2005, 2006, 2007, 2008, 2009
+   2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011
    Free Software Foundation, Inc.
    Contributed by Richard Earnshaw (rwe@pegasus.esprit.ec.org)
 	Modified by David Taylor (dtaylor@armltd.co.uk)
@@ -32,7 +32,7 @@
 #include "safe-ctype.h"
 #include "subsegs.h"
 #include "obstack.h"
-
+#include "libiberty.h"
 #include "opcode/arm.h"
 
 #ifdef OBJ_ELF
@@ -97,13 +97,12 @@ enum arm_float_abi
 
 /* Types of processor to assemble for.	*/
 #ifndef CPU_DEFAULT
-#if defined __XSCALE__
-#define CPU_DEFAULT	ARM_ARCH_XSCALE
-#else
-#if defined __thumb__
-#define CPU_DEFAULT	ARM_ARCH_V5T
-#endif
-#endif
+/* The code that was here used to select a default CPU depending on compiler
+   pre-defines which were only present when doing native builds, thus 
+   changing gas' default behaviour depending upon the build host.
+
+   If you have a target that requires a default CPU option then the you
+   should define CPU_DEFAULT here.  */
 #endif
 
 #ifndef FPU_DEFAULT
@@ -185,8 +184,8 @@ static const arm_feature_set arm_ext_v5exp = ARM_FEATURE (ARM_EXT_V5ExP, 0);
 static const arm_feature_set arm_ext_v5j = ARM_FEATURE (ARM_EXT_V5J, 0);
 static const arm_feature_set arm_ext_v6 = ARM_FEATURE (ARM_EXT_V6, 0);
 static const arm_feature_set arm_ext_v6k = ARM_FEATURE (ARM_EXT_V6K, 0);
-static const arm_feature_set arm_ext_v6z = ARM_FEATURE (ARM_EXT_V6Z, 0);
 static const arm_feature_set arm_ext_v6t2 = ARM_FEATURE (ARM_EXT_V6T2, 0);
+static const arm_feature_set arm_ext_v6m = ARM_FEATURE (ARM_EXT_V6M, 0);
 static const arm_feature_set arm_ext_v6_notm = ARM_FEATURE (ARM_EXT_V6_NOTM, 0);
 static const arm_feature_set arm_ext_v6_dsp = ARM_FEATURE (ARM_EXT_V6_DSP, 0);
 static const arm_feature_set arm_ext_barrier = ARM_FEATURE (ARM_EXT_BARRIER, 0);
@@ -197,12 +196,18 @@ static const arm_feature_set arm_ext_v7a = ARM_FEATURE (ARM_EXT_V7A, 0);
 static const arm_feature_set arm_ext_v7r = ARM_FEATURE (ARM_EXT_V7R, 0);
 static const arm_feature_set arm_ext_v7m = ARM_FEATURE (ARM_EXT_V7M, 0);
 static const arm_feature_set arm_ext_m =
-  ARM_FEATURE (ARM_EXT_V6M | ARM_EXT_V7M, 0);
+  ARM_FEATURE (ARM_EXT_V6M | ARM_EXT_OS | ARM_EXT_V7M, 0);
+static const arm_feature_set arm_ext_mp = ARM_FEATURE (ARM_EXT_MP, 0);
+static const arm_feature_set arm_ext_sec = ARM_FEATURE (ARM_EXT_SEC, 0);
+static const arm_feature_set arm_ext_os = ARM_FEATURE (ARM_EXT_OS, 0);
+static const arm_feature_set arm_ext_adiv = ARM_FEATURE (ARM_EXT_ADIV, 0);
+static const arm_feature_set arm_ext_virt = ARM_FEATURE (ARM_EXT_VIRT, 0);
 
 static const arm_feature_set arm_arch_any = ARM_ANY;
 static const arm_feature_set arm_arch_full = ARM_FEATURE (-1, -1);
 static const arm_feature_set arm_arch_t2 = ARM_ARCH_THUMB2;
 static const arm_feature_set arm_arch_none = ARM_ARCH_NONE;
+static const arm_feature_set arm_arch_v6m_only = ARM_ARCH_V6M_ONLY;
 
 static const arm_feature_set arm_cext_iwmmxt2 =
   ARM_FEATURE (0, ARM_CEXT_IWMMXT2);
@@ -234,6 +239,15 @@ static int mfloat_abi_opt = -1;
 static arm_feature_set selected_cpu = ARM_ARCH_NONE;
 /* Must be long enough to hold any of the names in arm_cpus.  */
 static char selected_cpu_name[16];
+
+/* Return if no cpu was selected on command-line.  */
+static bfd_boolean
+no_cpu_selected (void)
+{
+  return selected_cpu.core == arm_arch_none.core
+    && selected_cpu.coproc == arm_arch_none.coproc;
+}
+
 #ifdef OBJ_ELF
 # ifdef EABI_DEFAULT
 static int meabi_flags = EABI_DEFAULT;
@@ -337,6 +351,9 @@ enum it_instruction_type
    IT_INSN                 /* The IT insn has been parsed.  */
 };
 
+/* The maximum number of operands we need.  */
+#define ARM_IT_MAX_OPERANDS 6
+
 struct arm_it
 {
   const char *	error;
@@ -388,7 +405,7 @@ struct arm_it
     unsigned negative	: 1;  /* Index register was negated.  */
     unsigned shifted	: 1;  /* Shift applied to operation.  */
     unsigned shift_kind : 3;  /* Shift operation (enum shift_kind).  */
-  } operands[6];
+  } operands[ARM_IT_MAX_OPERANDS];
 };
 
 static struct arm_it inst;
@@ -503,6 +520,7 @@ enum arm_reg_type
   REG_TYPE_MMXWC,
   REG_TYPE_MMXWCG,
   REG_TYPE_XSCALE,
+  REG_TYPE_RNB
 };
 
 /* Structure for a hash table entry for a register.
@@ -512,7 +530,7 @@ enum arm_reg_type
 struct reg_entry
 {
   const char *               name;
-  unsigned char              number;
+  unsigned int               number;
   unsigned char              type;
   unsigned char              builtin;
   struct neon_typed_alias *  neon;
@@ -545,6 +563,7 @@ const char * const reg_expected_msgs[] =
 };
 
 /* Some well known registers that we refer to directly elsewhere.  */
+#define REG_R12	12
 #define REG_SP	13
 #define REG_LR	14
 #define REG_PC	15
@@ -559,7 +578,7 @@ struct asm_opcode
   const char * template_name;
 
   /* Parameters to instruction.	 */
-  unsigned char operands[8];
+  unsigned int operands[8];
 
   /* Conditional tag - see opcode_lookup.  */
   unsigned int tag : 4;
@@ -705,6 +724,11 @@ struct asm_opcode
 #define BAD_IT_COND	_("incorrect condition in IT block")
 #define BAD_IT_IT 	_("IT falling in the range of a previous IT block")
 #define MISSING_FNSTART	_("missing .fnstart before unwinding directive")
+#define BAD_PC_ADDRESSING \
+	_("cannot use register index with PC-relative addressing")
+#define BAD_PC_WRITEBACK \
+	_("cannot use writeback with PC-relative addressing")
+#define BAD_RANGE     _("branch out of range")
 
 static struct hash_control * arm_ops_hsh;
 static struct hash_control * arm_cond_hsh;
@@ -739,6 +763,9 @@ typedef struct literal_pool
   symbolS *	         symbol;
   segT		         section;
   subsegT	         sub_section;
+#ifdef OBJ_ELF
+  struct dwarf2_line_info locs [MAX_LITERAL_POOL_SIZE];
+#endif
   struct literal_pool *  next;
 } literal_pool;
 
@@ -939,6 +966,8 @@ my_get_expression (expressionS * ep, char ** str, int prefix_mode)
       input_line_pointer = save_in;
       return 1;
     }
+#else
+  (void) seg;
 #endif
 
   /* Get rid of any bignums now, so that we don't generate an error for which
@@ -1460,6 +1489,10 @@ arm_typed_reg_parse (char **ccp, enum arm_reg_type type,
   if (reg == FAIL)
     return FAIL;
 
+  /* Do not allow regname(... to parse as a register.  */
+  if (*str == '(')
+    return FAIL;
+
   /* Do not allow a scalar (reg+index) to parse as a register.  */
   if ((atype.defined & NTA_HASINDEX) != 0)
     {
@@ -1878,7 +1911,6 @@ parse_neon_el_struct_list (char **str, unsigned *pbase,
   int lane = -1;
   int leading_brace = 0;
   enum arm_reg_type rtype = REG_TYPE_NDQ;
-  int addregs = 1;
   const char *const incr_error = _("register stride must be 1 or 2");
   const char *const type_error = _("mismatched element/structure types in list");
   struct neon_typed_alias firsttype;
@@ -1903,7 +1935,6 @@ parse_neon_el_struct_list (char **str, unsigned *pbase,
           if (rtype == REG_TYPE_NQ)
             {
               reg_incr = 1;
-              addregs = 2;
             }
           firsttype = atype;
         }
@@ -2027,6 +2058,7 @@ parse_neon_el_struct_list (char **str, unsigned *pbase,
    arm_reloc_hsh contains no entries, so this function can only
    succeed if there is no () after the word.  Returns -1 on error,
    BFD_RELOC_UNUSED if there wasn't any suffix.	 */
+
 static int
 parse_reloc (char **str)
 {
@@ -2055,7 +2087,7 @@ parse_reloc (char **str)
 /* Directives: register aliases.  */
 
 static struct reg_entry *
-insert_reg_alias (char *str, int number, int type)
+insert_reg_alias (char *str, unsigned number, int type)
 {
   struct reg_entry *new_reg;
   const char *name;
@@ -2204,7 +2236,7 @@ create_neon_reg_alias (char *newname, char *p)
   struct reg_entry mybasereg;
   struct neon_type ntype;
   struct neon_typed_alias typeinfo;
-  char *namebuf, *nameend;
+  char *namebuf, *nameend ATTRIBUTE_UNUSED;
   int namelen;
 
   typeinfo.defined = 0;
@@ -2300,7 +2332,16 @@ create_neon_reg_alias (char *newname, char *p)
         }
     }
 
+  /* If TC_CASE_SENSITIVE is defined, then newname already points to
+     the desired alias name, and p points to its end.  If not, then
+     the desired alias name is in the global original_case_string.  */
+#ifdef TC_CASE_SENSITIVE
   namelen = nameend - newname;
+#else
+  newname = original_case_string;
+  namelen = strlen (newname);
+#endif
+
   namebuf = (char *) alloca (namelen + 1);
   strncpy (namebuf, newname, namelen);
   namebuf[namelen] = '\0';
@@ -2380,7 +2421,7 @@ s_unreq (int a ATTRIBUTE_UNUSED)
       if (!reg)
 	as_bad (_("unknown register alias '%s'"), name);
       else if (reg->builtin)
-	as_warn (_("ignoring attempt to undefine built-in register '%s'"),
+	as_warn (_("ignoring attempt to use .unreq on fixed register name: '%s'"),
 		 name);
       else
 	{
@@ -2490,14 +2531,27 @@ make_mapping_symbol (enum mstate state, valueT value, fragS *frag)
   /* Save the mapping symbols for future reference.  Also check that
      we do not place two mapping symbols at the same offset within a
      frag.  We'll handle overlap between frags in
-     check_mapping_symbols.  */
+     check_mapping_symbols.
+
+     If .fill or other data filling directive generates zero sized data,
+     the mapping symbol for the following code will have the same value
+     as the one generated for the data filling directive.  In this case,
+     we replace the old symbol with the new one at the same address.  */
   if (value == 0)
     {
-      know (frag->tc_frag_data.first_map == NULL);
+      if (frag->tc_frag_data.first_map != NULL)
+	{
+	  know (S_GET_VALUE (frag->tc_frag_data.first_map) == 0);
+	  symbol_remove (frag->tc_frag_data.first_map, &symbol_rootP, &symbol_lastP);
+	}
       frag->tc_frag_data.first_map = symbolP;
     }
   if (frag->tc_frag_data.last_map != NULL)
-    know (S_GET_VALUE (frag->tc_frag_data.last_map) < S_GET_VALUE (symbolP));
+    {
+      know (S_GET_VALUE (frag->tc_frag_data.last_map) <= S_GET_VALUE (symbolP));
+      if (S_GET_VALUE (frag->tc_frag_data.last_map) == S_GET_VALUE (symbolP))
+	symbol_remove (frag->tc_frag_data.last_map, &symbol_rootP, &symbol_lastP);
+    }
   frag->tc_frag_data.last_map = symbolP;
 }
 
@@ -2544,7 +2598,24 @@ mapping_state (enum mstate state)
     /* The mapping symbol has already been emitted.
        There is nothing else to do.  */
     return;
-  else if (TRANSITION (MAP_UNDEFINED, MAP_DATA))
+
+  if (state == MAP_ARM || state == MAP_THUMB)
+    /*  PR gas/12931
+	All ARM instructions require 4-byte alignment.
+	(Almost) all Thumb instructions require 2-byte alignment.
+
+	When emitting instructions into any section, mark the section
+	appropriately.
+
+	Some Thumb instructions are alignment-sensitive modulo 4 bytes,
+	but themselves require 2-byte alignment; this applies to some
+	PC- relative forms.  However, these cases will invovle implicit
+	literal pool generation or an explicit .align >=2, both of
+	which will cause the section to me marked with sufficient
+	alignment.  Thus, we don't handle those cases here.  */
+    record_alignment (now_seg, state == MAP_ARM ? 2 : 1);
+
+  if (TRANSITION (MAP_UNDEFINED, MAP_DATA))
     /* This case will be evaluated later in the next else.  */
     return;
   else if (TRANSITION (MAP_UNDEFINED, MAP_ARM)
@@ -3011,6 +3082,14 @@ add_to_lit_pool (void)
 	}
 
       pool->literals[entry] = inst.reloc.exp;
+#ifdef OBJ_ELF
+      /* PR ld/12974: Record the location of the first source line to reference
+	 this entry in the literal pool.  If it turns out during linking that the
+	 symbol does not exist we will be able to give an accurate line number for
+	 the (first use of the) missing reference.  */
+      if (debug_type == DEBUG_DWARF2)
+	dwarf2_where (pool->locs + entry);
+#endif
       pool->next_free_entry += 1;
     }
 
@@ -3108,8 +3187,14 @@ s_ltorg (int ignored ATTRIBUTE_UNUSED)
 #endif
 
   for (entry = 0; entry < pool->next_free_entry; entry ++)
-    /* First output the expression in the instruction to the pool.  */
-    emit_expr (&(pool->literals[entry]), 4); /* .word  */
+    {
+#ifdef OBJ_ELF
+      if (debug_type == DEBUG_DWARF2)
+	dwarf2_gen_line_info (frag_now_fix (), pool->locs + entry);
+#endif
+      /* First output the expression in the instruction to the pool.  */
+      emit_expr (&(pool->literals[entry]), 4); /* .word  */
+    }
 
   /* Mark the pool as empty.  */
   pool->next_free_entry = 0;
@@ -3455,6 +3540,7 @@ s_arm_unwind_fnend (int ignored ATTRIBUTE_UNUSED)
   record_alignment (now_seg, 2);
 
   ptr = frag_more (8);
+  memset (ptr, 0, 8);
   where = frag_now_fix () - 8;
 
   /* Self relative offset of the function start.  */
@@ -4239,12 +4325,37 @@ s_arm_eabi_attribute (int ignored ATTRIBUTE_UNUSED)
   if (tag < NUM_KNOWN_OBJ_ATTRIBUTES)
     attributes_set_explicitly[tag] = 1;
 }
+
+/* Emit a tls fix for the symbol.  */
+
+static void
+s_arm_tls_descseq (int ignored ATTRIBUTE_UNUSED)
+{
+  char *p;
+  expressionS exp;
+#ifdef md_flush_pending_output
+  md_flush_pending_output ();
+#endif
+
+#ifdef md_cons_align
+  md_cons_align (4);
+#endif
+
+  /* Since we're just labelling the code, there's no need to define a
+     mapping symbol.  */
+  expression (&exp);
+  p = obstack_next_free (&frchain_now->frch_obstack);
+  fix_new_arm (frag_now, p - frag_now->fr_literal, 4, &exp, 0,
+	       thumb_mode ? BFD_RELOC_ARM_THM_TLS_DESCSEQ
+	       : BFD_RELOC_ARM_TLS_DESCSEQ);
+}
 #endif /* OBJ_ELF */
 
 static void s_arm_arch (int);
 static void s_arm_object_arch (int);
 static void s_arm_cpu (int);
 static void s_arm_fpu (int);
+static void s_arm_arch_extension (int);
 
 #ifdef TE_PE
 
@@ -4298,6 +4409,7 @@ const pseudo_typeS md_pseudo_table[] =
   { "arch",	   s_arm_arch,	  0 },
   { "object_arch", s_arm_object_arch,	0 },
   { "fpu",	   s_arm_fpu,	  0 },
+  { "arch_extension", s_arm_arch_extension, 0 },
 #ifdef OBJ_ELF
   { "word",	        s_arm_elf_cons, 4 },
   { "long",	        s_arm_elf_cons, 4 },
@@ -4318,6 +4430,7 @@ const pseudo_typeS md_pseudo_table[] =
   { "setfp",		s_arm_unwind_setfp,	0 },
   { "unwind_raw",	s_arm_unwind_raw,	0 },
   { "eabi_attribute",	s_arm_eabi_attribute,	0 },
+  { "tlsdescseq",	s_arm_tls_descseq,      0 },
 #else
   { "word",	   cons, 4},
 
@@ -4387,7 +4500,7 @@ parse_big_immediate (char **str, int i)
       /* If we're on a 64-bit host, then a 64-bit number can be returned using
 	 O_constant.  We have to be careful not to break compilation for
 	 32-bit X_add_number, though.  */
-      if ((exp.X_add_number & ~0xffffffffl) != 0)
+      if ((exp.X_add_number & ~(offsetT)(0xffffffffU)) != 0)
 	{
           /* X >> 32 is illegal if sizeof (exp.X_add_number) == 4.  */
 	  inst.operands[i].reg = ((exp.X_add_number >> 16) >> 16) & 0xffffffff;
@@ -4395,14 +4508,32 @@ parse_big_immediate (char **str, int i)
 	}
     }
   else if (exp.X_op == O_big
-           && LITTLENUM_NUMBER_OF_BITS * exp.X_add_number > 32
-           && LITTLENUM_NUMBER_OF_BITS * exp.X_add_number <= 64)
+	   && LITTLENUM_NUMBER_OF_BITS * exp.X_add_number > 32)
     {
       unsigned parts = 32 / LITTLENUM_NUMBER_OF_BITS, j, idx = 0;
+
       /* Bignums have their least significant bits in
          generic_bignum[0]. Make sure we put 32 bits in imm and
          32 bits in reg,  in a (hopefully) portable way.  */
       gas_assert (parts != 0);
+
+      /* Make sure that the number is not too big.
+	 PR 11972: Bignums can now be sign-extended to the
+	 size of a .octa so check that the out of range bits
+	 are all zero or all one.  */
+      if (LITTLENUM_NUMBER_OF_BITS * exp.X_add_number > 64)
+	{
+	  LITTLENUM_TYPE m = -1;
+
+	  if (generic_bignum[parts * 2] != 0
+	      && generic_bignum[parts * 2] != m)
+	    return FAIL;
+
+	  for (j = parts * 2 + 1; j < (unsigned) exp.X_add_number; j++)
+	    if (generic_bignum[j] != generic_bignum[j-1])
+	      return FAIL;
+	}
+
       inst.operands[i].imm = 0;
       for (j = 0; j < parts; j++, idx++)
         inst.operands[i].imm |= generic_bignum[idx]
@@ -4759,10 +4890,9 @@ parse_shifter_operand (char **str, int i)
 	  return FAIL;
 	}
 
-      /* Convert to decoded value.  md_apply_fix will put it back.  */
-      inst.reloc.exp.X_add_number
-	= (((inst.reloc.exp.X_add_number << (32 - value))
-	    | (inst.reloc.exp.X_add_number >> value)) & 0xffffffff);
+      /* Encode as specified.  */
+      inst.operands[i].imm = inst.reloc.exp.X_add_number | value << 7;
+      return SUCCESS;
     }
 
   inst.reloc.type = BFD_RELOC_ARM_IMMEDIATE;
@@ -4932,6 +5062,33 @@ parse_shifter_operand_group_reloc (char **str, int i)
   /* Never reached.  */
 }
 
+/* Parse a Neon alignment expression.  Information is written to
+   inst.operands[i].  We assume the initial ':' has been skipped.
+   
+   align	.imm = align << 8, .immisalign=1, .preind=0  */
+static parse_operand_result
+parse_neon_alignment (char **str, int i)
+{
+  char *p = *str;
+  expressionS exp;
+
+  my_get_expression (&exp, &p, GE_NO_PREFIX);
+
+  if (exp.X_op != O_constant)
+    {
+      inst.error = _("alignment must be constant");
+      return PARSE_OPERAND_FAIL;
+    }
+
+  inst.operands[i].imm = exp.X_add_number << 8;
+  inst.operands[i].immisalign = 1;
+  /* Alignments are not pre-indexes.  */
+  inst.operands[i].preind = 0;
+
+  *str = p;
+  return PARSE_OPERAND_SUCCESS;
+}
+
 /* Parse all forms of an ARM address expression.  Information is written
    to inst.operands[i] and/or inst.reloc.
 
@@ -5015,22 +5172,15 @@ parse_address_main (char **str, int i, int group_relocations,
 	      return PARSE_OPERAND_FAIL;
 	}
       else if (skip_past_char (&p, ':') == SUCCESS)
-        {
-          /* FIXME: '@' should be used here, but it's filtered out by generic
-             code before we get to see it here. This may be subject to
-             change.  */
-          expressionS exp;
-          my_get_expression (&exp, &p, GE_NO_PREFIX);
-          if (exp.X_op != O_constant)
-            {
-              inst.error = _("alignment must be constant");
-              return PARSE_OPERAND_FAIL;
-            }
-          inst.operands[i].imm = exp.X_add_number << 8;
-          inst.operands[i].immisalign = 1;
-          /* Alignments are not pre-indexes.  */
-          inst.operands[i].preind = 0;
-        }
+	{
+	  /* FIXME: '@' should be used here, but it's filtered out by generic
+	     code before we get to see it here. This may be subject to
+	     change.  */
+	  parse_operand_result result = parse_neon_alignment (&p, i);
+	  
+	  if (result != PARSE_OPERAND_SUCCESS)
+	    return result;
+	}
       else
 	{
 	  if (inst.operands[i].negative)
@@ -5090,9 +5240,34 @@ parse_address_main (char **str, int i, int group_relocations,
 		}
             }
           else
-	    if (my_get_expression (&inst.reloc.exp, &p, GE_IMM_PREFIX))
-	      return PARSE_OPERAND_FAIL;
+	    {
+	      char *q = p;
+	      if (my_get_expression (&inst.reloc.exp, &p, GE_IMM_PREFIX))
+		return PARSE_OPERAND_FAIL;
+	      /* If the offset is 0, find out if it's a +0 or -0.  */
+	      if (inst.reloc.exp.X_op == O_constant
+		  && inst.reloc.exp.X_add_number == 0)
+		{
+		  skip_whitespace (q);
+		  if (*q == '#')
+		    {
+		      q++;
+		      skip_whitespace (q);
+		    }
+		  if (*q == '-')
+		    inst.operands[i].negative = 1;
+		}
+	    }
 	}
+    }
+  else if (skip_past_char (&p, ':') == SUCCESS)
+    {
+      /* FIXME: '@' should be used here, but it's filtered out by generic code
+	 before we get to see it here. This may be subject to change.  */
+      parse_operand_result result = parse_neon_alignment (&p, i);
+      
+      if (result != PARSE_OPERAND_SUCCESS)
+	return result;
     }
 
   if (skip_past_char (&p, ']') == FAIL)
@@ -5156,6 +5331,7 @@ parse_address_main (char **str, int i, int group_relocations,
 	    }
 	  else
 	    {
+	      char *q = p;
 	      if (inst.operands[i].negative)
 		{
 		  inst.operands[i].negative = 0;
@@ -5163,6 +5339,19 @@ parse_address_main (char **str, int i, int group_relocations,
 		}
 	      if (my_get_expression (&inst.reloc.exp, &p, GE_IMM_PREFIX))
 		return PARSE_OPERAND_FAIL;
+	      /* If the offset is 0, find out if it's a +0 or -0.  */
+	      if (inst.reloc.exp.X_op == O_constant
+		  && inst.reloc.exp.X_add_number == 0)
+		{
+		  skip_whitespace (q);
+		  if (*q == '#')
+		    {
+		      q++;
+		      skip_whitespace (q);
+		    }
+		  if (*q == '-')
+		    inst.operands[i].negative = 1;
+		}
 	    }
 	}
     }
@@ -5237,37 +5426,85 @@ parse_half (char **str)
 /* Parse a PSR flag operand.  The value returned is FAIL on syntax error,
    or a bitmask suitable to be or-ed into the ARM msr instruction.  */
 static int
-parse_psr (char **str)
+parse_psr (char **str, bfd_boolean lhs)
 {
   char *p;
   unsigned long psr_field;
   const struct asm_psr *psr;
   char *start;
+  bfd_boolean is_apsr = FALSE;
+  bfd_boolean m_profile = ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_m);
+
+  /* PR gas/12698:  If the user has specified -march=all then m_profile will
+     be TRUE, but we want to ignore it in this case as we are building for any
+     CPU type, including non-m variants.  */
+  if (selected_cpu.core == arm_arch_any.core)
+    m_profile = FALSE;
 
   /* CPSR's and SPSR's can now be lowercase.  This is just a convenience
      feature for ease of use and backwards compatibility.  */
   p = *str;
   if (strncasecmp (p, "SPSR", 4) == 0)
-    psr_field = SPSR_BIT;
+    {
+      if (m_profile)
+	goto unsupported_psr;
+	
+      psr_field = SPSR_BIT;
+    }
   else if (strncasecmp (p, "CPSR", 4) == 0)
-    psr_field = 0;
-  else
+    {
+      if (m_profile)
+	goto unsupported_psr;
+
+      psr_field = 0;
+    }
+  else if (strncasecmp (p, "APSR", 4) == 0)
+    {
+      /* APSR[_<bits>] can be used as a synonym for CPSR[_<flags>] on ARMv7-A
+	 and ARMv7-R architecture CPUs.  */
+      is_apsr = TRUE;
+      psr_field = 0;
+    }
+  else if (m_profile)
     {
       start = p;
       do
 	p++;
       while (ISALNUM (*p) || *p == '_');
 
+      if (strncasecmp (start, "iapsr", 5) == 0
+	  || strncasecmp (start, "eapsr", 5) == 0
+	  || strncasecmp (start, "xpsr", 4) == 0
+	  || strncasecmp (start, "psr", 3) == 0)
+	p = start + strcspn (start, "rR") + 1;
+
       psr = (const struct asm_psr *) hash_find_n (arm_v7m_psr_hsh, start,
                                                   p - start);
+
       if (!psr)
 	return FAIL;
 
+      /* If APSR is being written, a bitfield may be specified.  Note that
+	 APSR itself is handled above.  */
+      if (psr->field <= 3)
+	{
+	  psr_field = psr->field;
+	  is_apsr = TRUE;
+	  goto check_suffix;
+	}
+
       *str = p;
-      return psr->field;
+      /* M-profile MSR instructions have the mask field set to "10", except
+	 *PSR variants which modify APSR, which may use a different mask (and
+	 have been handled already).  Do that by setting the PSR_f field
+	 here.  */
+      return psr->field | (lhs ? PSR_f : 0);
     }
+  else
+    goto unsupported_psr;
 
   p += 4;
+check_suffix:
   if (*p == '_')
     {
       /* A suffix follows.  */
@@ -5278,22 +5515,105 @@ parse_psr (char **str)
 	p++;
       while (ISALNUM (*p) || *p == '_');
 
-      psr = (const struct asm_psr *) hash_find_n (arm_psr_hsh, start,
-                                                  p - start);
-      if (!psr)
-	goto error;
+      if (is_apsr)
+	{
+	  /* APSR uses a notation for bits, rather than fields.  */
+	  unsigned int nzcvq_bits = 0;
+	  unsigned int g_bit = 0;
+	  char *bit;
+	  
+	  for (bit = start; bit != p; bit++)
+	    {
+	      switch (TOLOWER (*bit))
+	        {
+		case 'n':
+		  nzcvq_bits |= (nzcvq_bits & 0x01) ? 0x20 : 0x01;
+		  break;
 
-      psr_field |= psr->field;
+		case 'z':
+		  nzcvq_bits |= (nzcvq_bits & 0x02) ? 0x20 : 0x02;
+		  break;
+
+		case 'c':
+		  nzcvq_bits |= (nzcvq_bits & 0x04) ? 0x20 : 0x04;
+		  break;
+
+		case 'v':
+		  nzcvq_bits |= (nzcvq_bits & 0x08) ? 0x20 : 0x08;
+		  break;
+		
+		case 'q':
+		  nzcvq_bits |= (nzcvq_bits & 0x10) ? 0x20 : 0x10;
+		  break;
+		
+		case 'g':
+		  g_bit |= (g_bit & 0x1) ? 0x2 : 0x1;
+		  break;
+		
+		default:
+		  inst.error = _("unexpected bit specified after APSR");
+		  return FAIL;
+		}
+	    }
+	  
+	  if (nzcvq_bits == 0x1f)
+	    psr_field |= PSR_f;
+	  
+	  if (g_bit == 0x1)
+	    {
+	      if (!ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v6_dsp))
+	        {
+		  inst.error = _("selected processor does not "
+				 "support DSP extension");
+		  return FAIL;
+		}
+
+	      psr_field |= PSR_s;
+	    }
+	  
+	  if ((nzcvq_bits & 0x20) != 0
+	      || (nzcvq_bits != 0x1f && nzcvq_bits != 0)
+	      || (g_bit & 0x2) != 0)
+	    {
+	      inst.error = _("bad bitmask specified after APSR");
+	      return FAIL;
+	    }
+	}
+      else
+        {
+	  psr = (const struct asm_psr *) hash_find_n (arm_psr_hsh, start,
+                                                      p - start);
+	  if (!psr)
+            goto error;
+
+	  psr_field |= psr->field;
+	}
     }
   else
     {
       if (ISALNUM (*p))
 	goto error;    /* Garbage after "[CS]PSR".  */
 
-      psr_field |= (PSR_c | PSR_f);
+      /* Unadorned APSR is equivalent to APSR_nzcvq/CPSR_f (for writes).  This
+         is deprecated, but allow it anyway.  */
+      if (is_apsr && lhs)
+	{
+	  psr_field |= PSR_f;
+	  as_tsktsk (_("writing to APSR without specifying a bitmask is "
+		       "deprecated"));
+	}
+      else if (!m_profile)
+	/* These bits are never right for M-profile devices: don't set them
+	   (only code paths which read/write APSR reach here).  */
+	psr_field |= (PSR_c | PSR_f);
     }
   *str = p;
   return psr_field;
+
+ unsupported_psr:
+  inst.error = _("selected processor does not support requested special "
+		 "purpose register");
+  return FAIL;
 
  error:
   inst.error = _("flag for {c}psr instruction expected");
@@ -5616,7 +5936,7 @@ parse_neon_mov (char **str, int *which_operand)
 
               inst.operands[i].reg = val;
               inst.operands[i].isreg = 1;
-              inst.operands[i++].present = 1;
+              inst.operands[i].present = 1;
             }
         }
       else if (parse_qfloat_immediate (&ptr, &inst.operands[i].imm) == SUCCESS)
@@ -5706,7 +6026,7 @@ parse_neon_mov (char **str, int *which_operand)
           inst.operands[i].isvec = 1;
           inst.operands[i].issingle = 1;
           inst.operands[i].vectype = optype;
-          inst.operands[i++].present = 1;
+          inst.operands[i].present = 1;
         }
     }
   else
@@ -5729,6 +6049,11 @@ parse_neon_mov (char **str, int *which_operand)
   return FAIL;
 }
 
+/* Use this macro when the operand constraints are different
+   for ARM and THUMB (e.g. ldrd).  */
+#define MIX_ARM_THUMB_OPERANDS(arm_operand, thumb_operand) \
+	((arm_operand) | ((thumb_operand) << 16))
+
 /* Matcher codes for parse_operands.  */
 enum operand_parse_code
 {
@@ -5736,7 +6061,10 @@ enum operand_parse_code
 
   OP_RR,	/* ARM register */
   OP_RRnpc,	/* ARM register, not r15 */
+  OP_RRnpcsp,	/* ARM register, neither r15 nor r13 (a.k.a. 'BadReg') */
   OP_RRnpcb,	/* ARM register, not r15, in square brackets */
+  OP_RRnpctw,	/* ARM register, not r15 in Thumb-state or with writeback, 
+		   optional trailing ! */
   OP_RRw,	/* ARM register, not r15, optional trailing ! */
   OP_RCP,	/* Coprocessor number */
   OP_RCN,	/* Coprocessor register */
@@ -5812,11 +6140,11 @@ enum operand_parse_code
 
   OP_CPSF,	/* CPS flags */
   OP_ENDI,	/* Endianness specifier */
-  OP_PSR,	/* CPSR/SPSR mask for msr */
+  OP_wPSR,	/* CPSR/SPSR/APSR mask for msr (writing).  */
+  OP_rPSR,	/* CPSR/SPSR/APSR mask for msr (reading).  */
   OP_COND,	/* conditional code */
   OP_TB,	/* Table branch.  */
 
-  OP_RVC_PSR,	/* CPSR/SPSR mask for msr, or VFP control register.  */
   OP_APSR_RR,   /* ARM register or "APSR_nzcv".  */
 
   OP_RRnpc_I0,	/* ARM register or literal 0 */
@@ -5830,11 +6158,13 @@ enum operand_parse_code
   OP_oI7b,	 /* immediate, prefix optional, 0 .. 7 */
   OP_oI31b,	 /*				0 .. 31 */
   OP_oI32b,      /*                             1 .. 32 */
+  OP_oI32z,      /*                             0 .. 32 */
   OP_oIffffb,	 /*				0 .. 65535 */
   OP_oI255c,	 /*	  curly-brace enclosed, 0 .. 255 */
 
   OP_oRR,	 /* ARM register */
   OP_oRRnpc,	 /* ARM register, not the PC */
+  OP_oRRnpcsp,	 /* ARM register, neither the PC nor the SP (a.k.a. BadReg) */
   OP_oRRw,	 /* ARM register, not r15, optional trailing ! */
   OP_oRND,       /* Optional Neon double precision register */
   OP_oRNQ,       /* Optional Neon quad precision register */
@@ -5844,7 +6174,12 @@ enum operand_parse_code
   OP_oSHar,	 /* ASR immediate */
   OP_oSHllar,	 /* LSL or ASR immediate */
   OP_oROR,	 /* ROR 0/8/16/24 */
-  OP_oBARRIER,	 /* Option argument for a barrier instruction.  */
+  OP_oBARRIER_I15, /* Option argument for a barrier instruction.  */
+
+  /* Some pre-defined mixed (ARM/THUMB) operands.  */
+  OP_RR_npcsp		= MIX_ARM_THUMB_OPERANDS (OP_RR, OP_RRnpcsp),
+  OP_RRnpc_npcsp	= MIX_ARM_THUMB_OPERANDS (OP_RRnpc, OP_RRnpcsp),
+  OP_oRRnpc_npcsp	= MIX_ARM_THUMB_OPERANDS (OP_oRRnpc, OP_oRRnpcsp),
 
   OP_FIRST_OPTIONAL = OP_oI7b
 };
@@ -5854,14 +6189,15 @@ enum operand_parse_code
    structure.  Returns SUCCESS or FAIL depending on whether the
    specified grammar matched.  */
 static int
-parse_operands (char *str, const unsigned char *pattern)
+parse_operands (char *str, const unsigned int *pattern, bfd_boolean thumb)
 {
-  unsigned const char *upat = pattern;
+  unsigned const int *upat = pattern;
   char *backtrack_pos = 0;
   const char *backtrack_error = 0;
   int i, val, backtrack_index = 0;
   enum arm_reg_type rtype;
   parse_operand_result result;
+  unsigned int op_parse_code;
 
 #define po_char_or_fail(chr)			\
   do						\
@@ -5948,11 +6284,40 @@ parse_operands (char *str, const unsigned char *pattern)
     }							\
   while (0)
 
+#define po_barrier_or_imm(str)				   \
+  do							   \
+    {						 	   \
+      val = parse_barrier (&str);			   \
+      if (val == FAIL)					   \
+	{						   \
+	  if (ISALPHA (*str))				   \
+	      goto failure;				   \
+	  else						   \
+	      goto immediate;				   \
+	}						   \
+      else						   \
+	{						   \
+	  if ((inst.instruction & 0xf0) == 0x60		   \
+	      && val != 0xf)				   \
+	    {						   \
+	       /* ISB can only take SY as an option.  */   \
+	       inst.error = _("invalid barrier type");	   \
+	       goto failure;				   \
+	    }						   \
+	}						   \
+    }							   \
+  while (0)
+
   skip_whitespace (str);
 
   for (i = 0; upat[i] != OP_stop; i++)
     {
-      if (upat[i] >= OP_FIRST_OPTIONAL)
+      op_parse_code = upat[i];
+      if (op_parse_code >= 1<<16)
+	op_parse_code = thumb ? (op_parse_code >> 16)
+				: (op_parse_code & ((1<<16)-1));
+
+      if (op_parse_code >= OP_FIRST_OPTIONAL)
 	{
 	  /* Remember where we are in case we need to backtrack.  */
 	  gas_assert (!backtrack_pos);
@@ -5964,11 +6329,13 @@ parse_operands (char *str, const unsigned char *pattern)
       if (i > 0 && (i > 1 || inst.operands[0].present))
 	po_char_or_fail (',');
 
-      switch (upat[i])
+      switch (op_parse_code)
 	{
 	  /* Registers */
 	case OP_oRRnpc:
+	case OP_oRRnpcsp:
 	case OP_RRnpc:
+	case OP_RRnpcsp:
 	case OP_oRR:
 	case OP_RR:    po_reg_or_fail (REG_TYPE_RN);	  break;
 	case OP_RCP:   po_reg_or_fail (REG_TYPE_CP);	  break;
@@ -6092,6 +6459,7 @@ parse_operands (char *str, const unsigned char *pattern)
 	  po_char_or_fail (']');
 	  break;
 
+	case OP_RRnpctw:
 	case OP_RRw:
 	case OP_oRRw:
 	  po_reg_or_fail (REG_TYPE_RN);
@@ -6120,6 +6488,7 @@ parse_operands (char *str, const unsigned char *pattern)
 	case OP_oI31b:
 	case OP_I31b:	 po_imm_or_fail (  0,	  31, TRUE);	break;
         case OP_oI32b:   po_imm_or_fail (  1,     32, TRUE);    break;
+        case OP_oI32z:   po_imm_or_fail (  0,     32, TRUE);    break;
 	case OP_oIffffb: po_imm_or_fail (  0, 0xffff, TRUE);	break;
 
 	  /* Immediate variants */
@@ -6243,17 +6612,27 @@ parse_operands (char *str, const unsigned char *pattern)
 	case OP_CPSF:	 val = parse_cps_flags (&str);		break;
 	case OP_ENDI:	 val = parse_endian_specifier (&str);	break;
 	case OP_oROR:	 val = parse_ror (&str);		break;
-	case OP_PSR:	 val = parse_psr (&str);		break;
 	case OP_COND:	 val = parse_cond (&str);		break;
-	case OP_oBARRIER:val = parse_barrier (&str);		break;
+	case OP_oBARRIER_I15:
+	  po_barrier_or_imm (str); break;
+	  immediate:
+	  if (parse_immediate (&str, &val, 0, 15, TRUE) == FAIL)
+            goto failure;
+	  break;
 
-        case OP_RVC_PSR:
-          po_reg_or_goto (REG_TYPE_VFC, try_psr);
-          inst.operands[i].isvec = 1;  /* Mark VFP control reg as vector.  */
-          break;
-          try_psr:
-          val = parse_psr (&str);
-          break;
+	case OP_wPSR:	 
+	case OP_rPSR:
+	  po_reg_or_goto (REG_TYPE_RNB, try_psr);
+	  if (!ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_virt))
+	    {
+	      inst.error = _("Banked registers are not available with this "
+			     "architecture.");
+	      goto failure;
+	    }
+	  break;
+	  try_psr:
+	  val = parse_psr (&str, op_parse_code == OP_wPSR);
+	  break;
 
         case OP_APSR_RR:
           po_reg_or_goto (REG_TYPE_RN, try_apsr);
@@ -6371,13 +6750,13 @@ parse_operands (char *str, const unsigned char *pattern)
 	  break;
 
 	default:
-	  as_fatal (_("unhandled operand code %d"), upat[i]);
+	  as_fatal (_("unhandled operand code %d"), op_parse_code);
 	}
 
       /* Various value-based sanity checks and shared operations.  We
 	 do not signal immediate failures for the register constraints;
 	 this allows a syntax error to take precedence.	 */
-      switch (upat[i])
+      switch (op_parse_code)
 	{
 	case OP_oRRnpc:
 	case OP_RRnpc:
@@ -6389,13 +6768,31 @@ parse_operands (char *str, const unsigned char *pattern)
 	    inst.error = BAD_PC;
 	  break;
 
+	case OP_oRRnpcsp:
+	case OP_RRnpcsp:
+	  if (inst.operands[i].isreg)
+	    {
+	      if (inst.operands[i].reg == REG_PC)
+		inst.error = BAD_PC;
+	      else if (inst.operands[i].reg == REG_SP)
+		inst.error = BAD_SP;
+	    }
+	  break;
+
+	case OP_RRnpctw:
+	  if (inst.operands[i].isreg 
+	      && inst.operands[i].reg == REG_PC 
+	      && (inst.operands[i].writeback || thumb))
+	    inst.error = BAD_PC;
+	  break;
+
 	case OP_CPSF:
 	case OP_ENDI:
 	case OP_oROR:
-	case OP_PSR:
-        case OP_RVC_PSR:
+	case OP_wPSR:
+	case OP_rPSR:
 	case OP_COND:
-	case OP_oBARRIER:
+	case OP_oBARRIER_I15:
 	case OP_REGLST:
 	case OP_VRSLST:
 	case OP_VRDLST:
@@ -6460,6 +6857,7 @@ parse_operands (char *str, const unsigned char *pattern)
 #undef po_reg_or_goto
 #undef po_imm_or_fail
 #undef po_scalar_or_fail
+#undef po_barrier_or_imm
 
 /* Shorthand macro for instruction encoding functions issuing errors.  */
 #define constraint(expr, err)			\
@@ -6625,7 +7023,11 @@ encode_arm_shifter_operand (int i)
       encode_arm_shift (i);
     }
   else
-    inst.instruction |= INST_IMMEDIATE;
+    {
+      inst.instruction |= INST_IMMEDIATE;
+      if (inst.reloc.type != BFD_RELOC_ARM_IMMEDIATE)
+	inst.instruction |= inst.operands[i].imm;
+    }
 }
 
 /* Subroutine of encode_arm_addr_mode_2 and encode_arm_addr_mode_3.  */
@@ -6674,10 +7076,15 @@ encode_arm_addr_mode_common (int i, bfd_boolean is_t)
 static void
 encode_arm_addr_mode_2 (int i, bfd_boolean is_t)
 {
+  const bfd_boolean is_pc = (inst.operands[i].reg == REG_PC);
+
   encode_arm_addr_mode_common (i, is_t);
 
   if (inst.operands[i].immisreg)
     {
+      constraint ((inst.operands[i].imm == REG_PC
+		   || (is_pc && inst.operands[i].writeback)),
+		  BAD_PC_ADDRESSING);
       inst.instruction |= INST_IMMEDIATE;  /* yes, this is backwards */
       inst.instruction |= inst.operands[i].imm;
       if (!inst.operands[i].negative)
@@ -6695,8 +7102,30 @@ encode_arm_addr_mode_2 (int i, bfd_boolean is_t)
     }
   else /* immediate offset in inst.reloc */
     {
+      if (is_pc && !inst.reloc.pc_rel)
+	{
+	  const bfd_boolean is_load = ((inst.instruction & LOAD_BIT) != 0);
+
+	  /* If is_t is TRUE, it's called from do_ldstt.  ldrt/strt
+	     cannot use PC in addressing.
+	     PC cannot be used in writeback addressing, either.  */
+	  constraint ((is_t || inst.operands[i].writeback),
+		      BAD_PC_ADDRESSING);
+
+	  /* Use of PC in str is deprecated for ARMv7.  */
+	  if (warn_on_deprecated
+	      && !is_load
+	      && ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v7))
+	    as_warn (_("use of PC in this instruction is deprecated"));
+	}
+
       if (inst.reloc.type == BFD_RELOC_UNUSED)
-	inst.reloc.type = BFD_RELOC_ARM_OFFSET_IMM;
+	{
+	  /* Prefer + for zero encoded value.  */
+	  if (!inst.operands[i].negative)
+	    inst.instruction |= INDEX_UP;
+	  inst.reloc.type = BFD_RELOC_ARM_OFFSET_IMM;
+	}
     }
 }
 
@@ -6718,15 +7147,27 @@ encode_arm_addr_mode_3 (int i, bfd_boolean is_t)
 
   if (inst.operands[i].immisreg)
     {
+      constraint ((inst.operands[i].imm == REG_PC
+		   || inst.operands[i].reg == REG_PC),
+		  BAD_PC_ADDRESSING);
       inst.instruction |= inst.operands[i].imm;
       if (!inst.operands[i].negative)
 	inst.instruction |= INDEX_UP;
     }
   else /* immediate offset in inst.reloc */
     {
+      constraint ((inst.operands[i].reg == REG_PC && !inst.reloc.pc_rel
+		   && inst.operands[i].writeback),
+		  BAD_PC_WRITEBACK);
       inst.instruction |= HWOFFSET_IMM;
       if (inst.reloc.type == BFD_RELOC_UNUSED)
-	inst.reloc.type = BFD_RELOC_ARM_OFFSET_IMM8;
+	{
+	  /* Prefer + for zero encoded value.  */
+	  if (!inst.operands[i].negative)
+	    inst.instruction |= INDEX_UP;
+
+	  inst.reloc.type = BFD_RELOC_ARM_OFFSET_IMM8;
+	}
     }
 }
 
@@ -6787,6 +7228,10 @@ encode_arm_cp_address (int i, int wb_ok, int unind_ok, int reloc_override)
       else
         inst.reloc.type = BFD_RELOC_ARM_CP_OFF_IMM;
     }
+
+  /* Prefer + for zero encoded value.  */
+  if (!inst.operands[i].negative)
+    inst.instruction |= INDEX_UP;
 
   return SUCCESS;
 }
@@ -6915,8 +7360,16 @@ do_rd_rm_rn (void)
   unsigned Rn = inst.operands[2].reg;
   /* Enforce restrictions on SWP instruction.  */
   if ((inst.instruction & 0x0fbfffff) == 0x01000090)
-    constraint (Rn == inst.operands[0].reg || Rn == inst.operands[1].reg,
-		_("Rn must not overlap other operands"));
+    {
+      constraint (Rn == inst.operands[0].reg || Rn == inst.operands[1].reg,
+		  _("Rn must not overlap other operands"));
+
+      /* SWP{b} is deprecated for ARMv6* and ARMv7.  */
+      if (warn_on_deprecated
+	  && ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v6))
+	as_warn (_("swp{b} use is deprecated for this architecture"));
+
+    }
   inst.instruction |= inst.operands[0].reg << 12;
   inst.instruction |= inst.operands[1].reg;
   inst.instruction |= Rn << 16;
@@ -6933,6 +7386,11 @@ do_rd_rn_rm (void)
 static void
 do_rm_rd_rn (void)
 {
+  constraint ((inst.operands[2].reg == REG_PC), BAD_PC);
+  constraint (((inst.reloc.exp.X_op != O_constant
+		&& inst.reloc.exp.X_op != O_illegal)
+	       || inst.reloc.exp.X_add_number != 0),
+	      BAD_ADDR_MODE);
   inst.instruction |= inst.operands[0].reg;
   inst.instruction |= inst.operands[1].reg << 12;
   inst.instruction |= inst.operands[2].reg << 16;
@@ -7004,7 +7462,8 @@ do_barrier (void)
   if (inst.operands[0].present)
     {
       constraint ((inst.instruction & 0xf0) != 0x40
-		  && inst.operands[0].imm != 0xf,
+		  && inst.operands[0].imm > 0xf
+		  && inst.operands[0].imm < 0x0,
 		  _("bad barrier type"));
       inst.instruction |= inst.operands[0].imm;
     }
@@ -7076,14 +7535,15 @@ encode_branch (int default_reloc)
 {
   if (inst.operands[0].hasreloc)
     {
-      constraint (inst.operands[0].imm != BFD_RELOC_ARM_PLT32,
-		  _("the only suffix valid here is '(plt)'"));
-      inst.reloc.type  = BFD_RELOC_ARM_PLT32;
+      constraint (inst.operands[0].imm != BFD_RELOC_ARM_PLT32
+		  && inst.operands[0].imm != BFD_RELOC_ARM_TLS_CALL,
+		  _("the only valid suffixes here are '(plt)' and '(tlscall)'"));
+      inst.reloc.type = inst.operands[0].imm == BFD_RELOC_ARM_PLT32
+	? BFD_RELOC_ARM_PLT32
+	: thumb_mode ? BFD_RELOC_ARM_THM_TLS_CALL : BFD_RELOC_ARM_TLS_CALL;
     }
   else
-    {
-      inst.reloc.type = (bfd_reloc_code_real_type) default_reloc;
-    }
+    inst.reloc.type = (bfd_reloc_code_real_type) default_reloc;
   inst.reloc.pc_rel = 1;
 }
 
@@ -7300,6 +7760,25 @@ do_dbg (void)
 }
 
 static void
+do_div (void)
+{
+  unsigned Rd, Rn, Rm;
+
+  Rd = inst.operands[0].reg;
+  Rn = (inst.operands[1].present
+	? inst.operands[1].reg : Rd);
+  Rm = inst.operands[2].reg;
+
+  constraint ((Rd == REG_PC), BAD_PC);
+  constraint ((Rn == REG_PC), BAD_PC);
+  constraint ((Rm == REG_PC), BAD_PC);
+
+  inst.instruction |= Rd << 16;
+  inst.instruction |= Rn << 0;
+  inst.instruction |= Rm << 8;
+}
+
+static void
 do_it (void)
 {
   /* There is no IT instruction in ARM mode.  We
@@ -7365,35 +7844,34 @@ static void
 do_ldrd (void)
 {
   constraint (inst.operands[0].reg % 2 != 0,
-	      _("first destination register must be even"));
+	      _("first transfer register must be even"));
   constraint (inst.operands[1].present
 	      && inst.operands[1].reg != inst.operands[0].reg + 1,
-	      _("can only load two consecutive registers"));
+	      _("can only transfer two consecutive registers"));
   constraint (inst.operands[0].reg == REG_LR, _("r14 not allowed here"));
   constraint (!inst.operands[2].isreg, _("'[' expected"));
 
   if (!inst.operands[1].present)
     inst.operands[1].reg = inst.operands[0].reg + 1;
 
-  if (inst.instruction & LOAD_BIT)
+  /* encode_arm_addr_mode_3 will diagnose overlap between the base
+     register and the first register written; we have to diagnose
+     overlap between the base and the second register written here.  */
+
+  if (inst.operands[2].reg == inst.operands[1].reg
+      && (inst.operands[2].writeback || inst.operands[2].postind))
+    as_warn (_("base register written back, and overlaps "
+	       "second transfer register"));
+
+  if (!(inst.instruction & V4_STR_BIT))
     {
-      /* encode_arm_addr_mode_3 will diagnose overlap between the base
-	 register and the first register written; we have to diagnose
-	 overlap between the base and the second register written here.	 */
-
-      if (inst.operands[2].reg == inst.operands[1].reg
-	  && (inst.operands[2].writeback || inst.operands[2].postind))
-	as_warn (_("base register written back, and overlaps "
-		   "second destination register"));
-
       /* For an index-register load, the index register must not overlap the
-	 destination (even if not write-back).	*/
-      else if (inst.operands[2].immisreg
-	       && ((unsigned) inst.operands[2].imm == inst.operands[0].reg
-		   || (unsigned) inst.operands[2].imm == inst.operands[1].reg))
-	as_warn (_("index register overlaps destination register"));
+	destination (even if not write-back).  */
+      if (inst.operands[2].immisreg
+	      && ((unsigned) inst.operands[2].imm == inst.operands[0].reg
+	      || (unsigned) inst.operands[2].imm == inst.operands[1].reg))
+	as_warn (_("index register overlaps transfer register"));
     }
-
   inst.instruction |= inst.operands[0].reg << 12;
   encode_arm_addr_mode_3 (2, /*is_t=*/FALSE);
 }
@@ -7423,6 +7901,8 @@ do_ldrex (void)
 	      || inst.reloc.exp.X_add_number != 0,
 	      _("offset must be zero in ARM encoding"));
 
+  constraint ((inst.operands[1].reg == REG_PC), BAD_PC);
+
   inst.instruction |= inst.operands[0].reg << 12;
   inst.instruction |= inst.operands[1].reg << 16;
   inst.reloc.type = BFD_RELOC_UNUSED;
@@ -7444,6 +7924,18 @@ do_ldrexd (void)
   inst.instruction |= inst.operands[2].reg << 16;
 }
 
+/* In both ARM and thumb state 'ldr pc, #imm'  with an immediate
+   which is not a multiple of four is UNPREDICTABLE.  */
+static void
+check_ldr_r15_aligned (void)
+{
+  constraint (!(inst.operands[1].immisreg)
+	      && (inst.operands[0].reg == REG_PC
+	      && inst.operands[1].reg == REG_PC
+	      && (inst.reloc.exp.X_add_number & 0x3)),
+	      _("ldr to register 15 must be 4-byte alligned"));
+}
+
 static void
 do_ldst (void)
 {
@@ -7452,6 +7944,7 @@ do_ldst (void)
     if (move_or_literal_pool (0, /*thumb_p=*/FALSE, /*mode_3=*/FALSE))
       return;
   encode_arm_addr_mode_2 (1, /*is_t=*/FALSE);
+  check_ldr_r15_aligned ();
 }
 
 static void
@@ -7637,16 +8130,30 @@ do_vmsr (void)
 static void
 do_mrs (void)
 {
+  unsigned br;
+
   if (do_vfp_nsyn_mrs () == SUCCESS)
     return;
 
-  /* mrs only accepts CPSR/SPSR/CPSR_all/SPSR_all.  */
-  constraint ((inst.operands[1].imm & (PSR_c|PSR_x|PSR_s|PSR_f))
-	      != (PSR_c|PSR_f),
-	      _("'CPSR' or 'SPSR' expected"));
   constraint (inst.operands[0].reg == REG_PC, BAD_PC);
   inst.instruction |= inst.operands[0].reg << 12;
-  inst.instruction |= (inst.operands[1].imm & SPSR_BIT);
+
+  if (inst.operands[1].isreg)
+    {
+      br = inst.operands[1].reg;
+      if (((br & 0x200) == 0) && ((br & 0xf0000) != 0xf000))
+	as_bad (_("bad register for mrs"));
+    }
+  else
+    {
+      /* mrs only accepts CPSR/SPSR/CPSR_all/SPSR_all.  */
+      constraint ((inst.operands[1].imm & (PSR_c|PSR_x|PSR_s|PSR_f))
+		  != (PSR_c|PSR_f),
+		  _("'APSR', 'CPSR' or 'SPSR' expected"));
+      br = (15<<16) | (inst.operands[1].imm & SPSR_BIT);
+    }
+
+  inst.instruction |= br;
 }
 
 /* Two possible forms:
@@ -7764,8 +8271,9 @@ do_pkhtb (void)
 }
 
 /* ARMv5TE: Preload-Cache
+   MP Extensions: Preload for write
 
-    PLD <addr_mode>
+    PLD(W) <addr_mode>
 
   Syntactically, like LDR with B=1, W=0, L=1.  */
 
@@ -7894,6 +8402,9 @@ do_shift (void)
     {
       inst.instruction |= inst.operands[2].reg << 8;
       inst.instruction |= SHIFT_BY_REG;
+      /* PR 12854: Error on extraneous shifts.  */
+      constraint (inst.operands[2].shifted,
+		  _("extraneous shift as part of operand to shift insn"));
     }
   else
     inst.reloc.type = BFD_RELOC_ARM_SHIFT_IMM;
@@ -7903,6 +8414,13 @@ static void
 do_smc (void)
 {
   inst.reloc.type = BFD_RELOC_ARM_SMC;
+  inst.reloc.pc_rel = 0;
+}
+
+static void
+do_hvc (void)
+{
+  inst.reloc.type = BFD_RELOC_ARM_HVC;
   inst.reloc.pc_rel = 0;
 }
 
@@ -8002,6 +8520,21 @@ do_strex (void)
   inst.instruction |= inst.operands[1].reg;
   inst.instruction |= inst.operands[2].reg << 16;
   inst.reloc.type = BFD_RELOC_UNUSED;
+}
+
+static void
+do_t_strexbh (void)
+{
+  constraint (!inst.operands[2].isreg || !inst.operands[2].preind
+	      || inst.operands[2].postind || inst.operands[2].writeback
+	      || inst.operands[2].immisreg || inst.operands[2].shifted
+	      || inst.operands[2].negative,
+	      BAD_ADDR_MODE);
+
+  constraint (inst.operands[0].reg == inst.operands[1].reg
+	      || inst.operands[0].reg == inst.operands[2].reg, BAD_OVERLAP);
+
+  do_rm_rd_rn ();
 }
 
 static void
@@ -8277,7 +8810,23 @@ do_vfp_dp_const (void)
 static void
 vfp_conv (int srcsize)
 {
-  unsigned immbits = srcsize - inst.operands[1].imm;
+  int immbits = srcsize - inst.operands[1].imm;
+
+  if (srcsize == 16 && !(immbits >= 0 && immbits <= srcsize)) 
+    {  
+      /* If srcsize is 16, inst.operands[1].imm must be in the range 0-16.
+         i.e. immbits must be in range 0 - 16.  */
+      inst.error = _("immediate value out of range, expected range [0, 16]");
+      return;
+    }
+  else if (srcsize == 32 && !(immbits >= 0 && immbits < srcsize)) 
+    {
+      /* If srcsize is 32, inst.operands[1].imm must be in the range 1-32.
+         i.e. immbits must be in range 0 - 31.  */
+      inst.error = _("immediate value out of range, expected range [1, 32]");
+      return;
+    }
+
   inst.instruction |= (immbits & 1) << 5;
   inst.instruction |= (immbits >> 1);
 }
@@ -8672,12 +9221,13 @@ encode_thumb32_shifted_operand (int i)
    Thumb32 format load or store instruction.  Reject forms that cannot
    be used with such instructions.  If is_t is true, reject forms that
    cannot be used with a T instruction; if is_d is true, reject forms
-   that cannot be used with a D instruction.  */
+   that cannot be used with a D instruction.  If it is a store insn,
+   reject PC in Rn.  */
 
 static void
 encode_thumb32_addr_mode (int i, bfd_boolean is_t, bfd_boolean is_d)
 {
-  bfd_boolean is_pc = (inst.operands[i].reg == REG_PC);
+  const bfd_boolean is_pc = (inst.operands[i].reg == REG_PC);
 
   constraint (!inst.operands[i].isreg,
 	      _("Instruction does not support =N addresses"));
@@ -8685,7 +9235,7 @@ encode_thumb32_addr_mode (int i, bfd_boolean is_t, bfd_boolean is_d)
   inst.instruction |= inst.operands[i].reg << 16;
   if (inst.operands[i].immisreg)
     {
-      constraint (is_pc, _("cannot use register index with PC-relative addressing"));
+      constraint (is_pc, BAD_PC_ADDRESSING);
       constraint (is_t || is_d, _("cannot use register index with this instruction"));
       constraint (inst.operands[i].negative,
 		  _("Thumb does not support negative register indexing"));
@@ -8710,10 +9260,11 @@ encode_thumb32_addr_mode (int i, bfd_boolean is_t, bfd_boolean is_d)
     }
   else if (inst.operands[i].preind)
     {
-      constraint (is_pc && inst.operands[i].writeback,
-		  _("cannot use writeback with PC-relative addressing"));
+      constraint (is_pc && inst.operands[i].writeback, BAD_PC_WRITEBACK);
       constraint (is_t && inst.operands[i].writeback,
 		  _("cannot use writeback with this instruction"));
+      constraint (is_pc && ((inst.instruction & THUMB2_LOAD_BIT) == 0)
+		  && !inst.reloc.pc_rel, BAD_PC_ADDRESSING);
 
       if (is_d)
 	{
@@ -8977,6 +9528,9 @@ do_t_add_sub (void)
 	}
       else
 	{
+	  unsigned int value = inst.reloc.exp.X_add_number;
+	  unsigned int shift = inst.operands[2].shift_kind;
+
 	  Rn = inst.operands[2].reg;
 	  /* See if we can do this with a 16-bit instruction.  */
 	  if (!inst.operands[2].shifted && inst.size_req != 4)
@@ -9027,6 +9581,10 @@ do_t_add_sub (void)
 	  inst.instruction = THUMB_OP32 (inst.instruction);
 	  inst.instruction |= Rd << 8;
 	  inst.instruction |= Rs << 16;
+	  constraint (Rd == REG_SP && Rs == REG_SP && value > 3,
+		      _("shift value over 3 not allowed in thumb mode"));
+	  constraint (Rd == REG_SP && Rs == REG_SP && shift != SHIFT_LSL,
+		      _("only LSL shift allowed in thumb mode"));
 	  encode_thumb32_shifted_operand (2);
 	}
     }
@@ -9307,7 +9865,8 @@ do_t_barrier (void)
   if (inst.operands[0].present)
     {
       constraint ((inst.instruction & 0xf0) != 0x40
-		  && inst.operands[0].imm != 0xf,
+		  && inst.operands[0].imm > 0xf
+		  && inst.operands[0].imm < 0x0,
 		  _("bad barrier type"));
       inst.instruction |= inst.operands[0].imm;
     }
@@ -9406,8 +9965,7 @@ do_t_blx (void)
     {
       /* No register.  This must be BLX(1).  */
       inst.instruction = 0xf000e800;
-      inst.reloc.type = BFD_RELOC_THUMB_PCREL_BLX;
-      inst.reloc.pc_rel = 1;
+      encode_branch (BFD_RELOC_THUMB_PCREL_BLX);
     }
 }
 
@@ -9416,6 +9974,7 @@ do_t_branch (void)
 {
   int opcode;
   int cond;
+  int reloc;
 
   cond = inst.cond;
   set_it_insn_type (IF_INSIDE_IT_LAST_INSN);
@@ -9434,33 +9993,37 @@ do_t_branch (void)
   else
     opcode = inst.instruction;
 
-  if (unified_syntax && inst.size_req == 4)
+  if (unified_syntax
+      && (inst.size_req == 4
+	  || (inst.size_req != 2
+	      && (inst.operands[0].hasreloc
+		  || inst.reloc.exp.X_op == O_constant))))
     {
       inst.instruction = THUMB_OP32(opcode);
       if (cond == COND_ALWAYS)
-	inst.reloc.type = BFD_RELOC_THUMB_PCREL_BRANCH25;
+	reloc = BFD_RELOC_THUMB_PCREL_BRANCH25;
       else
 	{
 	  gas_assert (cond != 0xF);
 	  inst.instruction |= cond << 22;
-	  inst.reloc.type = BFD_RELOC_THUMB_PCREL_BRANCH20;
+	  reloc = BFD_RELOC_THUMB_PCREL_BRANCH20;
 	}
     }
   else
     {
       inst.instruction = THUMB_OP16(opcode);
       if (cond == COND_ALWAYS)
-	inst.reloc.type = BFD_RELOC_THUMB_PCREL_BRANCH12;
+	reloc = BFD_RELOC_THUMB_PCREL_BRANCH12;
       else
 	{
 	  inst.instruction |= cond << 8;
-	  inst.reloc.type = BFD_RELOC_THUMB_PCREL_BRANCH9;
+	  reloc = BFD_RELOC_THUMB_PCREL_BRANCH9;
 	}
       /* Allow section relaxation.  */
       if (unified_syntax && inst.size_req != 2)
 	inst.relax = opcode;
     }
-
+  inst.reloc.type = reloc;
   inst.reloc.pc_rel = 1;
 }
 
@@ -9482,8 +10045,15 @@ static void
 do_t_branch23 (void)
 {
   set_it_insn_type_last ();
-  inst.reloc.type   = BFD_RELOC_THUMB_PCREL_BRANCH23;
-  inst.reloc.pc_rel = 1;
+  encode_branch (BFD_RELOC_THUMB_PCREL_BRANCH23);
+  
+  /* md_apply_fix blows up with 'bl foo(PLT)' where foo is defined in
+     this file.  We used to simply ignore the PLT reloc type here --
+     the branch encoding is now needed to deal with TLSCALL relocs.
+     So if we see a PLT reloc now, put it back to how it used to be to
+     keep the preexisting behaviour.  */
+  if (inst.reloc.type == BFD_RELOC_ARM_PLT32)
+    inst.reloc.type = BFD_RELOC_THUMB_PCREL_BRANCH23;
 
 #if defined(OBJ_COFF)
   /* If the destination of the branch is a defined symbol which does not have
@@ -9675,6 +10245,12 @@ encode_thumb2_ldmstm (int base, unsigned mask, bfd_boolean writeback)
 
   if (mask & (1 << 13))
     inst.error =  _("SP not allowed in register list");
+
+  if ((mask & (1 << base)) != 0
+      && writeback)
+    inst.error = _("having the base register in the register list when "
+		   "using write back is UNPREDICTABLE");
+
   if (load)
     {
       if (mask & (1 << 15))
@@ -9684,19 +10260,11 @@ encode_thumb2_ldmstm (int base, unsigned mask, bfd_boolean writeback)
           else
             set_it_insn_type_last ();
         }
-
-      if ((mask & (1 << base)) != 0
-	  && writeback)
-	as_warn (_("base register should not be in register list "
-		   "when written back"));
     }
   else
     {
       if (mask & (1 << 15))
 	inst.error = _("PC not allowed in register list");
-
-      if (mask & (1 << base))
-	as_warn (_("value stored for r%d is UNPREDICTABLE"), base);
     }
 
   if ((mask & (mask - 1)) == 0)
@@ -9753,30 +10321,68 @@ do_t_ldmstm (void)
 	{
 	  mask = 1 << inst.operands[0].reg;
 
-	  if (inst.operands[0].reg <= 7
-	      && (inst.instruction == T_MNEM_stmia
-		  ? inst.operands[0].writeback
-		  : (inst.operands[0].writeback
-		     == !(inst.operands[1].imm & mask))))
+	  if (inst.operands[0].reg <= 7)
 	    {
 	      if (inst.instruction == T_MNEM_stmia
-		  && (inst.operands[1].imm & mask)
-		  && (inst.operands[1].imm & (mask - 1)))
-		as_warn (_("value stored for r%d is UNPREDICTABLE"),
-			 inst.operands[0].reg);
+		  ? inst.operands[0].writeback
+		  : (inst.operands[0].writeback
+		     == !(inst.operands[1].imm & mask)))
+	        {
+		  if (inst.instruction == T_MNEM_stmia
+		      && (inst.operands[1].imm & mask)
+		      && (inst.operands[1].imm & (mask - 1)))
+		    as_warn (_("value stored for r%d is UNKNOWN"),
+			     inst.operands[0].reg);
 
-	      inst.instruction = THUMB_OP16 (inst.instruction);
-	      inst.instruction |= inst.operands[0].reg << 8;
-	      inst.instruction |= inst.operands[1].imm;
-	      narrow = TRUE;
+		  inst.instruction = THUMB_OP16 (inst.instruction);
+		  inst.instruction |= inst.operands[0].reg << 8;
+		  inst.instruction |= inst.operands[1].imm;
+		  narrow = TRUE;
+		}
+	      else if ((inst.operands[1].imm & (inst.operands[1].imm-1)) == 0)
+		{
+		  /* This means 1 register in reg list one of 3 situations:
+		     1. Instruction is stmia, but without writeback.
+		     2. lmdia without writeback, but with Rn not in
+		        reglist.
+		     3. ldmia with writeback, but with Rn in reglist.
+		     Case 3 is UNPREDICTABLE behaviour, so we handle
+		     case 1 and 2 which can be converted into a 16-bit
+		     str or ldr. The SP cases are handled below.  */
+		  unsigned long opcode;
+		  /* First, record an error for Case 3.  */
+		  if (inst.operands[1].imm & mask
+		      && inst.operands[0].writeback)
+    		    inst.error = 
+			_("having the base register in the register list when "
+			  "using write back is UNPREDICTABLE");
+		    
+		  opcode = (inst.instruction == T_MNEM_stmia ? T_MNEM_str 
+							     : T_MNEM_ldr);
+		  inst.instruction = THUMB_OP16 (opcode);
+		  inst.instruction |= inst.operands[0].reg << 3;
+		  inst.instruction |= (ffs (inst.operands[1].imm)-1);
+		  narrow = TRUE;
+		}
 	    }
-	  else if (inst.operands[0] .reg == REG_SP
-		   && inst.operands[0].writeback)
+	  else if (inst.operands[0] .reg == REG_SP)
 	    {
-	      inst.instruction = THUMB_OP16 (inst.instruction == T_MNEM_stmia
-					     ? T_MNEM_push : T_MNEM_pop);
-	      inst.instruction |= inst.operands[1].imm;
-	      narrow = TRUE;
+	      if (inst.operands[0].writeback)
+		{
+		  inst.instruction = 
+			THUMB_OP16 (inst.instruction == T_MNEM_stmia
+			            ? T_MNEM_push : T_MNEM_pop);
+		  inst.instruction |= inst.operands[1].imm;
+	          narrow = TRUE;
+		}
+	      else if ((inst.operands[1].imm & (inst.operands[1].imm-1)) == 0)
+		{
+		  inst.instruction = 
+			THUMB_OP16 (inst.instruction == T_MNEM_stmia
+			            ? T_MNEM_str_sp : T_MNEM_ldr_sp);
+		  inst.instruction |= ((ffs (inst.operands[1].imm)-1) << 8);
+	          narrow = TRUE;
+		}
 	    }
 	}
 
@@ -9802,7 +10408,7 @@ do_t_ldmstm (void)
 	    as_warn (_("this instruction will write back the base register"));
 	  if ((inst.operands[1].imm & (1 << inst.operands[0].reg))
 	      && (inst.operands[1].imm & ((1 << inst.operands[0].reg) - 1)))
-	    as_warn (_("value stored for r%d is UNPREDICTABLE"),
+	    as_warn (_("value stored for r%d is UNKNOWN"),
 		     inst.operands[0].reg);
 	}
       else
@@ -9829,6 +10435,8 @@ do_t_ldrex (void)
 	      || inst.operands[1].immisreg || inst.operands[1].shifted
 	      || inst.operands[1].negative,
 	      BAD_ADDR_MODE);
+
+  constraint ((inst.operands[1].reg == REG_PC), BAD_PC);
 
   inst.instruction |= inst.operands[0].reg << 12;
   inst.instruction |= inst.operands[1].reg << 16;
@@ -9889,6 +10497,8 @@ do_t_ldst (void)
 	      /* [Rn, Rik] */
 	      if (Rn <= 7 && inst.operands[1].imm <= 7)
 		goto op16;
+	      else if (opcode != T_MNEM_ldr && opcode != T_MNEM_str)
+		reject_bad_reg (inst.operands[1].imm);
 	    }
 	  else if ((Rn <= 7 && opcode != T_MNEM_ldrsh
 		    && opcode != T_MNEM_ldrsb)
@@ -9928,9 +10538,34 @@ do_t_ldst (void)
 	    }
 	}
       /* Definitely a 32-bit variant.  */
+
+      /* Warning for Erratum 752419.  */
+      if (opcode == T_MNEM_ldr
+	  && inst.operands[0].reg == REG_SP
+	  && inst.operands[1].writeback == 1
+	  && !inst.operands[1].immisreg)
+	{
+	  if (no_cpu_selected ()
+	      || (ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_v7)
+	          && !ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_v7a)
+	          && !ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_v7r)))
+	    as_warn (_("This instruction may be unpredictable "
+		       "if executed on M-profile cores "
+		       "with interrupts enabled."));
+	}
+
+      /* Do some validations regarding addressing modes.  */
+      if (inst.operands[1].immisreg)
+	reject_bad_reg (inst.operands[1].imm);
+
+      constraint (inst.operands[1].writeback == 1
+		  && inst.operands[0].reg == inst.operands[1].reg,
+		  BAD_OVERLAP);
+
       inst.instruction = THUMB_OP32 (opcode);
       inst.instruction |= inst.operands[0].reg << 12;
       encode_thumb32_addr_mode (1, /*is_t=*/FALSE, /*is_d=*/FALSE);
+      check_ldr_r15_aligned ();
       return;
     }
 
@@ -10021,7 +10656,16 @@ do_t_ldstd (void)
       inst.operands[1].reg = inst.operands[0].reg + 1;
       constraint (inst.operands[0].reg == REG_LR,
 		  _("r14 not allowed here"));
+      constraint (inst.operands[0].reg == REG_R12,
+                  _("r12 not allowed here"));
     }
+
+  if (inst.operands[2].writeback
+      && (inst.operands[0].reg == inst.operands[2].reg
+      || inst.operands[1].reg == inst.operands[2].reg))
+    as_warn (_("base register written back, and overlaps "
+               "one of transfer registers"));
+
   inst.instruction |= inst.operands[0].reg << 12;
   inst.instruction |= inst.operands[1].reg << 8;
   encode_thumb32_addr_mode (2, /*is_t=*/FALSE, /*is_d=*/TRUE);
@@ -10141,9 +10785,24 @@ do_t_mov_cmp (void)
 		  reject_bad_reg (Rn);
 		  reject_bad_reg (Rm);
 		}
-	      else if ((Rn == REG_SP || Rn == REG_PC)
-		       && (Rm == REG_SP || Rm == REG_PC))
-		reject_bad_reg (Rm);
+	      else if (narrow)
+		{
+		  /* This is mov.n.  */
+		  if ((Rn == REG_SP || Rn == REG_PC)
+		      && (Rm == REG_SP || Rm == REG_PC))
+		    {
+		      as_warn (_("Use of r%u as a source register is "
+				 "deprecated when r%u is the destination "
+				 "register."), Rm, Rn);
+		    }
+		}
+	      else
+		{
+		  /* This is mov.w.  */
+		  constraint (Rn == REG_PC, BAD_PC);
+		  constraint (Rm == REG_PC, BAD_PC);
+		  constraint (Rn == REG_SP && Rm == REG_SP, BAD_SP);
+		}
 	    }
 	  else
 	    reject_bad_reg (Rn);
@@ -10268,6 +10927,17 @@ do_t_mov_cmp (void)
 	switch (inst.instruction)
 	  {
 	  case T_MNEM_mov:
+	    /* In v4t or v5t a move of two lowregs produces unpredictable
+	       results. Don't allow this.  */
+	    if (low_regs)
+	      {
+		constraint (!ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_v6),
+			    "MOV Rd, Rs with two low registers is not "
+			    "permitted on this architecture");
+		ARM_MERGE_FEATURE_SETS (thumb_arch_used, thumb_arch_used, 
+					arm_ext_v6);
+	      }
+
 	    inst.instruction = T_OPCODE_MOV_HR;
 	    inst.instruction |= (Rn & 0x8) << 4;
 	    inst.instruction |= (Rn & 0x7);
@@ -10276,8 +10946,8 @@ do_t_mov_cmp (void)
 
 	  case T_MNEM_movs:
 	    /* We know we have low registers at this point.
-	       Generate ADD Rd, Rs, #0.  */
-	    inst.instruction = T_OPCODE_ADD_I3;
+	       Generate LSLS Rd, Rs, #0.  */
+	    inst.instruction = T_OPCODE_LSL_I;
 	    inst.instruction |= Rn;
 	    inst.instruction |= Rm << 3;
 	    break;
@@ -10455,34 +11125,41 @@ static void
 do_t_mrs (void)
 {
   unsigned Rd;
-  int flags;
 
   if (do_vfp_nsyn_mrs () == SUCCESS)
     return;
 
-  flags = inst.operands[1].imm & (PSR_c|PSR_x|PSR_s|PSR_f|SPSR_BIT);
-  if (flags == 0)
+  Rd = inst.operands[0].reg;
+  reject_bad_reg (Rd);
+  inst.instruction |= Rd << 8;
+
+  if (inst.operands[1].isreg)
     {
-      constraint (!ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_m),
-		  _("selected processor does not support "
-		    "requested special purpose register"));
+      unsigned br = inst.operands[1].reg;
+      if (((br & 0x200) == 0) && ((br & 0xf000) != 0xf000))
+	as_bad (_("bad register for mrs"));
+
+      inst.instruction |= br & (0xf << 16);
+      inst.instruction |= (br & 0x300) >> 4;
+      inst.instruction |= (br & SPSR_BIT) >> 2;
     }
   else
     {
-      constraint (!ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_v1),
-		  _("selected processor does not support "
-		    "requested special purpose register"));
-      /* mrs only accepts CPSR/SPSR/CPSR_all/SPSR_all.  */
-      constraint ((flags & ~SPSR_BIT) != (PSR_c|PSR_f),
-		  _("'CPSR' or 'SPSR' expected"));
+      int flags = inst.operands[1].imm & (PSR_c|PSR_x|PSR_s|PSR_f|SPSR_BIT);
+
+      if (ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_m))
+	constraint (flags != 0, _("selected processor does not support "
+        	    "requested special purpose register"));
+      else
+	/* mrs only accepts APSR/CPSR/SPSR/CPSR_all/SPSR_all (for non-M profile
+	   devices).  */
+	constraint ((flags & ~SPSR_BIT) != (PSR_c|PSR_f),
+		    _("'APSR', 'CPSR' or 'SPSR' expected"));
+
+      inst.instruction |= (flags & SPSR_BIT) >> 2;
+      inst.instruction |= inst.operands[1].imm & 0xff;
+      inst.instruction |= 0xf0000;
     }
-
-  Rd = inst.operands[0].reg;
-  reject_bad_reg (Rd);
-
-  inst.instruction |= Rd << 8;
-  inst.instruction |= (flags & SPSR_BIT) >> 2;
-  inst.instruction |= inst.operands[1].imm & 0xff;
 }
 
 static void
@@ -10496,26 +11173,33 @@ do_t_msr (void)
 
   constraint (!inst.operands[1].isreg,
 	      _("Thumb encoding does not support an immediate here"));
-  flags = inst.operands[0].imm;
-  if (flags & ~0xff)
+
+  if (inst.operands[0].isreg)
+    flags = (int)(inst.operands[0].reg);
+  else
+    flags = inst.operands[0].imm;
+
+  if (ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_m))
     {
-      constraint (!ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_v1),
-		  _("selected processor does not support "
-		    "requested special purpose register"));
+      int bits = inst.operands[0].imm & (PSR_c|PSR_x|PSR_s|PSR_f|SPSR_BIT);
+
+      constraint ((ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v6_dsp)
+		   && (bits & ~(PSR_s | PSR_f)) != 0)
+		  || (!ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v6_dsp)
+		      && bits != PSR_f),
+		  _("selected processor does not support requested special "
+		    "purpose register"));
     }
   else
-    {
-      constraint (!ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_m),
-		  _("selected processor does not support "
-		    "requested special purpose register"));
-      flags |= PSR_f;
-    }
+     constraint ((flags & 0xff) != 0, _("selected processor does not support "
+		 "requested special purpose register"));
 
   Rn = inst.operands[1].reg;
   reject_bad_reg (Rn);
 
   inst.instruction |= (flags & SPSR_BIT) >> 2;
-  inst.instruction |= (flags & ~SPSR_BIT) >> 8;
+  inst.instruction |= (flags & 0xf0000) >> 8;
+  inst.instruction |= (flags & 0x300) >> 4;
   inst.instruction |= (flags & 0xff);
   inst.instruction |= Rn << 16;
 }
@@ -10975,6 +11659,10 @@ do_t_shift (void)
 	      inst.instruction |= inst.operands[0].reg << 8;
 	      inst.instruction |= inst.operands[1].reg << 16;
 	      inst.instruction |= inst.operands[2].reg;
+
+	      /* PR 12854: Error on extraneous shifts.  */
+	      constraint (inst.operands[2].shifted,
+			  _("extraneous shift as part of operand to shift insn"));
 	    }
 	  else
 	    {
@@ -11003,6 +11691,10 @@ do_t_shift (void)
 
 	      inst.instruction |= inst.operands[0].reg;
 	      inst.instruction |= inst.operands[2].reg << 3;
+
+	      /* PR 12854: Error on extraneous shifts.  */
+	      constraint (inst.operands[2].shifted,
+			  _("extraneous shift as part of operand to shift insn"));
 	    }
 	  else
 	    {
@@ -11042,6 +11734,10 @@ do_t_shift (void)
 
 	  inst.instruction |= inst.operands[0].reg;
 	  inst.instruction |= inst.operands[2].reg << 3;
+
+	  /* PR 12854: Error on extraneous shifts.  */
+	  constraint (inst.operands[2].shifted,
+		      _("extraneous shift as part of operand to shift insn"));
 	}
       else
 	{
@@ -11100,12 +11796,24 @@ static void
 do_t_smc (void)
 {
   unsigned int value = inst.reloc.exp.X_add_number;
+  constraint (!ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_v7a),
+	      _("SMC is not permitted on this architecture"));
   constraint (inst.reloc.exp.X_op != O_constant,
 	      _("expression too complex"));
   inst.reloc.type = BFD_RELOC_UNUSED;
   inst.instruction |= (value & 0xf000) >> 12;
   inst.instruction |= (value & 0x0ff0);
   inst.instruction |= (value & 0x000f) << 16;
+}
+
+static void
+do_t_hvc (void)
+{
+  unsigned int value = inst.reloc.exp.X_add_number;
+
+  inst.reloc.type = BFD_RELOC_UNUSED;
+  inst.instruction |= (value & 0x0fff);
+  inst.instruction |= (value & 0xf000) << 4;
 }
 
 static void
@@ -11177,6 +11885,8 @@ do_t_strex (void)
 	      || inst.operands[2].negative,
 	      BAD_ADDR_MODE);
 
+  constraint (inst.operands[2].reg == REG_PC, BAD_PC);
+
   inst.instruction |= inst.operands[0].reg << 8;
   inst.instruction |= inst.operands[1].reg << 12;
   inst.instruction |= inst.operands[2].reg << 16;
@@ -11191,8 +11901,7 @@ do_t_strexd (void)
 
   constraint (inst.operands[0].reg == inst.operands[1].reg
 	      || inst.operands[0].reg == inst.operands[2].reg
-	      || inst.operands[0].reg == inst.operands[3].reg
-	      || inst.operands[1].reg == inst.operands[2].reg,
+	      || inst.operands[0].reg == inst.operands[3].reg,
 	      BAD_OVERLAP);
 
   inst.instruction |= inst.operands[0].reg;
@@ -11259,6 +11968,17 @@ do_t_sxth (void)
 static void
 do_t_swi (void)
 {
+  /* We have to do the following check manually as ARM_EXT_OS only applies
+     to ARM_EXT_V6M.  */
+  if (ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_v6m))
+    {
+      if (!ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_os)
+	  /* This only applies to the v6m howver, not later architectures.  */
+	  && ! ARM_CPU_HAS_FEATURE (cpu_variant, arm_ext_v7))
+	as_bad (_("SVC is not permitted on this architecture"));
+      ARM_MERGE_FEATURE_SETS (thumb_arch_used, thumb_arch_used, arm_ext_os);
+    }
+
   inst.reloc.type = BFD_RELOC_ARM_SWI;
 }
 
@@ -11706,8 +12426,12 @@ neon_select_shape (enum neon_shape shape, ...)
             case SE_L:
               break;
             }
+	  if (!matches)
+	    break;
         }
-      if (matches)
+      if (matches && (j >= ARM_IT_MAX_OPERANDS || !inst.operands[j].present))
+	/* We've matched all the entries in the shape table, and we don't
+	   have any left over operands which have not been matched.  */
         break;
     }
 
@@ -12043,8 +12767,17 @@ neon_check_type (unsigned els, enum neon_shape ns, ...)
             {
               if ((thisarg & N_VFP) != 0)
                 {
-                  enum neon_shape_el regshape = neon_shape_tab[ns].el[i];
-                  unsigned regwidth = neon_shape_el_size[regshape], match;
+                  enum neon_shape_el regshape;
+                  unsigned regwidth, match;
+
+		  /* PR 11136: Catch the case where we are passed a shape of NS_NULL.  */
+		  if (ns == NS_NULL)
+		    {
+		      first_error (_("invalid instruction shape"));
+		      return badtype;
+		    }
+                  regshape = neon_shape_tab[ns].el[i];
+                  regwidth = neon_shape_el_size[regshape];
 
                   /* In VFP mode, operands must match register widths. If we
                      have a key operand, use its width, else use the width of
@@ -12193,9 +12926,8 @@ try_vfp_nsyn (int args, void (*pfn) (enum neon_shape))
       pfn (rs);
       return SUCCESS;
     }
-  else
-    inst.error = NULL;
 
+  inst.error = NULL;
   return FAIL;
 }
 
@@ -14522,6 +15254,18 @@ do_neon_ldr_str (void)
 {
   int is_ldr = (inst.instruction & (1 << 20)) != 0;
 
+  /* Use of PC in vstr in ARM mode is deprecated in ARMv7.
+     And is UNPREDICTABLE in thumb mode.  */
+  if (!is_ldr 
+      && inst.operands[1].reg == REG_PC
+      && ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v7))
+    {
+      if (!thumb_mode && warn_on_deprecated)
+	as_warn (_("Use of PC here is deprecated"));
+      else
+	inst.error = _("Use of PC here is UNPREDICTABLE");
+    }
+
   if (inst.operands[0].issingle)
     {
       if (is_ldr)
@@ -14570,12 +15314,13 @@ do_neon_ld_st_interleave (void)
       {
       case 64: alignbits = 1; break;
       case 128:
-        if (NEON_REGLIST_LENGTH (inst.operands[0].imm) == 3)
+        if (NEON_REGLIST_LENGTH (inst.operands[0].imm) != 2
+	    && NEON_REGLIST_LENGTH (inst.operands[0].imm) != 4)
           goto bad_alignment;
         alignbits = 2;
         break;
       case 256:
-        if (NEON_REGLIST_LENGTH (inst.operands[0].imm) == 3)
+        if (NEON_REGLIST_LENGTH (inst.operands[0].imm) != 4)
           goto bad_alignment;
         alignbits = 3;
         break;
@@ -14879,6 +15624,29 @@ fix_new_arm (fragS *	   frag,
   switch (exp->X_op)
     {
     case O_constant:
+      if (pc_rel)
+	{
+	  /* Create an absolute valued symbol, so we have something to
+             refer to in the object file.  Unfortunately for us, gas's
+             generic expression parsing will already have folded out
+             any use of .set foo/.type foo %function that may have
+             been used to set type information of the target location,
+             that's being specified symbolically.  We have to presume
+             the user knows what they are doing.  */
+	  char name[16 + 8];
+	  symbolS *symbol;
+
+	  sprintf (name, "*ABS*0x%lx", (unsigned long)exp->X_add_number);
+
+	  symbol = symbol_find_or_make (name);
+	  S_SET_SEGMENT (symbol, absolute_section);
+	  symbol_set_frag (symbol, &zero_address_frag);
+	  S_SET_VALUE (symbol, exp->X_add_number);
+	  exp->X_op = O_symbol;
+	  exp->X_add_symbol = symbol;
+	  exp->X_add_number = 0;
+	}
+      /* FALLTHROUGH */
     case O_symbol:
     case O_add:
     case O_subtract:
@@ -15612,7 +16380,7 @@ md_assemble (char *str)
 	  || (thumb_mode == 1
 	      && !ARM_CPU_HAS_FEATURE (variant, *opcode->tvariant)))
 	{
-	  as_bad (_("selected processor does not support `%s'"), str);
+	  as_bad (_("selected processor does not support Thumb mode `%s'"), str);
 	  return;
 	}
       if (inst.cond != COND_ALWAYS && !unified_syntax
@@ -15637,7 +16405,7 @@ md_assemble (char *str)
 		inst.size_req = 2;
 	      else if (inst.size_req == 4)
 		{
-		  as_bad (_("selected processor does not support `%s'"), str);
+		  as_bad (_("selected processor does not support Thumb-2 mode `%s'"), str);
 		  return;
 		}
 	    }
@@ -15645,7 +16413,7 @@ md_assemble (char *str)
 
       inst.instruction = opcode->tvalue;
 
-      if (!parse_operands (p, opcode->operands))
+      if (!parse_operands (p, opcode->operands, /*thumb=*/TRUE))
         {
           /* Prepare the it_insn_type for those encodings that don't set
              it.  */
@@ -15703,7 +16471,7 @@ md_assemble (char *str)
 	  && !(opcode->avariant &&
 	       ARM_CPU_HAS_FEATURE (cpu_variant, *opcode->avariant)))
 	{
-	  as_bad (_("selected processor does not support `%s'"), str);
+	  as_bad (_("selected processor does not support ARM mode `%s'"), str);
 	  return;
 	}
       if (inst.size_req)
@@ -15718,7 +16486,7 @@ md_assemble (char *str)
       else
 	inst.instruction |= inst.cond << 28;
       inst.size = INSN_SIZE;
-      if (!parse_operands (p, opcode->operands))
+      if (!parse_operands (p, opcode->operands, /*thumb=*/FALSE))
         {
           it_fsm_pre_encode ();
           opcode->aencode ();
@@ -15883,6 +16651,13 @@ arm_canonicalize_symbol_name (char * name)
   REGNUM2(p, 4,t), REGNUM2(p, 5,t), REGNUM2(p, 6,t), REGNUM2(p, 7,t), \
   REGNUM2(p, 8,t), REGNUM2(p, 9,t), REGNUM2(p,10,t), REGNUM2(p,11,t), \
   REGNUM2(p,12,t), REGNUM2(p,13,t), REGNUM2(p,14,t), REGNUM2(p,15,t)
+#define SPLRBANK(base,bank,t) \
+  REGDEF(lr_##bank, 768|((base+0)<<16), t), \
+  REGDEF(sp_##bank, 768|((base+1)<<16), t), \
+  REGDEF(spsr_##bank, 768|(base<<16)|SPSR_BIT, t), \
+  REGDEF(LR_##bank, 768|((base+0)<<16), t), \
+  REGDEF(SP_##bank, 768|((base+1)<<16), t), \
+  REGDEF(SPSR_##bank, 768|(base<<16)|SPSR_BIT, t)
 
 static const struct reg_entry reg_names[] =
 {
@@ -15912,6 +16687,34 @@ static const struct reg_entry reg_names[] =
      compatibility.  */
   REGSET(c,  CN), REGSET(C, CN),
   REGSET(cr, CN), REGSET(CR, CN),
+
+  /* ARM banked registers.  */
+  REGDEF(R8_usr,512|(0<<16),RNB), REGDEF(r8_usr,512|(0<<16),RNB),
+  REGDEF(R9_usr,512|(1<<16),RNB), REGDEF(r9_usr,512|(1<<16),RNB),
+  REGDEF(R10_usr,512|(2<<16),RNB), REGDEF(r10_usr,512|(2<<16),RNB),
+  REGDEF(R11_usr,512|(3<<16),RNB), REGDEF(r11_usr,512|(3<<16),RNB),
+  REGDEF(R12_usr,512|(4<<16),RNB), REGDEF(r12_usr,512|(4<<16),RNB),
+  REGDEF(SP_usr,512|(5<<16),RNB), REGDEF(sp_usr,512|(5<<16),RNB),
+  REGDEF(LR_usr,512|(6<<16),RNB), REGDEF(lr_usr,512|(6<<16),RNB),
+
+  REGDEF(R8_fiq,512|(8<<16),RNB), REGDEF(r8_fiq,512|(8<<16),RNB),
+  REGDEF(R9_fiq,512|(9<<16),RNB), REGDEF(r9_fiq,512|(9<<16),RNB),
+  REGDEF(R10_fiq,512|(10<<16),RNB), REGDEF(r10_fiq,512|(10<<16),RNB),
+  REGDEF(R11_fiq,512|(11<<16),RNB), REGDEF(r11_fiq,512|(11<<16),RNB),
+  REGDEF(R12_fiq,512|(12<<16),RNB), REGDEF(r12_fiq,512|(12<<16),RNB),
+  REGDEF(SP_fiq,512|(13<<16),RNB), REGDEF(SP_fiq,512|(13<<16),RNB),
+  REGDEF(LR_fiq,512|(14<<16),RNB), REGDEF(lr_fiq,512|(14<<16),RNB),
+  REGDEF(SPSR_fiq,512|(14<<16)|SPSR_BIT,RNB), REGDEF(spsr_fiq,512|(14<<16)|SPSR_BIT,RNB),
+
+  SPLRBANK(0,IRQ,RNB), SPLRBANK(0,irq,RNB),
+  SPLRBANK(2,SVC,RNB), SPLRBANK(2,svc,RNB),
+  SPLRBANK(4,ABT,RNB), SPLRBANK(4,abt,RNB),
+  SPLRBANK(6,UND,RNB), SPLRBANK(6,und,RNB),
+  SPLRBANK(12,MON,RNB), SPLRBANK(12,mon,RNB),
+  REGDEF(elr_hyp,768|(14<<16),RNB), REGDEF(ELR_hyp,768|(14<<16),RNB),
+  REGDEF(sp_hyp,768|(15<<16),RNB), REGDEF(SP_hyp,768|(15<<16),RNB),
+  REGDEF(spsr_hyp,768|(14<<16)|SPSR_BIT,RNB), 
+  REGDEF(SPSR_hyp,768|(14<<16)|SPSR_BIT,RNB),
 
   /* FPA registers.  */
   REGNUM(f,0,FN), REGNUM(f,1,FN), REGNUM(f,2,FN), REGNUM(f,3,FN),
@@ -15989,6 +16792,7 @@ static const struct asm_psr psrs[] =
   {"c",	   PSR_c},
   {"x",	   PSR_x},
   {"s",	   PSR_s},
+
   /* Combinations of flags.  */
   {"fs",   PSR_f | PSR_s},
   {"fx",   PSR_f | PSR_x},
@@ -16068,6 +16872,7 @@ static const struct asm_psr v7m_psrs[] =
   {"primask",	  16}, {"PRIMASK",	16},
   {"basepri",	  17}, {"BASEPRI",	17},
   {"basepri_max", 18}, {"BASEPRI_MAX",	18},
+  {"basepri_max", 18}, {"BASEPRI_MASK",	18}, /* Typo, preserved for backwards compatibility.  */
   {"faultmask",	  19}, {"FAULTMASK",	19},
   {"control",	  20}, {"CONTROL",	20}
 };
@@ -16097,7 +16902,14 @@ static struct reloc_entry reloc_names[] =
   { "tlsldm",  BFD_RELOC_ARM_TLS_LDM32}, { "TLSLDM",  BFD_RELOC_ARM_TLS_LDM32},
   { "tlsldo",  BFD_RELOC_ARM_TLS_LDO32}, { "TLSLDO",  BFD_RELOC_ARM_TLS_LDO32},
   { "gottpoff",BFD_RELOC_ARM_TLS_IE32},  { "GOTTPOFF",BFD_RELOC_ARM_TLS_IE32},
-  { "tpoff",   BFD_RELOC_ARM_TLS_LE32},  { "TPOFF",   BFD_RELOC_ARM_TLS_LE32}
+  { "tpoff",   BFD_RELOC_ARM_TLS_LE32},  { "TPOFF",   BFD_RELOC_ARM_TLS_LE32},
+  { "got_prel", BFD_RELOC_ARM_GOT_PREL}, { "GOT_PREL", BFD_RELOC_ARM_GOT_PREL},
+  { "tlsdesc", BFD_RELOC_ARM_TLS_GOTDESC},
+  	{ "TLSDESC", BFD_RELOC_ARM_TLS_GOTDESC},
+  { "tlscall", BFD_RELOC_ARM_TLS_CALL},
+  	{ "TLSCALL", BFD_RELOC_ARM_TLS_CALL},
+  { "tlsdescseq", BFD_RELOC_ARM_TLS_DESCSEQ},
+  	{ "TLSDESCSEQ", BFD_RELOC_ARM_TLS_DESCSEQ}
 };
 #endif
 
@@ -16123,10 +16935,18 @@ static const struct asm_cond conds[] =
 
 static struct asm_barrier_opt barrier_opt_names[] =
 {
-  { "sy",   0xf },
-  { "un",   0x7 },
-  { "st",   0xe },
-  { "unst", 0x6 }
+  { "sy",    0xf }, { "SY",    0xf },
+  { "un",    0x7 }, { "UN",    0x7 },
+  { "st",    0xe }, { "ST",    0xe },
+  { "unst",  0x6 }, { "UNST",  0x6 },
+  { "ish",   0xb }, { "ISH",   0xb },
+  { "sh",    0xb }, { "SH",    0xb },
+  { "ishst", 0xa }, { "ISHST", 0xa },
+  { "shst",  0xa }, { "SHST",  0xa },
+  { "nsh",   0x7 }, { "NSH",   0x7 },
+  { "nshst", 0x6 }, { "NSHST", 0x6 },
+  { "osh",   0x3 }, { "OSH",   0x3 },
+  { "oshst", 0x2 }, { "OSHST", 0x2 }
 };
 
 /* Table of ARM-format instructions.	*/
@@ -16141,6 +16961,18 @@ static struct asm_barrier_opt barrier_opt_names[] =
 #define OPS4(a,b,c,d)	  { OP_##a,OP_##b,OP_##c,OP_##d, }
 #define OPS5(a,b,c,d,e)	  { OP_##a,OP_##b,OP_##c,OP_##d,OP_##e, }
 #define OPS6(a,b,c,d,e,f) { OP_##a,OP_##b,OP_##c,OP_##d,OP_##e,OP_##f, }
+
+/* These macros are similar to the OPSn, but do not prepend the OP_ prefix.
+   This is useful when mixing operands for ARM and THUMB, i.e. using the
+   MIX_ARM_THUMB_OPERANDS macro.
+   In order to use these macros, prefix the number of operands with _
+   e.g. _3.  */
+#define OPS_1(a)	   { a, }
+#define OPS_2(a,b)	   { a,b, }
+#define OPS_3(a,b,c)	   { a,b,c, }
+#define OPS_4(a,b,c,d)	   { a,b,c,d, }
+#define OPS_5(a,b,c,d,e)   { a,b,c,d,e, }
+#define OPS_6(a,b,c,d,e,f) { a,b,c,d,e,f, }
 
 /* These macros abstract out the exact format of the mnemonic table and
    save some repeated characters.  */
@@ -16319,9 +17151,6 @@ static struct asm_barrier_opt barrier_opt_names[] =
 
 #define do_0 0
 
-/* Thumb-only, unconditional.  */
-#define UT(mnem,  op, nops, ops, te) TUE (mnem,  0, op, nops, ops, 0, te)
-
 static const struct asm_opcode insns[] =
 {
 #define ARM_VARIANT &arm_ext_v1 /* Core ARM Instructions.  */
@@ -16362,9 +17191,11 @@ static const struct asm_opcode insns[] =
  tC3("mvns",	1f00000, _mvns,	   2, (RR, SH),      mov,  t_mvn_tst),
 
  tCE("ldr",	4100000, _ldr,	   2, (RR, ADDRGLDR),ldst, t_ldst),
- tC3("ldrb",	4500000, _ldrb,	   2, (RR, ADDRGLDR),ldst, t_ldst),
- tCE("str",	4000000, _str,	   2, (RR, ADDRGLDR),ldst, t_ldst),
- tC3("strb",	4400000, _strb,	   2, (RR, ADDRGLDR),ldst, t_ldst),
+ tC3("ldrb",	4500000, _ldrb,	   2, (RRnpc_npcsp, ADDRGLDR),ldst, t_ldst),
+ tCE("str",	4000000, _str,	   _2, (MIX_ARM_THUMB_OPERANDS (OP_RR,
+								OP_RRnpc),
+					OP_ADDRGLDR),ldst, t_ldst),
+ tC3("strb",	4400000, _strb,	   2, (RRnpc_npcsp, ADDRGLDR),ldst, t_ldst),
 
  tCE("stm",	8800000, _stmia,    2, (RRw, REGLST), ldmstm, t_ldmstm),
  tC3("stmia",	8800000, _stmia,    2, (RRw, REGLST), ldmstm, t_ldmstm),
@@ -16414,10 +17245,10 @@ static const struct asm_opcode insns[] =
  TC3w("teqs",	1300000, ea900f00, 2, (RR, SH),      cmp,  t_mvn_tst),
   CL("teqp",	130f000,           2, (RR, SH),      cmp),
 
- TC3("ldrt",	4300000, f8500e00, 2, (RR, ADDR),    ldstt, t_ldstt),
- TC3("ldrbt",	4700000, f8100e00, 2, (RR, ADDR),    ldstt, t_ldstt),
- TC3("strt",	4200000, f8400e00, 2, (RR, ADDR),    ldstt, t_ldstt),
- TC3("strbt",	4600000, f8000e00, 2, (RR, ADDR),    ldstt, t_ldstt),
+ TC3("ldrt",	4300000, f8500e00, 2, (RRnpc_npcsp, ADDR),ldstt, t_ldstt),
+ TC3("ldrbt",	4700000, f8100e00, 2, (RRnpc_npcsp, ADDR),ldstt, t_ldstt),
+ TC3("strt",	4200000, f8400e00, 2, (RR_npcsp, ADDR),   ldstt, t_ldstt),
+ TC3("strbt",	4600000, f8000e00, 2, (RRnpc_npcsp, ADDR),ldstt, t_ldstt),
 
  TC3("stmdb",	9000000, e9000000, 2, (RRw, REGLST), ldmstm, t_ldmstm),
  TC3("stmfd",     9000000, e9000000, 2, (RRw, REGLST), ldmstm, t_ldmstm),
@@ -16459,7 +17290,7 @@ static const struct asm_opcode insns[] =
  TCE("stc",	c000000, ec000000, 3, (RCP, RCN, ADDRGLDC),	        lstc,   lstc),
  TC3("stcl",	c400000, ec400000, 3, (RCP, RCN, ADDRGLDC),	        lstc,   lstc),
  TCE("mcr",	e000010, ee000010, 6, (RCP, I7b, RR, RCN, RCN, oI7b),   co_reg, co_reg),
- TCE("mrc",	e100010, ee100010, 6, (RCP, I7b, RR, RCN, RCN, oI7b),   co_reg, co_reg),
+ TCE("mrc",	e100010, ee100010, 6, (RCP, I7b, APSR_RR, RCN, RCN, oI7b),   co_reg, co_reg),
 
 #undef  ARM_VARIANT
 #define ARM_VARIANT  & arm_ext_v2s /* ARM 3 - swp instructions.  */
@@ -16472,8 +17303,8 @@ static const struct asm_opcode insns[] =
 #undef  THUMB_VARIANT
 #define THUMB_VARIANT  & arm_ext_msr
 
- TCE("mrs",	10f0000, f3ef8000, 2, (APSR_RR, RVC_PSR), mrs, t_mrs),
- TCE("msr",	120f000, f3808000, 2, (RVC_PSR, RR_EXi), msr, t_msr),
+ TCE("mrs",	1000000, f3e08000, 2, (RRnpc, rPSR), mrs, t_mrs),
+ TCE("msr",	120f000, f3808000, 2, (wPSR, RR_EXi), msr, t_msr),
 
 #undef  ARM_VARIANT
 #define ARM_VARIANT    & arm_ext_v3m	 /* ARM 7M long multiplies.  */
@@ -16494,12 +17325,12 @@ static const struct asm_opcode insns[] =
 #undef  THUMB_VARIANT
 #define THUMB_VARIANT  & arm_ext_v4t
 
- tC3("ldrh",	01000b0, _ldrh,     2, (RR, ADDRGLDRS), ldstv4, t_ldst),
- tC3("strh",	00000b0, _strh,     2, (RR, ADDRGLDRS), ldstv4, t_ldst),
- tC3("ldrsh",	01000f0, _ldrsh,    2, (RR, ADDRGLDRS), ldstv4, t_ldst),
- tC3("ldrsb",	01000d0, _ldrsb,    2, (RR, ADDRGLDRS), ldstv4, t_ldst),
- tCM("ld","sh",	01000f0, _ldrsh,    2, (RR, ADDRGLDRS), ldstv4, t_ldst),
- tCM("ld","sb",	01000d0, _ldrsb,    2, (RR, ADDRGLDRS), ldstv4, t_ldst),
+ tC3("ldrh",	01000b0, _ldrh,     2, (RRnpc_npcsp, ADDRGLDRS), ldstv4, t_ldst),
+ tC3("strh",	00000b0, _strh,     2, (RRnpc_npcsp, ADDRGLDRS), ldstv4, t_ldst),
+ tC3("ldrsh",	01000f0, _ldrsh,    2, (RRnpc_npcsp, ADDRGLDRS), ldstv4, t_ldst),
+ tC3("ldrsb",	01000d0, _ldrsb,    2, (RRnpc_npcsp, ADDRGLDRS), ldstv4, t_ldst),
+ tCM("ld","sh",	01000f0, _ldrsh,    2, (RRnpc_npcsp, ADDRGLDRS), ldstv4, t_ldst),
+ tCM("ld","sb",	01000d0, _ldrsb,    2, (RRnpc_npcsp, ADDRGLDRS), ldstv4, t_ldst),
 
 #undef  ARM_VARIANT
 #define ARM_VARIANT  & arm_ext_v4t_5
@@ -16568,8 +17399,10 @@ static const struct asm_opcode insns[] =
 #define THUMB_VARIANT &arm_ext_v6t2
 
  TUF("pld",	450f000, f810f000, 1, (ADDR),		     pld,  t_pld),
- TC3("ldrd",	00000d0, e8500000, 3, (RRnpc, oRRnpc, ADDRGLDRS), ldrd, t_ldstd),
- TC3("strd",	00000f0, e8400000, 3, (RRnpc, oRRnpc, ADDRGLDRS), ldrd, t_ldstd),
+ TC3("ldrd",	00000d0, e8500000, 3, (RRnpc_npcsp, oRRnpc_npcsp, ADDRGLDRS),
+     ldrd, t_ldstd),
+ TC3("strd",	00000f0, e8400000, 3, (RRnpc_npcsp, oRRnpc_npcsp,
+				       ADDRGLDRS), ldrd, t_ldstd),
 
  TCE("mcrr",	c400000, ec400000, 5, (RCP, I15b, RRnpc, RRnpc, RCN), co_reg2c, co_reg2c),
  TCE("mrrc",	c500000, ec500000, 5, (RCP, I15b, RRnpc, RRnpc, RCN), co_reg2c, co_reg2c),
@@ -16598,8 +17431,9 @@ static const struct asm_opcode insns[] =
 #undef  THUMB_VARIANT
 #define THUMB_VARIANT  & arm_ext_v6t2
 
- TCE("ldrex",	1900f9f, e8500f00, 2, (RRnpc, ADDR),		  ldrex, t_ldrex),
- TCE("strex",	1800f90, e8400000, 3, (RRnpc, RRnpc, ADDR),	   strex,  t_strex),
+ TCE("ldrex",	1900f9f, e8500f00, 2, (RRnpc_npcsp, ADDR),	  ldrex, t_ldrex),
+ TCE("strex",	1800f90, e8400000, 3, (RRnpc_npcsp, RRnpc_npcsp, ADDR),
+				      strex,  t_strex),
  TUF("mcrr2",	c400000, fc400000, 5, (RCP, I15b, RRnpc, RRnpc, RCN), co_reg2c, co_reg2c),
  TUF("mrrc2",	c500000, fc500000, 5, (RCP, I15b, RRnpc, RRnpc, RCN), co_reg2c, co_reg2c),
 
@@ -16733,26 +17567,42 @@ static const struct asm_opcode insns[] =
 
 #undef  THUMB_VARIANT
 #define THUMB_VARIANT  & arm_ext_v6_notm
-
- TCE("ldrexd",	1b00f9f, e8d0007f, 3, (RRnpc, oRRnpc, RRnpcb),        ldrexd, t_ldrexd),
- TCE("strexd",	1a00f90, e8c00070, 4, (RRnpc, RRnpc, oRRnpc, RRnpcb), strexd, t_strexd),
+ TCE("ldrexd",	1b00f9f, e8d0007f, 3, (RRnpc_npcsp, oRRnpc_npcsp, RRnpcb),
+				      ldrexd, t_ldrexd),
+ TCE("strexd",	1a00f90, e8c00070, 4, (RRnpc_npcsp, RRnpc_npcsp, oRRnpc_npcsp,
+				       RRnpcb), strexd, t_strexd),
 
 #undef  THUMB_VARIANT
 #define THUMB_VARIANT  & arm_ext_v6t2
-
- TCE("ldrexb",	1d00f9f, e8d00f4f, 2, (RRnpc, RRnpcb),	              rd_rn,  rd_rn),
- TCE("ldrexh",	1f00f9f, e8d00f5f, 2, (RRnpc, RRnpcb),	              rd_rn,  rd_rn),
- TCE("strexb",	1c00f90, e8c00f40, 3, (RRnpc, RRnpc, ADDR),           strex,  rm_rd_rn),
- TCE("strexh",	1e00f90, e8c00f50, 3, (RRnpc, RRnpc, ADDR),           strex,  rm_rd_rn),
+ TCE("ldrexb",	1d00f9f, e8d00f4f, 2, (RRnpc_npcsp,RRnpcb),
+     rd_rn,  rd_rn),
+ TCE("ldrexh",	1f00f9f, e8d00f5f, 2, (RRnpc_npcsp, RRnpcb),
+     rd_rn,  rd_rn),
+ TCE("strexb",	1c00f90, e8c00f40, 3, (RRnpc_npcsp, RRnpc_npcsp, ADDR),
+     strex, t_strexbh),
+ TCE("strexh",	1e00f90, e8c00f50, 3, (RRnpc_npcsp, RRnpc_npcsp, ADDR),
+     strex, t_strexbh),
  TUF("clrex",	57ff01f, f3bf8f2f, 0, (),			      noargs, noargs),
 
 #undef  ARM_VARIANT
-#define ARM_VARIANT  & arm_ext_v6z
+#define ARM_VARIANT    & arm_ext_sec
+#undef THUMB_VARIANT
+#define THUMB_VARIANT  & arm_ext_sec
 
  TCE("smc",	1600070, f7f08000, 1, (EXPi), smc, t_smc),
 
+#undef	ARM_VARIANT
+#define	ARM_VARIANT    & arm_ext_virt
+#undef	THUMB_VARIANT
+#define	THUMB_VARIANT    & arm_ext_virt
+
+ TCE("hvc",	1400070, f7e08000, 1, (EXPi), hvc, t_hvc),
+ TCE("eret",	160006e, f3de8f00, 0, (), noargs, noargs),
+
 #undef  ARM_VARIANT
 #define ARM_VARIANT  & arm_ext_v6t2
+#undef  THUMB_VARIANT
+#define THUMB_VARIANT  & arm_ext_v6t2
 
  TCE("bfc",	7c0001f, f36f0000, 3, (RRnpc, I31, I32),	   bfc, t_bfc),
  TCE("bfi",	7c00010, f3600000, 4, (RRnpc, RRnpc_I0, I31, I32), bfi, t_bfi),
@@ -16764,13 +17614,16 @@ static const struct asm_opcode insns[] =
  TCE("movt",	3400000, f2c00000, 2, (RRnpc, HALF),		    mov16, t_mov16),
  TCE("rbit",	6ff0f30, fa90f0a0, 2, (RR, RR),			    rd_rm, t_rbit),
 
- TC3("ldrht",	03000b0, f8300e00, 2, (RR, ADDR), ldsttv4, t_ldstt),
- TC3("ldrsht",	03000f0, f9300e00, 2, (RR, ADDR), ldsttv4, t_ldstt),
- TC3("ldrsbt",	03000d0, f9100e00, 2, (RR, ADDR), ldsttv4, t_ldstt),
- TC3("strht",	02000b0, f8200e00, 2, (RR, ADDR), ldsttv4, t_ldstt),
+ TC3("ldrht",	03000b0, f8300e00, 2, (RRnpc_npcsp, ADDR), ldsttv4, t_ldstt),
+ TC3("ldrsht",	03000f0, f9300e00, 2, (RRnpc_npcsp, ADDR), ldsttv4, t_ldstt),
+ TC3("ldrsbt",	03000d0, f9100e00, 2, (RRnpc_npcsp, ADDR), ldsttv4, t_ldstt),
+ TC3("strht",	02000b0, f8200e00, 2, (RRnpc_npcsp, ADDR), ldsttv4, t_ldstt),
 
-  UT("cbnz",      b900,    2, (RR, EXP), t_cbz),
-  UT("cbz",       b100,    2, (RR, EXP), t_cbz),
+ /* Thumb-only instructions.  */
+#undef ARM_VARIANT
+#define ARM_VARIANT NULL
+  TUE("cbnz",     0,           b900,     2, (RR, EXP), 0, t_cbz),
+  TUE("cbz",      0,           b100,     2, (RR, EXP), 0, t_cbz),
 
  /* ARM does not really have an IT instruction, so always allow it.
     The opcode is copied from Thumb in order to allow warnings in
@@ -16808,12 +17661,14 @@ static const struct asm_opcode insns[] =
  TCE("tbb",       0, e8d0f000, 1, (TB), 0, t_tb),
  TCE("tbh",       0, e8d0f010, 1, (TB), 0, t_tb),
 
- /* Thumb-2 hardware division instructions (R and M profiles only).  */
+ /* Hardware division instructions.  */
+#undef  ARM_VARIANT
+#define ARM_VARIANT    & arm_ext_adiv
 #undef  THUMB_VARIANT
 #define THUMB_VARIANT  & arm_ext_div
 
- TCE("sdiv",	0, fb90f0f0, 3, (RR, oRR, RR), 0, t_div),
- TCE("udiv",	0, fbb0f0f0, 3, (RR, oRR, RR), 0, t_div),
+ TCE("sdiv",	710f010, fb90f0f0, 3, (RR, oRR, RR), div, t_div),
+ TCE("udiv",	730f010, fbb0f0f0, 3, (RR, oRR, RR), div, t_div),
 
  /* ARM V6M/V7 instructions.  */
 #undef  ARM_VARIANT
@@ -16821,9 +17676,9 @@ static const struct asm_opcode insns[] =
 #undef  THUMB_VARIANT
 #define THUMB_VARIANT  & arm_ext_barrier
 
- TUF("dmb",	57ff050, f3bf8f50, 1, (oBARRIER), barrier,  t_barrier),
- TUF("dsb",	57ff040, f3bf8f40, 1, (oBARRIER), barrier,  t_barrier),
- TUF("isb",	57ff060, f3bf8f60, 1, (oBARRIER), barrier,  t_barrier),
+ TUF("dmb",	57ff050, f3bf8f50, 1, (oBARRIER_I15), barrier,  t_barrier),
+ TUF("dsb",	57ff040, f3bf8f40, 1, (oBARRIER_I15), barrier,  t_barrier),
+ TUF("isb",	57ff060, f3bf8f60, 1, (oBARRIER_I15), barrier,  t_barrier),
 
  /* ARM V7 instructions.  */
 #undef  ARM_VARIANT
@@ -16833,6 +17688,13 @@ static const struct asm_opcode insns[] =
 
  TUF("pli",	450f000, f910f000, 1, (ADDR),	  pli,	    t_pld),
  TCE("dbg",	320f0f0, f3af80f0, 1, (I15),	  dbg,	    t_dbg),
+
+#undef ARM_VARIANT
+#define ARM_VARIANT    & arm_ext_mp
+#undef THUMB_VARIANT
+#define THUMB_VARIANT  & arm_ext_mp
+
+ TUF("pldw",	410f000, f830f000, 1, (ADDR),	pld,	t_pld),
 
 #undef  ARM_VARIANT
 #define ARM_VARIANT  & fpu_fpa_ext_v1  /* Core FPA instruction set (V1).  */
@@ -17299,22 +18161,22 @@ static const struct asm_opcode insns[] =
   /* Memory operations.	 */
  cCE("flds",	d100a00, 2, (RVS, ADDRGLDC),  vfp_sp_ldst),
  cCE("fsts",	d000a00, 2, (RVS, ADDRGLDC),  vfp_sp_ldst),
- cCE("fldmias",	c900a00, 2, (RRw, VRSLST),    vfp_sp_ldstmia),
- cCE("fldmfds",	c900a00, 2, (RRw, VRSLST),    vfp_sp_ldstmia),
- cCE("fldmdbs",	d300a00, 2, (RRw, VRSLST),    vfp_sp_ldstmdb),
- cCE("fldmeas",	d300a00, 2, (RRw, VRSLST),    vfp_sp_ldstmdb),
- cCE("fldmiax",	c900b00, 2, (RRw, VRDLST),    vfp_xp_ldstmia),
- cCE("fldmfdx",	c900b00, 2, (RRw, VRDLST),    vfp_xp_ldstmia),
- cCE("fldmdbx",	d300b00, 2, (RRw, VRDLST),    vfp_xp_ldstmdb),
- cCE("fldmeax",	d300b00, 2, (RRw, VRDLST),    vfp_xp_ldstmdb),
- cCE("fstmias",	c800a00, 2, (RRw, VRSLST),    vfp_sp_ldstmia),
- cCE("fstmeas",	c800a00, 2, (RRw, VRSLST),    vfp_sp_ldstmia),
- cCE("fstmdbs",	d200a00, 2, (RRw, VRSLST),    vfp_sp_ldstmdb),
- cCE("fstmfds",	d200a00, 2, (RRw, VRSLST),    vfp_sp_ldstmdb),
- cCE("fstmiax",	c800b00, 2, (RRw, VRDLST),    vfp_xp_ldstmia),
- cCE("fstmeax",	c800b00, 2, (RRw, VRDLST),    vfp_xp_ldstmia),
- cCE("fstmdbx",	d200b00, 2, (RRw, VRDLST),    vfp_xp_ldstmdb),
- cCE("fstmfdx",	d200b00, 2, (RRw, VRDLST),    vfp_xp_ldstmdb),
+ cCE("fldmias",	c900a00, 2, (RRnpctw, VRSLST),    vfp_sp_ldstmia),
+ cCE("fldmfds",	c900a00, 2, (RRnpctw, VRSLST),    vfp_sp_ldstmia),
+ cCE("fldmdbs",	d300a00, 2, (RRnpctw, VRSLST),    vfp_sp_ldstmdb),
+ cCE("fldmeas",	d300a00, 2, (RRnpctw, VRSLST),    vfp_sp_ldstmdb),
+ cCE("fldmiax",	c900b00, 2, (RRnpctw, VRDLST),    vfp_xp_ldstmia),
+ cCE("fldmfdx",	c900b00, 2, (RRnpctw, VRDLST),    vfp_xp_ldstmia),
+ cCE("fldmdbx",	d300b00, 2, (RRnpctw, VRDLST),    vfp_xp_ldstmdb),
+ cCE("fldmeax",	d300b00, 2, (RRnpctw, VRDLST),    vfp_xp_ldstmdb),
+ cCE("fstmias",	c800a00, 2, (RRnpctw, VRSLST),    vfp_sp_ldstmia),
+ cCE("fstmeas",	c800a00, 2, (RRnpctw, VRSLST),    vfp_sp_ldstmia),
+ cCE("fstmdbs",	d200a00, 2, (RRnpctw, VRSLST),    vfp_sp_ldstmdb),
+ cCE("fstmfds",	d200a00, 2, (RRnpctw, VRSLST),    vfp_sp_ldstmdb),
+ cCE("fstmiax",	c800b00, 2, (RRnpctw, VRDLST),    vfp_xp_ldstmia),
+ cCE("fstmeax",	c800b00, 2, (RRnpctw, VRDLST),    vfp_xp_ldstmia),
+ cCE("fstmdbx",	d200b00, 2, (RRnpctw, VRDLST),    vfp_xp_ldstmdb),
+ cCE("fstmfdx",	d200b00, 2, (RRnpctw, VRDLST),    vfp_xp_ldstmdb),
 
   /* Monadic operations.  */
  cCE("fabss",	eb00ac0, 2, (RVS, RVS),	      vfp_sp_monadic),
@@ -17342,14 +18204,14 @@ static const struct asm_opcode insns[] =
     implementations.  */
  cCE("fldd",	d100b00, 2, (RVD, ADDRGLDC),  vfp_dp_ldst),
  cCE("fstd",	d000b00, 2, (RVD, ADDRGLDC),  vfp_dp_ldst),
- cCE("fldmiad",	c900b00, 2, (RRw, VRDLST),    vfp_dp_ldstmia),
- cCE("fldmfdd",	c900b00, 2, (RRw, VRDLST),    vfp_dp_ldstmia),
- cCE("fldmdbd",	d300b00, 2, (RRw, VRDLST),    vfp_dp_ldstmdb),
- cCE("fldmead",	d300b00, 2, (RRw, VRDLST),    vfp_dp_ldstmdb),
- cCE("fstmiad",	c800b00, 2, (RRw, VRDLST),    vfp_dp_ldstmia),
- cCE("fstmead",	c800b00, 2, (RRw, VRDLST),    vfp_dp_ldstmia),
- cCE("fstmdbd",	d200b00, 2, (RRw, VRDLST),    vfp_dp_ldstmdb),
- cCE("fstmfdd",	d200b00, 2, (RRw, VRDLST),    vfp_dp_ldstmdb),
+ cCE("fldmiad",	c900b00, 2, (RRnpctw, VRDLST),    vfp_dp_ldstmia),
+ cCE("fldmfdd",	c900b00, 2, (RRnpctw, VRDLST),    vfp_dp_ldstmia),
+ cCE("fldmdbd",	d300b00, 2, (RRnpctw, VRDLST),    vfp_dp_ldstmdb),
+ cCE("fldmead",	d300b00, 2, (RRnpctw, VRDLST),    vfp_dp_ldstmdb),
+ cCE("fstmiad",	c800b00, 2, (RRnpctw, VRDLST),    vfp_dp_ldstmia),
+ cCE("fstmead",	c800b00, 2, (RRnpctw, VRDLST),    vfp_dp_ldstmia),
+ cCE("fstmdbd",	d200b00, 2, (RRnpctw, VRDLST),    vfp_dp_ldstmdb),
+ cCE("fstmfdd",	d200b00, 2, (RRnpctw, VRDLST),    vfp_dp_ldstmdb),
 
 #undef  ARM_VARIANT
 #define ARM_VARIANT  & fpu_vfp_ext_v1 /* VFP V1 (Double precision).  */
@@ -17429,16 +18291,16 @@ static const struct asm_opcode insns[] =
  NCEF(vabs,     1b10300, 2, (RNSDQ, RNSDQ), neon_abs_neg),
  NCEF(vneg,     1b10380, 2, (RNSDQ, RNSDQ), neon_abs_neg),
 
- NCE(vldm,      c900b00, 2, (RRw, VRSDLST), neon_ldm_stm),
- NCE(vldmia,    c900b00, 2, (RRw, VRSDLST), neon_ldm_stm),
- NCE(vldmdb,    d100b00, 2, (RRw, VRSDLST), neon_ldm_stm),
- NCE(vstm,      c800b00, 2, (RRw, VRSDLST), neon_ldm_stm),
- NCE(vstmia,    c800b00, 2, (RRw, VRSDLST), neon_ldm_stm),
- NCE(vstmdb,    d000b00, 2, (RRw, VRSDLST), neon_ldm_stm),
+ NCE(vldm,      c900b00, 2, (RRnpctw, VRSDLST), neon_ldm_stm),
+ NCE(vldmia,    c900b00, 2, (RRnpctw, VRSDLST), neon_ldm_stm),
+ NCE(vldmdb,    d100b00, 2, (RRnpctw, VRSDLST), neon_ldm_stm),
+ NCE(vstm,      c800b00, 2, (RRnpctw, VRSDLST), neon_ldm_stm),
+ NCE(vstmia,    c800b00, 2, (RRnpctw, VRSDLST), neon_ldm_stm),
+ NCE(vstmdb,    d000b00, 2, (RRnpctw, VRSDLST), neon_ldm_stm),
  NCE(vldr,      d100b00, 2, (RVSD, ADDRGLDC), neon_ldr_str),
  NCE(vstr,      d000b00, 2, (RVSD, ADDRGLDC), neon_ldr_str),
 
- nCEF(vcvt,     _vcvt,   3, (RNSDQ, RNSDQ, oI32b), neon_cvt),
+ nCEF(vcvt,     _vcvt,   3, (RNSDQ, RNSDQ, oI32z), neon_cvt),
  nCEF(vcvtr,    _vcvt,   2, (RNSDQ, RNSDQ), neon_cvtr),
  nCEF(vcvtb,	_vcvt,	 2, (RVS, RVS), neon_cvtb),
  nCEF(vcvtt,	_vcvt,	 2, (RVS, RVS), neon_cvtt),
@@ -18401,7 +19263,8 @@ relax_adr (fragS *fragp, asection *sec, long stretch)
   /* Assume worst case for symbols not known to be in the same section.  */
   if (fragp->fr_symbol == NULL
       || !S_IS_DEFINED (fragp->fr_symbol)
-      || sec != S_GET_SEGMENT (fragp->fr_symbol))
+      || sec != S_GET_SEGMENT (fragp->fr_symbol)
+      || S_IS_WEAK (fragp->fr_symbol))
     return 4;
 
   val = relaxed_symbol_addr (fragp, stretch);
@@ -18444,13 +19307,20 @@ relax_branch (fragS *fragp, asection *sec, int bits, long stretch)
 
   /* Assume worst case for symbols not known to be in the same section.  */
   if (!S_IS_DEFINED (fragp->fr_symbol)
-      || sec != S_GET_SEGMENT (fragp->fr_symbol))
+      || sec != S_GET_SEGMENT (fragp->fr_symbol)
+      || S_IS_WEAK (fragp->fr_symbol))
     return 4;
 
 #ifdef OBJ_ELF
   if (S_IS_DEFINED (fragp->fr_symbol)
       && ARM_IS_FUNC (fragp->fr_symbol))
       return 4;
+
+  /* PR 12532.  Global symbols with default visibility might
+     be preempted, so do not relax relocations to them.  */
+  if ((ELF_ST_VISIBILITY (S_GET_OTHER (fragp->fr_symbol)) == STV_DEFAULT)
+      && (! S_IS_LOCAL (fragp->fr_symbol)))
+    return 4;
 #endif
 
   val = relaxed_symbol_addr (fragp, stretch);
@@ -19057,8 +19927,12 @@ create_unwind_entry (int have_data)
 	size = unwind.opcode_count - 2;
     }
   else
-    /* An extra byte is required for the opcode count.	*/
-    size = unwind.opcode_count + 1;
+    {
+      gas_assert (unwind.personality_index == -1);
+
+      /* An extra byte is required for the opcode count.	*/
+      size = unwind.opcode_count + 1;
+    }
 
   size = (size + 3) >> 2;
   if (size > 0xff)
@@ -19070,6 +19944,8 @@ create_unwind_entry (int have_data)
 
   /* Allocate the table entry.	*/
   ptr = frag_more ((size << 2) + 4);
+  /* PR 13449: Zero the table entries in case some of them are not used.  */
+  memset (ptr, 0, (size << 2) + 4);
   where = frag_now_fix () - ((size << 2) + 4);
 
   switch (unwind.personality_index)
@@ -19084,7 +19960,7 @@ create_unwind_entry (int have_data)
       ptr += 4;
 
       /* Set the first byte to the number of additional words.	*/
-      data = size - 1;
+      data = size > 0 ? size - 1 : 0;
       n = 3;
       break;
 
@@ -19232,7 +20108,9 @@ md_pcrel_from_section (fixS * fixP, segT seg)
       return base + 4;
 
     case BFD_RELOC_THUMB_PCREL_BRANCH23:
-       if (fixP->fx_addsy
+      if (fixP->fx_addsy
+	  && (S_GET_SEGMENT (fixP->fx_addsy) == seg)
+	  && !S_FORCE_RELOC (fixP->fx_addsy, TRUE)
 	  && ARM_IS_FUNC (fixP->fx_addsy)
  	  && ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v5t))
  	base = fixP->fx_where + fixP->fx_frag->fr_address;
@@ -19240,8 +20118,10 @@ md_pcrel_from_section (fixS * fixP, segT seg)
 
       /* BLX is like branches above, but forces the low two bits of PC to
 	 zero.  */
-     case BFD_RELOC_THUMB_PCREL_BLX:
-       if (fixP->fx_addsy
+    case BFD_RELOC_THUMB_PCREL_BLX:
+      if (fixP->fx_addsy
+	  && (S_GET_SEGMENT (fixP->fx_addsy) == seg)
+	  && !S_FORCE_RELOC (fixP->fx_addsy, TRUE)
  	  && THUMB_IS_FUNC (fixP->fx_addsy)
  	  && ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v5t))
  	base = fixP->fx_where + fixP->fx_frag->fr_address;
@@ -19250,18 +20130,22 @@ md_pcrel_from_section (fixS * fixP, segT seg)
       /* ARM mode branches are offset by +8.  However, the Windows CE
 	 loader expects the relocation not to take this into account.  */
     case BFD_RELOC_ARM_PCREL_BLX:
-       if (fixP->fx_addsy
+      if (fixP->fx_addsy
+	  && (S_GET_SEGMENT (fixP->fx_addsy) == seg)
+	  && !S_FORCE_RELOC (fixP->fx_addsy, TRUE)
  	  && ARM_IS_FUNC (fixP->fx_addsy)
  	  && ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v5t))
  	base = fixP->fx_where + fixP->fx_frag->fr_address;
-       return base + 8;
+      return base + 8;
 
-      case BFD_RELOC_ARM_PCREL_CALL:
-       if (fixP->fx_addsy
+    case BFD_RELOC_ARM_PCREL_CALL:
+      if (fixP->fx_addsy
+	  && (S_GET_SEGMENT (fixP->fx_addsy) == seg)
+	  && !S_FORCE_RELOC (fixP->fx_addsy, TRUE)
  	  && THUMB_IS_FUNC (fixP->fx_addsy)
  	  && ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v5t))
  	base = fixP->fx_where + fixP->fx_frag->fr_address;
-       return base + 8;
+      return base + 8;
 
     case BFD_RELOC_ARM_PCREL_BRANCH:
     case BFD_RELOC_ARM_PCREL_JUMP:
@@ -19647,22 +20531,23 @@ md_apply_fix (fixS *	fixP,
 	 not have a reloc for it, so tc_gen_reloc will reject it.  */
       fixP->fx_done = 1;
 
-      if (fixP->fx_addsy
-	  && ! S_IS_DEFINED (fixP->fx_addsy))
+      if (fixP->fx_addsy)
 	{
-	  as_bad_where (fixP->fx_file, fixP->fx_line,
-			_("undefined symbol %s used as an immediate value"),
-			S_GET_NAME (fixP->fx_addsy));
-	  break;
-	}
+	  const char *msg = 0;
 
-      if (fixP->fx_addsy
-	  && S_GET_SEGMENT (fixP->fx_addsy) != seg)
-	{
-	  as_bad_where (fixP->fx_file, fixP->fx_line,
-			_("symbol %s is in a different section"),
-			S_GET_NAME (fixP->fx_addsy));
-	  break;
+	  if (! S_IS_DEFINED (fixP->fx_addsy))
+	    msg = _("undefined symbol %s used as an immediate value");
+	  else if (S_GET_SEGMENT (fixP->fx_addsy) != seg)
+	    msg = _("symbol %s is in a different section");
+	  else if (S_IS_WEAK (fixP->fx_addsy))
+	    msg = _("symbol %s is weak and may be overridden later");
+
+	  if (msg)
+	    {
+	      as_bad_where (fixP->fx_file, fixP->fx_line,
+			    msg, S_GET_NAME (fixP->fx_addsy));
+	      break;
+	    }
 	}
 
       newimm = encode_arm_immediate (value);
@@ -19688,24 +20573,25 @@ md_apply_fix (fixS *	fixP,
 	unsigned int highpart = 0;
 	unsigned int newinsn  = 0xe1a00000; /* nop.  */
 
-	if (fixP->fx_addsy
-	    && ! S_IS_DEFINED (fixP->fx_addsy))
+	if (fixP->fx_addsy)
 	  {
-	    as_bad_where (fixP->fx_file, fixP->fx_line,
-			  _("undefined symbol %s used as an immediate value"),
-			  S_GET_NAME (fixP->fx_addsy));
-	    break;
-	  }
+	    const char *msg = 0;
 
-	if (fixP->fx_addsy
-	    && S_GET_SEGMENT (fixP->fx_addsy) != seg)
-	  {
-	    as_bad_where (fixP->fx_file, fixP->fx_line,
-			  _("symbol %s is in a different section"),
-			  S_GET_NAME (fixP->fx_addsy));
-	    break;
-	  }
+	    if (! S_IS_DEFINED (fixP->fx_addsy))
+	      msg = _("undefined symbol %s used as an immediate value");
+	    else if (S_GET_SEGMENT (fixP->fx_addsy) != seg)
+	      msg = _("symbol %s is in a different section");
+	    else if (S_IS_WEAK (fixP->fx_addsy))
+	      msg = _("symbol %s is weak and may be overridden later");
 
+	    if (msg)
+	      {
+		as_bad_where (fixP->fx_file, fixP->fx_line,
+			      msg, S_GET_NAME (fixP->fx_addsy));
+		break;
+	      }
+	  }
+	
 	newimm = encode_arm_immediate (value);
 	temp = md_chars_to_number (buf, INSN_SIZE);
 
@@ -19755,7 +20641,7 @@ md_apply_fix (fixS *	fixP,
 	value = 0;
 
     case BFD_RELOC_ARM_LITERAL:
-      sign = value >= 0;
+      sign = value > 0;
 
       if (value < 0)
 	value = - value;
@@ -19773,14 +20659,19 @@ md_apply_fix (fixS *	fixP,
 	}
 
       newval = md_chars_to_number (buf, INSN_SIZE);
-      newval &= 0xff7ff000;
-      newval |= value | (sign ? INDEX_UP : 0);
+      if (value == 0)
+	newval &= 0xfffff000;
+      else
+	{
+	  newval &= 0xff7ff000;
+	  newval |= value | (sign ? INDEX_UP : 0);
+	}
       md_number_to_chars (buf, newval, INSN_SIZE);
       break;
 
     case BFD_RELOC_ARM_OFFSET_IMM8:
     case BFD_RELOC_ARM_HWLITERAL:
-      sign = value >= 0;
+      sign = value > 0;
 
       if (value < 0)
 	value = - value;
@@ -19797,8 +20688,13 @@ md_apply_fix (fixS *	fixP,
 	}
 
       newval = md_chars_to_number (buf, INSN_SIZE);
-      newval &= 0xff7ff0f0;
-      newval |= ((value >> 4) << 8) | (value & 0xf) | (sign ? INDEX_UP : 0);
+      if (value == 0)
+	newval &= 0xfffff0f0;
+      else
+	{
+	  newval &= 0xff7ff0f0;
+	  newval |= ((value >> 4) << 8) | (value & 0xf) | (sign ? INDEX_UP : 0);
+	}
       md_number_to_chars (buf, newval, INSN_SIZE);
       break;
 
@@ -19985,17 +20881,20 @@ md_apply_fix (fixS *	fixP,
 	  /* Turn add/sum into addw/subw.  */
 	  if (fixP->fx_r_type == BFD_RELOC_ARM_T32_ADD_IMM)
 	    newval = (newval & 0xfeffffff) | 0x02000000;
-
-	  /* 12 bit immediate for addw/subw.  */
-	  if (value < 0)
+	  /* No flat 12-bit imm encoding for addsw/subsw.  */
+	  if ((newval & 0x00100000) == 0)
 	    {
-	      value = -value;
-	      newval ^= 0x00a00000;
+	      /* 12 bit immediate for addw/subw.  */
+	      if (value < 0)
+		{
+		  value = -value;
+		  newval ^= 0x00a00000;
+		}
+	      if (value > 0xfff)
+		newimm = (unsigned int) FAIL;
+	      else
+		newimm = value;
 	    }
-	  if (value > 0xfff)
-	    newimm = (unsigned int) FAIL;
-	  else
-	    newimm = value;
 	}
 
       if (newimm == (unsigned int)FAIL)
@@ -20018,6 +20917,15 @@ md_apply_fix (fixS *	fixP,
       if (((unsigned long) value) > 0xffff)
 	as_bad_where (fixP->fx_file, fixP->fx_line,
 		      _("invalid smc expression"));
+      newval = md_chars_to_number (buf, INSN_SIZE);
+      newval |= (value & 0xf) | ((value & 0xfff0) << 4);
+      md_number_to_chars (buf, newval, INSN_SIZE);
+      break;
+
+    case BFD_RELOC_ARM_HVC:
+      if (((unsigned long) value) > 0xffff)
+	as_bad_where (fixP->fx_file, fixP->fx_line,
+		      _("invalid hvc expression"));
       newval = md_chars_to_number (buf, INSN_SIZE);
       newval |= (value & 0xf) | ((value & 0xfff0) << 4);
       md_number_to_chars (buf, newval, INSN_SIZE);
@@ -20057,7 +20965,7 @@ md_apply_fix (fixS *	fixP,
 
       if (ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v5t)
 	  && fixP->fx_addsy
-	  && !S_IS_EXTERNAL (fixP->fx_addsy)
+	  && !S_FORCE_RELOC (fixP->fx_addsy, TRUE)
 	  && (S_GET_SEGMENT (fixP->fx_addsy) == seg)
 	  && THUMB_IS_FUNC (fixP->fx_addsy))
 	/* Flip the bl to blx. This is a simple flip
@@ -20077,7 +20985,7 @@ md_apply_fix (fixS *	fixP,
     case BFD_RELOC_ARM_PCREL_JUMP:
       if (ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v5t)
 	  && fixP->fx_addsy
-	  && !S_IS_EXTERNAL (fixP->fx_addsy)
+	  && !S_FORCE_RELOC (fixP->fx_addsy, TRUE)
 	  && (S_GET_SEGMENT (fixP->fx_addsy) == seg)
 	  && THUMB_IS_FUNC (fixP->fx_addsy))
 	{
@@ -20100,7 +21008,7 @@ md_apply_fix (fixS *	fixP,
       temp = 1;
       if (ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v5t)
 	  && fixP->fx_addsy
-	  && !S_IS_EXTERNAL (fixP->fx_addsy)
+	  && !S_FORCE_RELOC (fixP->fx_addsy, TRUE)
 	  && (S_GET_SEGMENT (fixP->fx_addsy) == seg)
 	  && ARM_IS_FUNC (fixP->fx_addsy))
 	{
@@ -20130,8 +21038,7 @@ md_apply_fix (fixS *	fixP,
 		      _("misaligned branch destination"));
       if ((value & (offsetT)0xfe000000) != (offsetT)0
 	  && (value & (offsetT)0xfe000000) != (offsetT)0xfe000000)
-	as_bad_where (fixP->fx_file, fixP->fx_line,
-		      _("branch out of range"));
+	as_bad_where (fixP->fx_file, fixP->fx_line, BAD_RANGE);
 
       if (fixP->fx_done || !seg->use_rela_p)
 	{
@@ -20167,8 +21074,7 @@ md_apply_fix (fixS *	fixP,
       else
 	{
 	  if (value & ~0x7e)
-	    as_bad_where (fixP->fx_file, fixP->fx_line,
-		          _("branch out of range"));
+	    as_bad_where (fixP->fx_file, fixP->fx_line, BAD_RANGE);
 
           if (fixP->fx_done || !seg->use_rela_p)
 	    {
@@ -20181,8 +21087,7 @@ md_apply_fix (fixS *	fixP,
 
     case BFD_RELOC_THUMB_PCREL_BRANCH9: /* Conditional branch.	*/
       if ((value & ~0xff) && ((value & ~0xff) != ~0xff))
-	as_bad_where (fixP->fx_file, fixP->fx_line,
-		      _("branch out of range"));
+	as_bad_where (fixP->fx_file, fixP->fx_line, BAD_RANGE);
 
       if (fixP->fx_done || !seg->use_rela_p)
 	{
@@ -20194,8 +21099,7 @@ md_apply_fix (fixS *	fixP,
 
     case BFD_RELOC_THUMB_PCREL_BRANCH12: /* Unconditional branch.  */
       if ((value & ~0x7ff) && ((value & ~0x7ff) != ~0x7ff))
-	as_bad_where (fixP->fx_file, fixP->fx_line,
-		      _("branch out of range"));
+	as_bad_where (fixP->fx_file, fixP->fx_line, BAD_RANGE);
 
       if (fixP->fx_done || !seg->use_rela_p)
 	{
@@ -20208,15 +21112,14 @@ md_apply_fix (fixS *	fixP,
     case BFD_RELOC_THUMB_PCREL_BRANCH20:
       if (fixP->fx_addsy
 	  && (S_GET_SEGMENT (fixP->fx_addsy) == seg)
-	  && !S_IS_EXTERNAL (fixP->fx_addsy)
-	  && S_IS_DEFINED (fixP->fx_addsy)
+	  && !S_FORCE_RELOC (fixP->fx_addsy, TRUE)
 	  && ARM_IS_FUNC (fixP->fx_addsy)
 	  && ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v5t))
 	{
 	  /* Force a relocation for a branch 20 bits wide.  */
 	  fixP->fx_done = 0;
 	}
-      if ((value & ~0x1fffff) && ((value & ~0x1fffff) != ~0x1fffff))
+      if ((value & ~0x1fffff) && ((value & ~0x0fffff) != ~0x0fffff))
 	as_bad_where (fixP->fx_file, fixP->fx_line,
 		      _("conditional branch out of range"));
 
@@ -20241,14 +21144,12 @@ md_apply_fix (fixS *	fixP,
       break;
 
     case BFD_RELOC_THUMB_PCREL_BLX:
-
       /* If there is a blx from a thumb state function to
 	 another thumb function flip this to a bl and warn
 	 about it.  */
 
       if (fixP->fx_addsy
-	  && S_IS_DEFINED (fixP->fx_addsy)
-	  && !S_IS_EXTERNAL (fixP->fx_addsy)
+	  && !S_FORCE_RELOC (fixP->fx_addsy, TRUE)
 	  && (S_GET_SEGMENT (fixP->fx_addsy) == seg)
 	  && THUMB_IS_FUNC (fixP->fx_addsy))
 	{
@@ -20267,13 +21168,11 @@ md_apply_fix (fixS *	fixP,
       goto thumb_bl_common;
 
     case BFD_RELOC_THUMB_PCREL_BRANCH23:
-
       /* A bl from Thumb state ISA to an internal ARM state function
 	 is converted to a blx.  */
       if (fixP->fx_addsy
 	  && (S_GET_SEGMENT (fixP->fx_addsy) == seg)
-	  && !S_IS_EXTERNAL (fixP->fx_addsy)
-	  && S_IS_DEFINED (fixP->fx_addsy)
+	  && !S_FORCE_RELOC (fixP->fx_addsy, TRUE)
 	  && ARM_IS_FUNC (fixP->fx_addsy)
 	  && ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v5t))
 	{
@@ -20299,21 +21198,15 @@ md_apply_fix (fixS *	fixP,
 	   1 of the base address.  */
 	value = (value + 1) & ~ 1;
 
-
        if ((value & ~0x3fffff) && ((value & ~0x3fffff) != ~0x3fffff))
-	{
-	  if (!(ARM_CPU_HAS_FEATURE (cpu_variant, arm_arch_t2)))
-	    {
-	      as_bad_where (fixP->fx_file, fixP->fx_line,
-			    _("branch out of range"));
-	    }
-	  else if ((value & ~0x1ffffff)
-		   && ((value & ~0x1ffffff) != ~0x1ffffff))
-	      {
-		as_bad_where (fixP->fx_file, fixP->fx_line,
-			    _("Thumb2 branch out of range"));
-	      }
-	}
+	 {
+	   if (!(ARM_CPU_HAS_FEATURE (cpu_variant, arm_arch_t2)))
+	     as_bad_where (fixP->fx_file, fixP->fx_line, BAD_RANGE);
+	   else if ((value & ~0x1ffffff)
+		    && ((value & ~0x1ffffff) != ~0x1ffffff))
+	     as_bad_where (fixP->fx_file, fixP->fx_line,
+			   _("Thumb2 branch out of range"));
+	 }
 
       if (fixP->fx_done || !seg->use_rela_p)
 	encode_thumb2_b_bl_offset (buf, value);
@@ -20321,9 +21214,8 @@ md_apply_fix (fixS *	fixP,
       break;
 
     case BFD_RELOC_THUMB_PCREL_BRANCH25:
-      if ((value & ~0x1ffffff) && ((value & ~0x1ffffff) != ~0x1ffffff))
-	as_bad_where (fixP->fx_file, fixP->fx_line,
-		      _("branch out of range"));
+      if ((value & ~0x0ffffff) && ((value & ~0x0ffffff) != ~0x0ffffff))
+	as_bad_where (fixP->fx_file, fixP->fx_line, BAD_RANGE);
 
       if (fixP->fx_done || !seg->use_rela_p)
 	  encode_thumb2_b_bl_offset (buf, value);
@@ -20341,6 +21233,14 @@ md_apply_fix (fixS *	fixP,
       break;
 
 #ifdef OBJ_ELF
+    case BFD_RELOC_ARM_TLS_CALL:
+    case BFD_RELOC_ARM_THM_TLS_CALL:
+    case BFD_RELOC_ARM_TLS_DESCSEQ:
+    case BFD_RELOC_ARM_THM_TLS_DESCSEQ:
+      S_SET_THREAD_LOCAL (fixP->fx_addsy);
+      break;
+
+    case BFD_RELOC_ARM_TLS_GOTDESC:
     case BFD_RELOC_ARM_TLS_GD32:
     case BFD_RELOC_ARM_TLS_LE32:
     case BFD_RELOC_ARM_TLS_IE32:
@@ -20354,7 +21254,12 @@ md_apply_fix (fixS *	fixP,
       if (fixP->fx_done || !seg->use_rela_p)
 	md_number_to_chars (buf, 0, 4);
       break;
-      
+
+    case BFD_RELOC_ARM_GOT_PREL:
+      if (fixP->fx_done || !seg->use_rela_p)
+        md_number_to_chars (buf, value, 4);
+      break;
+
     case BFD_RELOC_ARM_TARGET2:
       /* TARGET2 is not partial-inplace, so we need to write the
          addend here for REL targets, because it won't be written out
@@ -20403,7 +21308,7 @@ md_apply_fix (fixS *	fixP,
 	as_bad_where (fixP->fx_file, fixP->fx_line,
 		      _("co-processor offset out of range"));
     cp_off_common:
-      sign = value >= 0;
+      sign = value > 0;
       if (value < 0)
 	value = -value;
       if (fixP->fx_r_type == BFD_RELOC_ARM_CP_OFF_IMM
@@ -20411,8 +21316,13 @@ md_apply_fix (fixS *	fixP,
 	newval = md_chars_to_number (buf, INSN_SIZE);
       else
 	newval = get_thumb32_insn (buf);
-      newval &= 0xff7fff00;
-      newval |= (value >> 2) | (sign ? INDEX_UP : 0);
+      if (value == 0)
+	newval &= 0xffffff00;
+      else
+	{
+	  newval &= 0xff7fff00;
+	  newval |= (value >> 2) | (sign ? INDEX_UP : 0);
+	}
       if (fixP->fx_r_type == BFD_RELOC_ARM_CP_OFF_IMM
 	  || fixP->fx_r_type == BFD_RELOC_ARM_CP_OFF_IMM_S2)
 	md_number_to_chars (buf, newval, INSN_SIZE);
@@ -20937,8 +21847,13 @@ tc_gen_reloc (asection *section, fixS *fixp)
       return NULL;
 
 #ifdef OBJ_ELF
+    case BFD_RELOC_ARM_TLS_CALL:
+    case BFD_RELOC_ARM_THM_TLS_CALL:
+    case BFD_RELOC_ARM_TLS_DESCSEQ:
+    case BFD_RELOC_ARM_THM_TLS_DESCSEQ:
     case BFD_RELOC_ARM_GOT32:
     case BFD_RELOC_ARM_GOTOFF:
+    case BFD_RELOC_ARM_GOT_PREL:
     case BFD_RELOC_ARM_PLT32:
     case BFD_RELOC_ARM_TARGET1:
     case BFD_RELOC_ARM_ROSEGREL32:
@@ -20981,6 +21896,7 @@ tc_gen_reloc (asection *section, fixS *fixp)
       code = fixp->fx_r_type;
       break;
 
+    case BFD_RELOC_ARM_TLS_GOTDESC:
     case BFD_RELOC_ARM_TLS_GD32:
     case BFD_RELOC_ARM_TLS_IE32:
     case BFD_RELOC_ARM_TLS_LDM32:
@@ -21036,6 +21952,7 @@ tc_gen_reloc (asection *section, fixS *fixp)
 	  case BFD_RELOC_ARM_SWI:	   type = "SWI";	  break;
 	  case BFD_RELOC_ARM_MULTI:	   type = "MULTI";	  break;
 	  case BFD_RELOC_ARM_CP_OFF_IMM:   type = "CP_OFF_IMM";	  break;
+	  case BFD_RELOC_ARM_T32_OFFSET_IMM: type = "T32_OFFSET_IMM"; break;
 	  case BFD_RELOC_ARM_T32_CP_OFF_IMM: type = "T32_CP_OFF_IMM"; break;
 	  case BFD_RELOC_ARM_THUMB_ADD:	   type = "THUMB_ADD";	  break;
 	  case BFD_RELOC_ARM_THUMB_SHIFT:  type = "THUMB_SHIFT";  break;
@@ -21174,14 +22091,25 @@ arm_force_relocation (struct fix * fixp)
     }
 #endif
 
-  /* Resolve these relocations even if the symbol is extern or weak.  */
+  /* Resolve these relocations even if the symbol is extern or weak.
+     Technically this is probably wrong due to symbol preemption.
+     In practice these relocations do not have enough range to be useful
+     at dynamic link time, and some code (e.g. in the Linux kernel)
+     expects these references to be resolved.  */
   if (fixp->fx_r_type == BFD_RELOC_ARM_IMMEDIATE
       || fixp->fx_r_type == BFD_RELOC_ARM_OFFSET_IMM
+      || fixp->fx_r_type == BFD_RELOC_ARM_OFFSET_IMM8
       || fixp->fx_r_type == BFD_RELOC_ARM_ADRL_IMMEDIATE
+      || fixp->fx_r_type == BFD_RELOC_ARM_CP_OFF_IMM
+      || fixp->fx_r_type == BFD_RELOC_ARM_CP_OFF_IMM_S2
+      || fixp->fx_r_type == BFD_RELOC_ARM_THUMB_OFFSET
       || fixp->fx_r_type == BFD_RELOC_ARM_T32_ADD_IMM
       || fixp->fx_r_type == BFD_RELOC_ARM_T32_IMMEDIATE
       || fixp->fx_r_type == BFD_RELOC_ARM_T32_IMM12
-      || fixp->fx_r_type == BFD_RELOC_ARM_T32_ADD_PC12)
+      || fixp->fx_r_type == BFD_RELOC_ARM_T32_OFFSET_IMM
+      || fixp->fx_r_type == BFD_RELOC_ARM_T32_ADD_PC12
+      || fixp->fx_r_type == BFD_RELOC_ARM_T32_CP_OFF_IMM
+      || fixp->fx_r_type == BFD_RELOC_ARM_T32_CP_OFF_IMM_S2)
     return 0;
 
   /* Always leave these relocations for the linker.  */
@@ -21241,6 +22169,11 @@ arm_fix_adjustable (fixS * fixP)
       || fixP->fx_r_type == BFD_RELOC_ARM_TLS_IE32
       || fixP->fx_r_type == BFD_RELOC_ARM_TLS_LDM32
       || fixP->fx_r_type == BFD_RELOC_ARM_TLS_LDO32
+      || fixP->fx_r_type == BFD_RELOC_ARM_TLS_GOTDESC
+      || fixP->fx_r_type == BFD_RELOC_ARM_TLS_CALL
+      || fixP->fx_r_type == BFD_RELOC_ARM_THM_TLS_CALL
+      || fixP->fx_r_type == BFD_RELOC_ARM_TLS_DESCSEQ
+      || fixP->fx_r_type == BFD_RELOC_ARM_THM_TLS_DESCSEQ
       || fixP->fx_r_type == BFD_RELOC_ARM_TARGET2)
     return FALSE;
 
@@ -21448,8 +22381,8 @@ arm_adjust_symtab (void)
 	      /* If it's a .thumb_func, declare it as so,
 		 otherwise tag label as .code 16.  */
 	      if (THUMB_IS_FUNC (sym))
-		elf_sym->internal_elf_sym.st_info =
-		  ELF_ST_INFO (bind, STT_ARM_TFUNC);
+		elf_sym->internal_elf_sym.st_target_internal
+		  = ST_BRANCH_TO_THUMB;
 	      else if (EF_ARM_EABI_VERSION (meabi_flags) < EF_ARM_EABI_VER4)
 		elf_sym->internal_elf_sym.st_info =
 		  ELF_ST_INFO (bind, STT_ARM_16BIT);
@@ -21459,6 +22392,8 @@ arm_adjust_symtab (void)
 
   /* Remove any overlapping mapping symbols generated by alignment frags.  */
   bfd_map_over_sections (stdoutput, check_mapping_symbols, (char *) 0);
+  /* Now do generic ELF adjustments.  */
+  elf_adjust_symtab ();
 #endif
 }
 
@@ -21519,8 +22454,16 @@ md_begin (void)
     hash_insert (arm_barrier_opt_hsh, barrier_opt_names[i].template_name,
 		 (void *) (barrier_opt_names + i));
 #ifdef OBJ_ELF
-  for (i = 0; i < sizeof (reloc_names) / sizeof (struct reloc_entry); i++)
-    hash_insert (arm_reloc_hsh, reloc_names[i].name, (void *) (reloc_names + i));
+  for (i = 0; i < ARRAY_SIZE (reloc_names); i++)
+    {
+      struct reloc_entry * entry = reloc_names + i;
+
+      if (arm_is_eabi() && entry->reloc == BFD_RELOC_ARM_PLT32)
+	/* This makes encode_branch() use the EABI versions of this relocation.  */
+	entry->reloc = BFD_RELOC_UNUSED;
+
+      hash_insert (arm_reloc_hsh, entry->name, (void *) entry);
+    }
 #endif
 
   set_constant_flonums ();
@@ -21953,6 +22896,7 @@ const struct arm_legacy_option_table arm_legacy_opts[] =
 struct arm_cpu_option_table
 {
   char *name;
+  size_t name_len;
   const arm_feature_set	value;
   /* For some CPUs we assume an FPU unless the user explicitly sets
      -mfpu=...	*/
@@ -21964,185 +22908,237 @@ struct arm_cpu_option_table
 
 /* This list should, at a minimum, contain all the cpu names
    recognized by GCC.  */
+#define ARM_CPU_OPT(N, V, DF, CN) { N, sizeof (N) - 1, V, DF, CN }
 static const struct arm_cpu_option_table arm_cpus[] =
 {
-  {"all",		ARM_ANY,	 FPU_ARCH_FPA,    NULL},
-  {"arm1",		ARM_ARCH_V1,	 FPU_ARCH_FPA,    NULL},
-  {"arm2",		ARM_ARCH_V2,	 FPU_ARCH_FPA,    NULL},
-  {"arm250",		ARM_ARCH_V2S,	 FPU_ARCH_FPA,    NULL},
-  {"arm3",		ARM_ARCH_V2S,	 FPU_ARCH_FPA,    NULL},
-  {"arm6",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm60",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm600",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm610",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm620",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm7",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm7m",		ARM_ARCH_V3M,	 FPU_ARCH_FPA,    NULL},
-  {"arm7d",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm7dm",		ARM_ARCH_V3M,	 FPU_ARCH_FPA,    NULL},
-  {"arm7di",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm7dmi",		ARM_ARCH_V3M,	 FPU_ARCH_FPA,    NULL},
-  {"arm70",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm700",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm700i",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm710",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm710t",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL},
-  {"arm720",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm720t",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL},
-  {"arm740t",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL},
-  {"arm710c",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm7100",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm7500",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm7500fe",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL},
-  {"arm7t",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL},
-  {"arm7tdmi",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL},
-  {"arm7tdmi-s",	ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL},
-  {"arm8",		ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL},
-  {"arm810",		ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL},
-  {"strongarm",		ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL},
-  {"strongarm1",	ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL},
-  {"strongarm110",	ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL},
-  {"strongarm1100",	ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL},
-  {"strongarm1110",	ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL},
-  {"arm9",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL},
-  {"arm920",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    "ARM920T"},
-  {"arm920t",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL},
-  {"arm922t",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL},
-  {"arm940t",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL},
-  {"arm9tdmi",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,	  NULL},
-  {"fa526",		ARM_ARCH_V4,	 FPU_ARCH_FPA,	  NULL},
-  {"fa626",		ARM_ARCH_V4,	 FPU_ARCH_FPA,	  NULL},
+  ARM_CPU_OPT ("all",		ARM_ANY,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm1",		ARM_ARCH_V1,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm2",		ARM_ARCH_V2,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm250",	ARM_ARCH_V2S,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm3",		ARM_ARCH_V2S,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm6",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm60",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm600",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm610",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm620",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7m",		ARM_ARCH_V3M,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7d",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7dm",	ARM_ARCH_V3M,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7di",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7dmi",	ARM_ARCH_V3M,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm70",		ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm700",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm700i",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm710",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm710t",	ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm720",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm720t",	ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm740t",	ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm710c",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7100",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7500",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7500fe",	ARM_ARCH_V3,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7t",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7tdmi",	ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm7tdmi-s",	ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm8",		ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm810",	ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("strongarm",	ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("strongarm1",	ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("strongarm110",	ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("strongarm1100",	ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("strongarm1110",	ARM_ARCH_V4,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm9",		ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm920",	ARM_ARCH_V4T,	 FPU_ARCH_FPA,    "ARM920T"),
+  ARM_CPU_OPT ("arm920t",	ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm922t",	ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm940t",	ARM_ARCH_V4T,	 FPU_ARCH_FPA,    NULL),
+  ARM_CPU_OPT ("arm9tdmi",	ARM_ARCH_V4T,	 FPU_ARCH_FPA,	  NULL),
+  ARM_CPU_OPT ("fa526",		ARM_ARCH_V4,	 FPU_ARCH_FPA,	  NULL),
+  ARM_CPU_OPT ("fa626",		ARM_ARCH_V4,	 FPU_ARCH_FPA,	  NULL),
   /* For V5 or later processors we default to using VFP; but the user
      should really set the FPU type explicitly.	 */
-  {"arm9e-r0",		ARM_ARCH_V5TExP, FPU_ARCH_VFP_V2, NULL},
-  {"arm9e",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL},
-  {"arm926ej",		ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP_V2, "ARM926EJ-S"},
-  {"arm926ejs",		ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP_V2, "ARM926EJ-S"},
-  {"arm926ej-s",	ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP_V2, NULL},
-  {"arm946e-r0",	ARM_ARCH_V5TExP, FPU_ARCH_VFP_V2, NULL},
-  {"arm946e",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, "ARM946E-S"},
-  {"arm946e-s",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL},
-  {"arm966e-r0",	ARM_ARCH_V5TExP, FPU_ARCH_VFP_V2, NULL},
-  {"arm966e",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, "ARM966E-S"},
-  {"arm966e-s",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL},
-  {"arm968e-s",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL},
-  {"arm10t",		ARM_ARCH_V5T,	 FPU_ARCH_VFP_V1, NULL},
-  {"arm10tdmi",		ARM_ARCH_V5T,	 FPU_ARCH_VFP_V1, NULL},
-  {"arm10e",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL},
-  {"arm1020",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, "ARM1020E"},
-  {"arm1020t",		ARM_ARCH_V5T,	 FPU_ARCH_VFP_V1, NULL},
-  {"arm1020e",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL},
-  {"arm1022e",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL},
-  {"arm1026ejs",	ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP_V2, "ARM1026EJ-S"},
-  {"arm1026ej-s",	ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP_V2, NULL},
-  {"fa626te",		ARM_ARCH_V5TE,	 FPU_NONE,	  NULL},
-  {"fa726te",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL},
-  {"arm1136js",		ARM_ARCH_V6,	 FPU_NONE,	  "ARM1136J-S"},
-  {"arm1136j-s",	ARM_ARCH_V6,	 FPU_NONE,	  NULL},
-  {"arm1136jfs",	ARM_ARCH_V6,	 FPU_ARCH_VFP_V2, "ARM1136JF-S"},
-  {"arm1136jf-s",	ARM_ARCH_V6,	 FPU_ARCH_VFP_V2, NULL},
-  {"mpcore",		ARM_ARCH_V6K,	 FPU_ARCH_VFP_V2, NULL},
-  {"mpcorenovfp",	ARM_ARCH_V6K,	 FPU_NONE,	  NULL},
-  {"arm1156t2-s",	ARM_ARCH_V6T2,	 FPU_NONE,	  NULL},
-  {"arm1156t2f-s",	ARM_ARCH_V6T2,	 FPU_ARCH_VFP_V2, NULL},
-  {"arm1176jz-s",	ARM_ARCH_V6ZK,	 FPU_NONE,	  NULL},
-  {"arm1176jzf-s",	ARM_ARCH_V6ZK,	 FPU_ARCH_VFP_V2, NULL},
-  {"cortex-a5",		ARM_ARCH_V7A,	 FPU_NONE,	  NULL},
-  {"cortex-a8",		ARM_ARCH_V7A,	 ARM_FEATURE (0, FPU_VFP_V3
+  ARM_CPU_OPT ("arm9e-r0",	ARM_ARCH_V5TExP, FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm9e",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm926ej",	ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP_V2, "ARM926EJ-S"),
+  ARM_CPU_OPT ("arm926ejs",	ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP_V2, "ARM926EJ-S"),
+  ARM_CPU_OPT ("arm926ej-s",	ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm946e-r0",	ARM_ARCH_V5TExP, FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm946e",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, "ARM946E-S"),
+  ARM_CPU_OPT ("arm946e-s",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm966e-r0",	ARM_ARCH_V5TExP, FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm966e",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, "ARM966E-S"),
+  ARM_CPU_OPT ("arm966e-s",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm968e-s",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm10t",	ARM_ARCH_V5T,	 FPU_ARCH_VFP_V1, NULL),
+  ARM_CPU_OPT ("arm10tdmi",	ARM_ARCH_V5T,	 FPU_ARCH_VFP_V1, NULL),
+  ARM_CPU_OPT ("arm10e",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm1020",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, "ARM1020E"),
+  ARM_CPU_OPT ("arm1020t",	ARM_ARCH_V5T,	 FPU_ARCH_VFP_V1, NULL),
+  ARM_CPU_OPT ("arm1020e",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm1022e",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm1026ejs",	ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP_V2,
+								 "ARM1026EJ-S"),
+  ARM_CPU_OPT ("arm1026ej-s",	ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("fa606te",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("fa616te",	ARM_ARCH_V5TE,   FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("fa626te",	ARM_ARCH_V5TE,   FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("fmp626",	ARM_ARCH_V5TE,   FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("fa726te",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm1136js",	ARM_ARCH_V6,	 FPU_NONE,	  "ARM1136J-S"),
+  ARM_CPU_OPT ("arm1136j-s",	ARM_ARCH_V6,	 FPU_NONE,	  NULL),
+  ARM_CPU_OPT ("arm1136jfs",	ARM_ARCH_V6,	 FPU_ARCH_VFP_V2,
+								 "ARM1136JF-S"),
+  ARM_CPU_OPT ("arm1136jf-s",	ARM_ARCH_V6,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("mpcore",	ARM_ARCH_V6K,	 FPU_ARCH_VFP_V2, "MPCore"),
+  ARM_CPU_OPT ("mpcorenovfp",	ARM_ARCH_V6K,	 FPU_NONE,	  "MPCore"),
+  ARM_CPU_OPT ("arm1156t2-s",	ARM_ARCH_V6T2,	 FPU_NONE,	  NULL),
+  ARM_CPU_OPT ("arm1156t2f-s",	ARM_ARCH_V6T2,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("arm1176jz-s",	ARM_ARCH_V6ZK,	 FPU_NONE,	  NULL),
+  ARM_CPU_OPT ("arm1176jzf-s",	ARM_ARCH_V6ZK,	 FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("cortex-a5",	ARM_ARCH_V7A_MP_SEC,
+						 FPU_NONE,	  "Cortex-A5"),
+  ARM_CPU_OPT ("cortex-a7",	ARM_ARCH_V7A_IDIV_MP_SEC_VIRT,
+						 FPU_ARCH_NEON_VFP_V4,
+								  "Cortex-A7"),
+  ARM_CPU_OPT ("cortex-a8",	ARM_ARCH_V7A_SEC,
+						 ARM_FEATURE (0, FPU_VFP_V3
                                                         | FPU_NEON_EXT_V1),
-                                                          NULL},
-  {"cortex-a9",		ARM_ARCH_V7A,	 ARM_FEATURE (0, FPU_VFP_V3
+								  "Cortex-A8"),
+  ARM_CPU_OPT ("cortex-a9",	ARM_ARCH_V7A_MP_SEC,
+						 ARM_FEATURE (0, FPU_VFP_V3
                                                         | FPU_NEON_EXT_V1),
-                                                          NULL},
-  {"cortex-r4",		ARM_ARCH_V7R,	 FPU_NONE,	  NULL},
-  {"cortex-r4f",	ARM_ARCH_V7R,	 FPU_ARCH_VFP_V3D16,	  NULL},
-  {"cortex-m3",		ARM_ARCH_V7M,	 FPU_NONE,	  NULL},
-  {"cortex-m1",		ARM_ARCH_V6M,	 FPU_NONE,	  NULL},
-  {"cortex-m0",		ARM_ARCH_V6M,	 FPU_NONE,	  NULL},
+								  "Cortex-A9"),
+  ARM_CPU_OPT ("cortex-a15",	ARM_ARCH_V7A_IDIV_MP_SEC_VIRT,
+						 FPU_ARCH_NEON_VFP_V4,
+								  "Cortex-A15"),
+  ARM_CPU_OPT ("cortex-r4",	ARM_ARCH_V7R,	 FPU_NONE,	  "Cortex-R4"),
+  ARM_CPU_OPT ("cortex-r4f",	ARM_ARCH_V7R,	 FPU_ARCH_VFP_V3D16,
+								  "Cortex-R4F"),
+  ARM_CPU_OPT ("cortex-r5",	ARM_ARCH_V7R_IDIV,
+						 FPU_NONE,	  "Cortex-R5"),
+  ARM_CPU_OPT ("cortex-m4",	ARM_ARCH_V7EM,	 FPU_NONE,	  "Cortex-M4"),
+  ARM_CPU_OPT ("cortex-m3",	ARM_ARCH_V7M,	 FPU_NONE,	  "Cortex-M3"),
+  ARM_CPU_OPT ("cortex-m1",	ARM_ARCH_V6SM,	 FPU_NONE,	  "Cortex-M1"),
+  ARM_CPU_OPT ("cortex-m0",	ARM_ARCH_V6SM,	 FPU_NONE,	  "Cortex-M0"),
   /* ??? XSCALE is really an architecture.  */
-  {"xscale",		ARM_ARCH_XSCALE, FPU_ARCH_VFP_V2, NULL},
+  ARM_CPU_OPT ("xscale",	ARM_ARCH_XSCALE, FPU_ARCH_VFP_V2, NULL),
   /* ??? iwmmxt is not a processor.  */
-  {"iwmmxt",		ARM_ARCH_IWMMXT, FPU_ARCH_VFP_V2, NULL},
-  {"iwmmxt2",		ARM_ARCH_IWMMXT2,FPU_ARCH_VFP_V2, NULL},
-  {"i80200",		ARM_ARCH_XSCALE, FPU_ARCH_VFP_V2, NULL},
+  ARM_CPU_OPT ("iwmmxt",	ARM_ARCH_IWMMXT, FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("iwmmxt2",	ARM_ARCH_IWMMXT2,FPU_ARCH_VFP_V2, NULL),
+  ARM_CPU_OPT ("i80200",	ARM_ARCH_XSCALE, FPU_ARCH_VFP_V2, NULL),
   /* Maverick */
-  {"ep9312",	ARM_FEATURE (ARM_AEXT_V4T, ARM_CEXT_MAVERICK), FPU_ARCH_MAVERICK, "ARM920T"},
-  {NULL,		ARM_ARCH_NONE,	 ARM_ARCH_NONE, NULL}
+  ARM_CPU_OPT ("ep9312",	ARM_FEATURE (ARM_AEXT_V4T, ARM_CEXT_MAVERICK),
+						 FPU_ARCH_MAVERICK,
+								  "ARM920T"),
+  { NULL, 0, ARM_ARCH_NONE, ARM_ARCH_NONE, NULL }
 };
+#undef ARM_CPU_OPT
 
 struct arm_arch_option_table
 {
   char *name;
+  size_t name_len;
   const arm_feature_set	value;
   const arm_feature_set	default_fpu;
 };
 
 /* This list should, at a minimum, contain all the architecture names
    recognized by GCC.  */
+#define ARM_ARCH_OPT(N, V, DF) { N, sizeof (N) - 1, V, DF }
 static const struct arm_arch_option_table arm_archs[] =
 {
-  {"all",		ARM_ANY,	 FPU_ARCH_FPA},
-  {"armv1",		ARM_ARCH_V1,	 FPU_ARCH_FPA},
-  {"armv2",		ARM_ARCH_V2,	 FPU_ARCH_FPA},
-  {"armv2a",		ARM_ARCH_V2S,	 FPU_ARCH_FPA},
-  {"armv2s",		ARM_ARCH_V2S,	 FPU_ARCH_FPA},
-  {"armv3",		ARM_ARCH_V3,	 FPU_ARCH_FPA},
-  {"armv3m",		ARM_ARCH_V3M,	 FPU_ARCH_FPA},
-  {"armv4",		ARM_ARCH_V4,	 FPU_ARCH_FPA},
-  {"armv4xm",		ARM_ARCH_V4xM,	 FPU_ARCH_FPA},
-  {"armv4t",		ARM_ARCH_V4T,	 FPU_ARCH_FPA},
-  {"armv4txm",		ARM_ARCH_V4TxM,	 FPU_ARCH_FPA},
-  {"armv5",		ARM_ARCH_V5,	 FPU_ARCH_VFP},
-  {"armv5t",		ARM_ARCH_V5T,	 FPU_ARCH_VFP},
-  {"armv5txm",		ARM_ARCH_V5TxM,	 FPU_ARCH_VFP},
-  {"armv5te",		ARM_ARCH_V5TE,	 FPU_ARCH_VFP},
-  {"armv5texp",		ARM_ARCH_V5TExP, FPU_ARCH_VFP},
-  {"armv5tej",		ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP},
-  {"armv6",		ARM_ARCH_V6,	 FPU_ARCH_VFP},
-  {"armv6j",		ARM_ARCH_V6,	 FPU_ARCH_VFP},
-  {"armv6k",		ARM_ARCH_V6K,	 FPU_ARCH_VFP},
-  {"armv6z",		ARM_ARCH_V6Z,	 FPU_ARCH_VFP},
-  {"armv6zk",		ARM_ARCH_V6ZK,	 FPU_ARCH_VFP},
-  {"armv6t2",		ARM_ARCH_V6T2,	 FPU_ARCH_VFP},
-  {"armv6kt2",		ARM_ARCH_V6KT2,	 FPU_ARCH_VFP},
-  {"armv6zt2",		ARM_ARCH_V6ZT2,	 FPU_ARCH_VFP},
-  {"armv6zkt2",		ARM_ARCH_V6ZKT2, FPU_ARCH_VFP},
-  {"armv6-m",		ARM_ARCH_V6M,	 FPU_ARCH_VFP},
-  {"armv7",		ARM_ARCH_V7,	 FPU_ARCH_VFP},
+  ARM_ARCH_OPT ("all",		ARM_ANY,	 FPU_ARCH_FPA),
+  ARM_ARCH_OPT ("armv1",	ARM_ARCH_V1,	 FPU_ARCH_FPA),
+  ARM_ARCH_OPT ("armv2",	ARM_ARCH_V2,	 FPU_ARCH_FPA),
+  ARM_ARCH_OPT ("armv2a",	ARM_ARCH_V2S,	 FPU_ARCH_FPA),
+  ARM_ARCH_OPT ("armv2s",	ARM_ARCH_V2S,	 FPU_ARCH_FPA),
+  ARM_ARCH_OPT ("armv3",	ARM_ARCH_V3,	 FPU_ARCH_FPA),
+  ARM_ARCH_OPT ("armv3m",	ARM_ARCH_V3M,	 FPU_ARCH_FPA),
+  ARM_ARCH_OPT ("armv4",	ARM_ARCH_V4,	 FPU_ARCH_FPA),
+  ARM_ARCH_OPT ("armv4xm",	ARM_ARCH_V4xM,	 FPU_ARCH_FPA),
+  ARM_ARCH_OPT ("armv4t",	ARM_ARCH_V4T,	 FPU_ARCH_FPA),
+  ARM_ARCH_OPT ("armv4txm",	ARM_ARCH_V4TxM,	 FPU_ARCH_FPA),
+  ARM_ARCH_OPT ("armv5",	ARM_ARCH_V5,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv5t",	ARM_ARCH_V5T,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv5txm",	ARM_ARCH_V5TxM,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv5te",	ARM_ARCH_V5TE,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv5texp",	ARM_ARCH_V5TExP, FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv5tej",	ARM_ARCH_V5TEJ,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv6",	ARM_ARCH_V6,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv6j",	ARM_ARCH_V6,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv6k",	ARM_ARCH_V6K,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv6z",	ARM_ARCH_V6Z,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv6zk",	ARM_ARCH_V6ZK,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv6t2",	ARM_ARCH_V6T2,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv6kt2",	ARM_ARCH_V6KT2,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv6zt2",	ARM_ARCH_V6ZT2,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv6zkt2",	ARM_ARCH_V6ZKT2, FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv6-m",	ARM_ARCH_V6M,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv6s-m",	ARM_ARCH_V6SM,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv7",	ARM_ARCH_V7,	 FPU_ARCH_VFP),
   /* The official spelling of the ARMv7 profile variants is the dashed form.
      Accept the non-dashed form for compatibility with old toolchains.  */
-  {"armv7a",		ARM_ARCH_V7A,	 FPU_ARCH_VFP},
-  {"armv7r",		ARM_ARCH_V7R,	 FPU_ARCH_VFP},
-  {"armv7m",		ARM_ARCH_V7M,	 FPU_ARCH_VFP},
-  {"armv7-a",		ARM_ARCH_V7A,	 FPU_ARCH_VFP},
-  {"armv7-r",		ARM_ARCH_V7R,	 FPU_ARCH_VFP},
-  {"armv7-m",		ARM_ARCH_V7M,	 FPU_ARCH_VFP},
-  {"armv7e-m",		ARM_ARCH_V7EM,	 FPU_ARCH_VFP},
-  {"xscale",		ARM_ARCH_XSCALE, FPU_ARCH_VFP},
-  {"iwmmxt",		ARM_ARCH_IWMMXT, FPU_ARCH_VFP},
-  {"iwmmxt2",		ARM_ARCH_IWMMXT2,FPU_ARCH_VFP},
-  {NULL,		ARM_ARCH_NONE,	 ARM_ARCH_NONE}
+  ARM_ARCH_OPT ("armv7a",	ARM_ARCH_V7A,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv7r",	ARM_ARCH_V7R,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv7m",	ARM_ARCH_V7M,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv7-a",	ARM_ARCH_V7A,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv7-r",	ARM_ARCH_V7R,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv7-m",	ARM_ARCH_V7M,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("armv7e-m",	ARM_ARCH_V7EM,	 FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("xscale",	ARM_ARCH_XSCALE, FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("iwmmxt",	ARM_ARCH_IWMMXT, FPU_ARCH_VFP),
+  ARM_ARCH_OPT ("iwmmxt2",	ARM_ARCH_IWMMXT2,FPU_ARCH_VFP),
+  { NULL, 0, ARM_ARCH_NONE, ARM_ARCH_NONE }
+};
+#undef ARM_ARCH_OPT
+
+/* ISA extensions in the co-processor and main instruction set space.  */
+struct arm_option_extension_value_table
+{
+  char *name;
+  size_t name_len;
+  const arm_feature_set value;
+  const arm_feature_set allowed_archs;
 };
 
-/* ISA extensions in the co-processor space.  */
-struct arm_option_cpu_value_table
+/* The following table must be in alphabetical order with a NULL last entry.
+   */
+#define ARM_EXT_OPT(N, V, AA) { N, sizeof (N) - 1, V, AA }
+static const struct arm_option_extension_value_table arm_extensions[] =
+{
+  ARM_EXT_OPT ("idiv",	ARM_FEATURE (ARM_EXT_ADIV | ARM_EXT_DIV, 0),
+				   ARM_FEATURE (ARM_EXT_V7A | ARM_EXT_V7R, 0)),
+  ARM_EXT_OPT ("iwmmxt",ARM_FEATURE (0, ARM_CEXT_IWMMXT),	ARM_ANY),
+  ARM_EXT_OPT ("iwmmxt2",
+			ARM_FEATURE (0, ARM_CEXT_IWMMXT2),	ARM_ANY),
+  ARM_EXT_OPT ("maverick",
+                        ARM_FEATURE (0, ARM_CEXT_MAVERICK),	ARM_ANY),
+  ARM_EXT_OPT ("mp",	ARM_FEATURE (ARM_EXT_MP, 0),
+				   ARM_FEATURE (ARM_EXT_V7A | ARM_EXT_V7R, 0)),
+  ARM_EXT_OPT ("os",	ARM_FEATURE (ARM_EXT_OS, 0),
+				   ARM_FEATURE (ARM_EXT_V6M, 0)),
+  ARM_EXT_OPT ("sec",	ARM_FEATURE (ARM_EXT_SEC, 0),
+				   ARM_FEATURE (ARM_EXT_V6K | ARM_EXT_V7A, 0)),
+  ARM_EXT_OPT ("virt",	ARM_FEATURE (ARM_EXT_VIRT | ARM_EXT_ADIV
+				     | ARM_EXT_DIV, 0),
+				   ARM_FEATURE (ARM_EXT_V7A, 0)),
+  ARM_EXT_OPT ("xscale",ARM_FEATURE (0, ARM_CEXT_XSCALE),	ARM_ANY),
+  { NULL, 0, ARM_ARCH_NONE, ARM_ARCH_NONE }
+};
+#undef ARM_EXT_OPT
+
+/* ISA floating-point and Advanced SIMD extensions.  */
+struct arm_option_fpu_value_table
 {
   char *name;
   const arm_feature_set value;
 };
 
-static const struct arm_option_cpu_value_table arm_extensions[] =
-{
-  {"maverick",		ARM_FEATURE (0, ARM_CEXT_MAVERICK)},
-  {"xscale",		ARM_FEATURE (0, ARM_CEXT_XSCALE)},
-  {"iwmmxt",		ARM_FEATURE (0, ARM_CEXT_IWMMXT)},
-  {"iwmmxt2",		ARM_FEATURE (0, ARM_CEXT_IWMMXT2)},
-  {NULL,		ARM_ARCH_NONE}
-};
-
 /* This list should, at a minimum, contain all the fpu names
    recognized by GCC.  */
-static const struct arm_option_cpu_value_table arm_fpus[] =
+static const struct arm_option_fpu_value_table arm_fpus[] =
 {
   {"softfpa",		FPU_NONE},
   {"fpe",		FPU_ARCH_FPE},
@@ -22215,10 +23211,19 @@ struct arm_long_option_table
 };
 
 static bfd_boolean
-arm_parse_extension (char * str, const arm_feature_set **opt_p)
+arm_parse_extension (char *str, const arm_feature_set **opt_p)
 {
   arm_feature_set *ext_set = (arm_feature_set *)
       xmalloc (sizeof (arm_feature_set));
+
+  /* We insist on extensions being specified in alphabetical order, and with
+     extensions being added before being removed.  We achieve this by having 
+     the global ARM_EXTENSIONS table in alphabetical order, and using the 
+     ADDING_VALUE variable to indicate whether we are adding an extension (1)
+     or removing it (0) and only allowing it to change in the order 
+     -1 -> 1 -> 0.  */
+  const struct arm_option_extension_value_table * opt = NULL;
+  int adding_value = -1;
 
   /* Copy the feature set, so that we can modify it.  */
   *ext_set = **opt_p;
@@ -22226,9 +23231,8 @@ arm_parse_extension (char * str, const arm_feature_set **opt_p)
 
   while (str != NULL && *str != 0)
     {
-      const struct arm_option_cpu_value_table * opt;
-      char * ext;
-      int optlen;
+      char *ext;
+      size_t len;
 
       if (*str != '+')
 	{
@@ -22240,27 +23244,87 @@ arm_parse_extension (char * str, const arm_feature_set **opt_p)
       ext = strchr (str, '+');
 
       if (ext != NULL)
-	optlen = ext - str;
+	len = ext - str;
       else
-	optlen = strlen (str);
+	len = strlen (str);
 
-      if (optlen == 0)
+      if (len >= 2 && strncmp (str, "no", 2) == 0)
+	{
+	  if (adding_value != 0)
+	    {
+	      adding_value = 0;
+	      opt = arm_extensions;
+	    }
+
+	  len -= 2;
+	  str += 2;
+	}
+      else if (len > 0)
+	{
+	  if (adding_value == -1)
+	    {
+	      adding_value = 1;
+	      opt = arm_extensions;
+	    }
+	  else if (adding_value != 1)
+	    {
+	      as_bad (_("must specify extensions to add before specifying "
+			"those to remove"));
+	      return FALSE;
+	    }
+	}
+
+      if (len == 0)
 	{
 	  as_bad (_("missing architectural extension"));
 	  return FALSE;
 	}
 
-      for (opt = arm_extensions; opt->name != NULL; opt++)
-	if (strncmp (opt->name, str, optlen) == 0)
+      gas_assert (adding_value != -1);
+      gas_assert (opt != NULL);
+
+      /* Scan over the options table trying to find an exact match. */
+      for (; opt->name != NULL; opt++)
+	if (opt->name_len == len && strncmp (opt->name, str, len) == 0)
 	  {
-	    ARM_MERGE_FEATURE_SETS (*ext_set, *ext_set, opt->value);
+	    /* Check we can apply the extension to this architecture.  */
+	    if (!ARM_CPU_HAS_FEATURE (*ext_set, opt->allowed_archs))
+	      {
+		as_bad (_("extension does not apply to the base architecture"));
+		return FALSE;
+	      }
+
+	    /* Add or remove the extension.  */
+	    if (adding_value)
+	      ARM_MERGE_FEATURE_SETS (*ext_set, *ext_set, opt->value);
+	    else
+	      ARM_CLEAR_FEATURE (*ext_set, *ext_set, opt->value);
+
 	    break;
 	  }
 
       if (opt->name == NULL)
 	{
-	  as_bad (_("unknown architectural extension `%s'"), str);
+	  /* Did we fail to find an extension because it wasn't specified in
+	     alphabetical order, or because it does not exist?  */
+
+	  for (opt = arm_extensions; opt->name != NULL; opt++)
+	    if (opt->name_len == len && strncmp (opt->name, str, len) == 0)
+	      break;
+
+	  if (opt->name == NULL)
+	    as_bad (_("unknown architectural extension `%s'"), str);
+	  else
+	    as_bad (_("architectural extensions must be specified in "
+		      "alphabetical order"));
+
 	  return FALSE;
+	}
+      else
+	{
+	  /* We should skip the extension we've just matched the next time
+	     round.  */
+	  opt++;
 	}
 
       str = ext;
@@ -22270,25 +23334,25 @@ arm_parse_extension (char * str, const arm_feature_set **opt_p)
 }
 
 static bfd_boolean
-arm_parse_cpu (char * str)
+arm_parse_cpu (char *str)
 {
-  const struct arm_cpu_option_table * opt;
-  char * ext = strchr (str, '+');
-  int optlen;
+  const struct arm_cpu_option_table *opt;
+  char *ext = strchr (str, '+');
+  size_t len;
 
   if (ext != NULL)
-    optlen = ext - str;
+    len = ext - str;
   else
-    optlen = strlen (str);
+    len = strlen (str);
 
-  if (optlen == 0)
+  if (len == 0)
     {
       as_bad (_("missing cpu name `%s'"), str);
       return FALSE;
     }
 
   for (opt = arm_cpus; opt->name != NULL; opt++)
-    if (strncmp (opt->name, str, optlen) == 0)
+    if (opt->name_len == len && strncmp (opt->name, str, len) == 0)
       {
 	mcpu_cpu_opt = &opt->value;
 	mcpu_fpu_opt = &opt->default_fpu;
@@ -22296,9 +23360,9 @@ arm_parse_cpu (char * str)
 	  strcpy (selected_cpu_name, opt->canonical_name);
 	else
 	  {
-	    int i;
+	    size_t i;
 
-	    for (i = 0; i < optlen; i++)
+	    for (i = 0; i < len; i++)
 	      selected_cpu_name[i] = TOUPPER (opt->name[i]);
 	    selected_cpu_name[i] = 0;
 	  }
@@ -22314,25 +23378,25 @@ arm_parse_cpu (char * str)
 }
 
 static bfd_boolean
-arm_parse_arch (char * str)
+arm_parse_arch (char *str)
 {
   const struct arm_arch_option_table *opt;
   char *ext = strchr (str, '+');
-  int optlen;
+  size_t len;
 
   if (ext != NULL)
-    optlen = ext - str;
+    len = ext - str;
   else
-    optlen = strlen (str);
+    len = strlen (str);
 
-  if (optlen == 0)
+  if (len == 0)
     {
       as_bad (_("missing architecture name `%s'"), str);
       return FALSE;
     }
 
   for (opt = arm_archs; opt->name != NULL; opt++)
-    if (streq (opt->name, str))
+    if (opt->name_len == len && strncmp (opt->name, str, len) == 0)
       {
 	march_cpu_opt = &opt->value;
 	march_fpu_opt = &opt->default_fpu;
@@ -22351,7 +23415,7 @@ arm_parse_arch (char * str)
 static bfd_boolean
 arm_parse_fpu (char * str)
 {
-  const struct arm_option_cpu_value_table * opt;
+  const struct arm_option_fpu_value_table * opt;
 
   for (opt = arm_fpus; opt->name != NULL; opt++)
     if (streq (opt->name, str))
@@ -22579,9 +23643,10 @@ static const cpu_arch_ver_table cpu_arch_ver[] =
     {4, ARM_ARCH_V5TE},
     {5, ARM_ARCH_V5TEJ},
     {6, ARM_ARCH_V6},
-    {7, ARM_ARCH_V6Z},
     {9, ARM_ARCH_V6K},
+    {7, ARM_ARCH_V6Z},
     {11, ARM_ARCH_V6M},
+    {12, ARM_ARCH_V6SM},
     {8, ARM_ARCH_V6T2},
     {10, ARM_ARCH_V7A},
     {10, ARM_ARCH_V7R},
@@ -22613,6 +23678,7 @@ static void
 aeabi_set_public_attributes (void)
 {
   int arch;
+  int virt_sec = 0;
   arm_feature_set flags;
   arm_feature_set tmp;
   const cpu_arch_ver_table *p;
@@ -22622,12 +23688,25 @@ aeabi_set_public_attributes (void)
   ARM_MERGE_FEATURE_SETS (flags, arm_arch_used, thumb_arch_used);
   ARM_MERGE_FEATURE_SETS (flags, flags, *mfpu_opt);
   ARM_MERGE_FEATURE_SETS (flags, flags, selected_cpu);
-  /*Allow the user to override the reported architecture.  */
+
+  if (ARM_CPU_HAS_FEATURE (arm_arch_used, arm_arch_any))
+    ARM_MERGE_FEATURE_SETS (flags, flags, arm_ext_v1);
+
+  if (ARM_CPU_HAS_FEATURE (thumb_arch_used, arm_arch_any))
+    ARM_MERGE_FEATURE_SETS (flags, flags, arm_ext_v4t);
+
+  /* Allow the user to override the reported architecture.  */
   if (object_arch)
     {
       ARM_CLEAR_FEATURE (flags, flags, arm_arch_any);
       ARM_MERGE_FEATURE_SETS (flags, flags, *object_arch);
     }
+
+  /* We need to make sure that the attributes do not identify us as v6S-M
+     when the only v6S-M feature in use is the Operating System Extensions.  */
+  if (ARM_CPU_HAS_FEATURE (flags, arm_ext_os))
+      if (!ARM_CPU_HAS_FEATURE (flags, arm_arch_v6m_only))
+        ARM_CLEAR_FEATURE (flags, flags, arm_ext_os);
 
   tmp = flags;
   arch = 0;
@@ -22708,6 +23787,11 @@ aeabi_set_public_attributes (void)
            || ARM_CPU_HAS_FEATURE (flags, fpu_vfp_ext_v1xd))
     aeabi_set_attribute_int (Tag_VFP_arch, 1);
 
+  /* Tag_ABI_HardFP_use.  */
+  if (ARM_CPU_HAS_FEATURE (flags, fpu_vfp_ext_v1xd)
+      && !ARM_CPU_HAS_FEATURE (flags, fpu_vfp_ext_v1))
+    aeabi_set_attribute_int (Tag_ABI_HardFP_use, 1);
+
   /* Tag_WMMX_arch.  */
   if (ARM_CPU_HAS_FEATURE (flags, arm_cext_iwmmxt2))
     aeabi_set_attribute_int (Tag_WMMX_arch, 2);
@@ -22723,6 +23807,26 @@ aeabi_set_public_attributes (void)
   /* Tag_VFP_HP_extension (formerly Tag_NEON_FP16_arch).  */
   if (ARM_CPU_HAS_FEATURE (flags, fpu_vfp_fp16))
     aeabi_set_attribute_int (Tag_VFP_HP_extension, 1);
+
+  /* Tag_DIV_use.  */
+  if (ARM_CPU_HAS_FEATURE (flags, arm_ext_adiv))
+    aeabi_set_attribute_int (Tag_DIV_use, 2);
+  else if (ARM_CPU_HAS_FEATURE (flags, arm_ext_div))
+    aeabi_set_attribute_int (Tag_DIV_use, 0);
+  else
+    aeabi_set_attribute_int (Tag_DIV_use, 1);
+
+  /* Tag_MP_extension_use.  */
+  if (ARM_CPU_HAS_FEATURE (flags, arm_ext_mp))
+    aeabi_set_attribute_int (Tag_MPextension_use, 1);
+
+  /* Tag Virtualization_use.  */
+  if (ARM_CPU_HAS_FEATURE (flags, arm_ext_sec))
+    virt_sec |= 1;
+  if (ARM_CPU_HAS_FEATURE (flags, arm_ext_virt))
+    virt_sec |= 2;
+  if (virt_sec != 0)
+    aeabi_set_attribute_int (Tag_Virtualization_use, virt_sec);
 }
 
 /* Add the default contents for the .ARM.attributes section.  */
@@ -22765,6 +23869,7 @@ s_arm_cpu (int ignored ATTRIBUTE_UNUSED)
 	    int i;
 	    for (i = 0; opt->name[i]; i++)
 	      selected_cpu_name[i] = TOUPPER (opt->name[i]);
+
 	    selected_cpu_name[i] = 0;
 	  }
 	ARM_MERGE_FEATURE_SETS (cpu_variant, *mcpu_cpu_opt, *mfpu_opt);
@@ -22842,12 +23947,64 @@ s_arm_object_arch (int ignored ATTRIBUTE_UNUSED)
   ignore_rest_of_line ();
 }
 
+/* Parse a .arch_extension directive.  */
+
+static void
+s_arm_arch_extension (int ignored ATTRIBUTE_UNUSED)
+{
+  const struct arm_option_extension_value_table *opt;
+  char saved_char;
+  char *name;
+  int adding_value = 1;
+
+  name = input_line_pointer;
+  while (*input_line_pointer && !ISSPACE (*input_line_pointer))
+    input_line_pointer++;
+  saved_char = *input_line_pointer;
+  *input_line_pointer = 0;
+
+  if (strlen (name) >= 2
+      && strncmp (name, "no", 2) == 0)
+    {
+      adding_value = 0;
+      name += 2;
+    }
+
+  for (opt = arm_extensions; opt->name != NULL; opt++)
+    if (streq (opt->name, name))
+      {
+	if (!ARM_CPU_HAS_FEATURE (*mcpu_cpu_opt, opt->allowed_archs))
+	  {
+	    as_bad (_("architectural extension `%s' is not allowed for the "
+		      "current base architecture"), name);
+	    break;
+	  }
+
+	if (adding_value)
+	  ARM_MERGE_FEATURE_SETS (selected_cpu, selected_cpu, opt->value);
+	else
+	  ARM_CLEAR_FEATURE (selected_cpu, selected_cpu, opt->value);
+
+	mcpu_cpu_opt = &selected_cpu;
+	ARM_MERGE_FEATURE_SETS (cpu_variant, *mcpu_cpu_opt, *mfpu_opt);
+	*input_line_pointer = saved_char;
+	demand_empty_rest_of_line ();
+	return;
+      }
+
+  if (opt->name == NULL)
+    as_bad (_("unknown architecture `%s'\n"), name);
+
+  *input_line_pointer = saved_char;
+  ignore_rest_of_line ();
+}
+
 /* Parse a .fpu directive.  */
 
 static void
 s_arm_fpu (int ignored ATTRIBUTE_UNUSED)
 {
-  const struct arm_option_cpu_value_table *opt;
+  const struct arm_option_fpu_value_table *opt;
   char saved_char;
   char *name;
 
@@ -22903,6 +24060,7 @@ arm_convert_symbolic_attribute (const char *name)
       T (Tag_CPU_arch_profile),
       T (Tag_ARM_ISA_use),
       T (Tag_THUMB_ISA_use),
+      T (Tag_FP_arch),
       T (Tag_VFP_arch),
       T (Tag_WMMX_arch),
       T (Tag_Advanced_SIMD_arch),
@@ -22917,7 +24075,9 @@ arm_convert_symbolic_attribute (const char *name)
       T (Tag_ABI_FP_exceptions),
       T (Tag_ABI_FP_user_exceptions),
       T (Tag_ABI_FP_number_model),
+      T (Tag_ABI_align_needed),
       T (Tag_ABI_align8_needed),
+      T (Tag_ABI_align_preserved),
       T (Tag_ABI_align8_preserved),
       T (Tag_ABI_enum_size),
       T (Tag_ABI_HardFP_use),
@@ -22927,14 +24087,17 @@ arm_convert_symbolic_attribute (const char *name)
       T (Tag_ABI_FP_optimization_goals),
       T (Tag_compatibility),
       T (Tag_CPU_unaligned_access),
+      T (Tag_FP_HP_extension),
       T (Tag_VFP_HP_extension),
       T (Tag_ABI_FP_16bit_format),
+      T (Tag_MPextension_use),
+      T (Tag_DIV_use),
       T (Tag_nodefaults),
       T (Tag_also_compatible_with),
       T (Tag_conformance),
       T (Tag_T2EE_use),
       T (Tag_Virtualization_use),
-      T (Tag_MPextension_use)
+      /* We deliberately do not include Tag_MPextension_use_legacy.  */
 #undef T
     };
   unsigned int i;
@@ -22958,7 +24121,7 @@ arm_apply_sym_value (struct fix * fixP)
 {
   if (fixP->fx_addsy
       && ARM_CPU_HAS_FEATURE (selected_cpu, arm_ext_v5t)
-      && !S_IS_EXTERNAL (fixP->fx_addsy))
+      && !S_FORCE_RELOC (fixP->fx_addsy, TRUE))
     {
       switch (fixP->fx_r_type)
 	{

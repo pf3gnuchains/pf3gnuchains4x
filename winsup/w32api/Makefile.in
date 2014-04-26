@@ -1,104 +1,64 @@
+# @configure_input@
 #
-#	Makefile.in
 #
-#	This file is part of a free library for the Win32 API.
-# 
-#	This library is distributed in the hope that it will be useful,
-#	but WITHOUT ANY WARRANTY; without even the implied warranty of
-#	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# Makefile.in
+#
+# This file is part of a free library for the Win32 API.
 
-# start config section
+PACKAGE = @PACKAGE_TARNAME@
+VERSION = @PACKAGE_VERSION@
+RELEASE = @PACKAGE_RELEASE@
+
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
 SHELL = @SHELL@
 
 srcdir = @srcdir@
 VPATH = @srcdir@
 
-build_alias = @build@
-host_alias = @host@
 target_alias = @target@
-prefix = @prefix@
 conf_prefix = @prefix@
 # FIXME: this needs an appropriate AC_SUBST
 host_os = mingw32
 
-program_transform_name = @program_transform_name@
-exec_prefix = @exec_prefix@
-bindir = @bindir@
-libdir = @libdir@
-tooldir = $(exec_prefix)/$(target_alias)
-datadir = @datadir@
-infodir = @infodir@
-includedir = @includedir@
-
-CC = @CC@
-CC_FOR_TARGET = $(CC)
-CFLAGS = @CFLAGS@
-
-DLLTOOL = @DLLTOOL@
-AS = @AS@
-AS_FOR_TARGET = $(AS_FOR_TARGET)
-WINDRES = @WINDRES@
-
-RANLIB = @RANLIB@
-AR = @AR@
-LD = @LD@
-
 TAR = tar
-TARFLAGS = z
-TARFILEEXT = .tar.gz
-
-FLAGS_TO_PASS = \
-	AS="$(AS)" \
-	CC="$(CC)" \
-	CPPFLAGS="$(CPPFLAGS)" \
-	CFLAGS="$(CFLAGS)" \
-	CXXFLAGS="$(CXXFLAGS)" \
-	AR="$(AR)" \
-	RANLIB="$(RANLIB)" \
-	LD="$(LD)" \
-	DLLTOOL="$(DLLTOOL)" \
-	TAR="$(TAR)" \
-	TARFLAGS="$(TARFLAGS)" \
-	TARFILEEXT="$(TARFILEEXT)" \
-	WINDRES="$(WINDRES)"
-
-# end config section
+TARFLAGS = --lzma -
+TARFILEEXT = .tar.lzma
 
 SUBDIRS = lib
 
-PACKAGE = w32api
-VERSION = 3.14
-CYGRELEASE = 1
+DISTFILES = \
+  ChangeLog aclocal.m4 configure.ac Makefile.in Makefile.comm.in configure \
+  config.guess config.sub install-sh README.w32api TODO CONTRIBUTIONS
 
-DIST_FILES = Makefile.in configure.in configure config.guess config.sub \
-aclocal.m4 install-sh README.w32api ChangeLog TODO CONTRIBUTIONS
-
-all: lib
+all: $(SUBDIRS)
 
 %-subdirs:
-	for i in $(SUBDIRS); do \
-	  $(MAKE) $(FLAGS_TO_PASS) -C $$i $*; \
+	for dir in $(SUBDIRS); do \
+	  $(MAKE) -C $$dir $*; \
 	done
 
-lib:
-	$(MAKE) $(FLAGS_TO_PASS) -C $@
+$(SUBDIRS):
+	$(MAKE) -C $@
 
-test:
-	$(MAKE) -C lib test $(FLAGS_TO_PASS)
+check test:
+	$(MAKE) -C lib $@
 
 install uninstall:
-	for i in $(SUBDIRS); do \
-		(cd $$i; $(MAKE) $@ $(FLAGS_TO_PASS)); \
+	for dir in $(SUBDIRS); do \
+	  (cd $$dir; $(MAKE) $@); \
 	done
 
 ifdef SNAPDATE
     distdir = $(PACKAGE)-$(VERSION)-$(SNAPDATE)-$(host_os)
 else
+   CYGRELEASE = $(RELEASE)
    ifneq (,$(findstring cygwin, $(target_alias)))
       distdir=$(PACKAGE)-$(VERSION)-$(CYGRELEASE)
    else
-      distdir=$(PACKAGE)-$(VERSION)-$(host_os)
+      distdir=$(PACKAGE)-$(VERSION)-$(CYGRELEASE)-$(host_os)
    endif
 endif
 
@@ -119,11 +79,11 @@ srcdist:
 	rm -rf $(distdir)
 	mkdir $(distdir)
 	chmod 755 $(distdir)
-	for i in $(DIST_FILES); do \
-		cp -p $(srcdir)/$$i $(distdir)/$$i ; \
+	for file in $(DISTFILES); do \
+		cp -p $(srcdir)/$$file $(distdir)/$$file ; \
 	done
-	for i in $(SUBDIRS); do \
-		(cd $$i; $(MAKE) distdir=../$(distdir) dist); \
+	for dir in $(SUBDIRS); do \
+	  (cd $$dir; $(MAKE) distdir=../$(distdir) dist); \
 	done
 	rm -f $(distdir)-src$(TARFILEEXT)
 	$(TAR) $(TARFLAGS)cf $(distdir)-src$(TARFILEEXT) $(distdir)
@@ -149,23 +109,38 @@ endif
 snapshot:
 	make dist SNAPDATE=$(shell date '+%Y%m%d')
 
-Makefile: Makefile.in config.status configure
+# Makefile must be rebuilt if Makefile.in is modified,
+# or if config.status is updated.
+#
+Makefile: Makefile.in config.status
 	$(SHELL) config.status
+
+# config.status itself must be updated if configure is modified;
+# this requires a distinct invocation of itself.
+#
+config.status: configure
+	$(SHELL) config.status --recheck
 
 mostlyclean-top:
 	rm -f *~
+
 clean-top: mostlyclean-top
 	rm -rf $(distdir)
 	rm -f $(distdir)*$(TARFILEEXT)
 maintainer-clean-top:
 
 mostlyclean: mostlyclean-top mostlyclean-subdirs
+
 clean: mostlyclean-top clean-subdirs
+
 distclean: clean-top
 	$(MAKE) -C lib/directx distclean
 	$(MAKE) -C lib/ddk distclean
 	$(MAKE) -C lib distclean
 	rm -f Makefile config.status config.log config.cache TAGS *~
+
 maintainer-clean: maintainer-clean-subdirs
 
-.PHONY: lib test 
+.PHONY: lib check test 
+
+# Makefile.in: end of file

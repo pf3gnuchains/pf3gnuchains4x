@@ -1,7 +1,7 @@
 /* mkpasswd.c:
 
    Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2005, 2006,
-   2008, 2009 Red Hat, Inc.
+   2008, 2009, 2010, 2011 Red Hat, Inc.
 
    This file is part of Cygwin.
 
@@ -10,6 +10,7 @@
    details. */
 
 #define _WIN32_WINNT 0x0600
+#include <errno.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <wchar.h>
@@ -21,6 +22,7 @@
 #include <io.h>
 #include <sys/fcntl.h>
 #include <sys/cygwin.h>
+#include <cygwin/version.h>
 #include <windows.h>
 #include <lm.h>
 #include <iptypes.h>
@@ -28,19 +30,14 @@
 #include <ntsecapi.h>
 #include <dsgetdc.h>
 #include <ntdef.h>
+#include "loadlib.h"
 
 #define print_win_error(x) _print_win_error(x, __LINE__)
 
 #define MAX_SID_LEN 40
 
-static const char version[] = "$Revision$";
-
-extern char *__progname __declspec(dllimport);
-
 SID_IDENTIFIER_AUTHORITY sid_world_auth = {SECURITY_WORLD_SID_AUTHORITY};
 SID_IDENTIFIER_AUTHORITY sid_nt_auth = {SECURITY_NT_AUTHORITY};
-
-NET_API_STATUS WINAPI (*dsgetdcname)(LPWSTR,LPWSTR,GUID*,LPWSTR,ULONG,PDOMAIN_CONTROLLER_INFOW*);
 
 #ifndef min
 #define min(a,b) (((a)<(b))?(a):(b))
@@ -70,59 +67,28 @@ _print_win_error(DWORD code, int line)
     fprintf (stderr, "mkpasswd (%d): error %lu", line, code);
 }
 
-static void
-load_dsgetdcname ()
-{
-  HANDLE h = LoadLibrary ("netapi32.dll");
-
-  if (h)
-    dsgetdcname = (void *) GetProcAddress (h, "DsGetDcNameW");
-}
-
 static PWCHAR
 get_dcname (char *domain)
 {
   static WCHAR server[INTERNET_MAX_HOST_NAME_LENGTH + 1];
   DWORD rc;
-  PWCHAR servername;
   WCHAR domain_name[MAX_DOMAIN_NAME_LEN + 1];
   PDOMAIN_CONTROLLER_INFOW pdci = NULL;
 
-  if (dsgetdcname)
+  if (domain)
     {
-      if (domain)
-	{
-	  mbstowcs (domain_name, domain, strlen (domain) + 1);
-	  rc = dsgetdcname (NULL, domain_name, NULL, NULL, 0, &pdci);
-	}
-      else
-	rc = dsgetdcname (NULL, NULL, NULL, NULL, 0, &pdci);
-      if (rc != ERROR_SUCCESS)
-	{
-	  print_win_error(rc);
-	  return (PWCHAR) -1;
-	}
-      wcscpy (server, pdci->DomainControllerName);
-      NetApiBufferFree (pdci);
+      mbstowcs (domain_name, domain, strlen (domain) + 1);
+      rc = DsGetDcNameW (NULL, domain_name, NULL, NULL, 0, &pdci);
     }
   else
+    rc = DsGetDcNameW (NULL, NULL, NULL, NULL, 0, &pdci);
+  if (rc != ERROR_SUCCESS)
     {
-      rc = NetGetDCName (NULL, NULL, (void *) &servername);
-      if (rc == ERROR_SUCCESS && domain)
-	{
-	  LPWSTR server = servername;
-	  mbstowcs (domain_name, domain, strlen (domain) + 1);
-	  rc = NetGetDCName (server, domain_name, (void *) &servername);
-	  NetApiBufferFree (server);
-	}
-      if (rc != ERROR_SUCCESS)
-	{
-	  print_win_error(rc);
-	  return (PWCHAR) -1;
-	}
-      wcscpy (server, servername);
-      NetApiBufferFree ((PVOID) servername);
+      print_win_error (rc);
+      return (PWCHAR) -1;
     }
+  wcscpy (server, pdci->DomainControllerName);
+  NetApiBufferFree (pdci);
   return server;
 }
 
@@ -142,29 +108,6 @@ put_sid (PSID sid)
       strcat (s, t);
     }
   return s;
-}
-
-static void
-psx_dir (char *in, char *out)
-{
-  if (isalpha ((unsigned char) in[0]) && in[1] == ':')
-    {
-      sprintf (out, "/cygdrive/%c", in[0]);
-      in += 2;
-      out += strlen (out);
-    }
-
-  while (*in)
-    {
-      if (*in == '\\')
-	*out = '/';
-      else
-	*out = *in;
-      in++;
-      out++;
-    }
-
-  *out = '\0';
 }
 
 static void
@@ -204,8 +147,8 @@ fetch_current_user_sid ()
 }
 
 static void
-current_user (int print_cygpath, const char *sep, const char *passed_home_path,
-	      DWORD id_offset, const char *disp_username)
+current_user (const char *sep, const char *passed_home_path, DWORD id_offset,
+	      const char *disp_username)
 {
   WCHAR user[UNLEN + 1];
   WCHAR dom[MAX_DOMAIN_NAME_LEN + 1];
@@ -229,17 +172,9 @@ current_user (int print_cygpath, const char *sep, const char *passed_home_path,
 			     *GetSidSubAuthorityCount(curr_pgrp.psid) - 1);
   if (passed_home_path[0] == '\0')
     {
-      char *envhome = getenv ("HOME");
+      char *envhome = getenv ("HOME");	/* POSIX! */
 
-      if (envhome && envhome[0])
-	{
-	  if (print_cygpath)
-	    cygwin_conv_path (CCP_WIN_A_TO_POSIX | CCP_ABSOLUTE, envhome,
-			      homedir_psx, PATH_MAX);
-	  else
-	    psx_dir (envhome, homedir_psx);
-	}
-      else
+      if (!envhome || envhome[0] == '\0')
 	{
 	  wcstombs (stpncpy (homedir_psx, "/home/", sizeof (homedir_psx)),
 		    user, sizeof (homedir_psx) - 6);
@@ -289,7 +224,7 @@ enum_unix_users (domlist_t *dom_or_machine, const char *sep, DWORD id_offset,
   if (ret < 1 || ret >= INTERNET_MAX_HOST_NAME_LENGTH + 1)
     {
       fprintf (stderr, "%s: Invalid machine name '%s'.  Skipping...\n",
-	       __progname, d_or_m);
+	       program_invocation_short_name, d_or_m);
       return;
     }
   servername = machine;
@@ -311,7 +246,7 @@ enum_unix_users (domlist_t *dom_or_machine, const char *sep, DWORD id_offset,
 	  ret = mbstowcs (p, ustr, UNLEN + 1);
 	  if (ret < 1 || ret >= UNLEN + 1)
 	    fprintf (stderr, "%s: Invalid user name '%s'.  Skipping...\n",
-		     __progname, ustr);
+		     program_invocation_short_name, ustr);
 	  else if (LookupAccountNameW (servername, user,
 				       psid = (PSID) psid_buffer,
 				       (sidlen = MAX_SID_LEN, &sidlen),
@@ -341,7 +276,8 @@ enum_unix_users (domlist_t *dom_or_machine, const char *sep, DWORD id_offset,
 		   || (stop = strtol (p, &p, 10)) < start || *p)
 	    {
 	      fprintf (stderr, "%s: Malformed unix user list entry '%s'.  "
-			       "Skipping...\n", __progname, ustr);
+			       "Skipping...\n",
+			       program_invocation_short_name, ustr);
 	      continue;
 	    }
 	  for (; start <= stop; ++ start)
@@ -370,8 +306,8 @@ enum_unix_users (domlist_t *dom_or_machine, const char *sep, DWORD id_offset,
 
 static int
 enum_users (BOOL domain, domlist_t *dom_or_machine, const char *sep,
-	    int print_cygpath, const char *passed_home_path, DWORD id_offset,
-	    char *disp_username, int print_current)
+	    const char *passed_home_path, DWORD id_offset, char *disp_username,
+	    int print_current)
 {
   WCHAR machine[INTERNET_MAX_HOST_NAME_LENGTH + 1];
   PWCHAR servername = NULL;
@@ -395,7 +331,7 @@ enum_users (BOOL domain, domlist_t *dom_or_machine, const char *sep,
       if (ret < 1 || ret >= INTERNET_MAX_HOST_NAME_LENGTH + 1)
 	{
 	  fprintf (stderr, "%s: Invalid machine name '%s'.  Skipping...\n",
-		   __progname, d_or_m);
+		   program_invocation_short_name, d_or_m);
 	  return 1;
 	}
       servername = machine;
@@ -438,7 +374,6 @@ enum_users (BOOL domain, domlist_t *dom_or_machine, const char *sep,
       for (i = 0; i < entriesread; i++)
 	{
 	  char homedir_psx[PATH_MAX];
-	  char homedir_w32[MAX_PATH];
 	  WCHAR domain_name[MAX_DOMAIN_NAME_LEN + 1];
 	  DWORD domname_len = MAX_DOMAIN_NAME_LEN + 1;
 	  char psid_buffer[MAX_SID_LEN];
@@ -448,19 +383,13 @@ enum_users (BOOL domain, domlist_t *dom_or_machine, const char *sep,
 
 	  int uid = buffer[i].usri3_user_id;
 	  int gid = buffer[i].usri3_primary_group_id;
-	  homedir_w32[0] = homedir_psx[0] = '\0';
+	  homedir_psx[0] = '\0';
 	  if (passed_home_path[0] == '\0')
 	    {
-	      uni2ansi (buffer[i].usri3_home_dir, homedir_w32,
-			sizeof (homedir_w32));
-	      if (homedir_w32[0] != '\0')
-		{
-		  if (print_cygpath)
-		    cygwin_conv_path (CCP_WIN_A_TO_POSIX | CCP_ABSOLUTE,
-				      homedir_w32, homedir_psx, PATH_MAX);
-		  else
-		    psx_dir (homedir_w32, homedir_psx);
-		}
+	      if (buffer[i].usri3_home_dir[0] != L'\0')
+		cygwin_conv_path (CCP_WIN_W_TO_POSIX | CCP_ABSOLUTE,
+				  buffer[i].usri3_home_dir, homedir_psx,
+				  PATH_MAX);
 	      else
 		uni2ansi (buffer[i].usri3_name,
 			  stpcpy (homedir_psx, "/home/"), PATH_MAX - 6);
@@ -571,10 +500,12 @@ static int
 usage (FILE * stream)
 {
   fprintf (stream,
-"Usage: mkpasswd [OPTIONS]...\n"
+"Usage: %s [OPTIONS]...\n"
+"\n"
 "Print /etc/passwd file to stdout\n"
 "\n"
 "Options:\n"
+"\n"
 "   -l,--local [machine[,offset]]\n"
 "                           print local user accounts with uid offset offset\n"
 "                           (from local machine if no machine specified)\n"
@@ -596,19 +527,20 @@ usage (FILE * stream)
 "                           one of -l, -L, -d, -D must be specified, too\n"
 "   -p,--path-to-home path  use specified path instead of user account home dir\n"
 "                           or /home prefix\n"
-"   -m,--no-mount           don't use mount points for home dir\n"
 "   -U,--unix userlist      additionally print UNIX users when using -l or -L\n"
 "                           on a UNIX Samba server\n"
 "                           userlist is a comma-separated list of usernames\n"
 "                           or uid ranges (root,-25,50-100).\n"
 "                           (enumerating large ranges can take a long time!)\n"
 "   -s,--no-sids            (ignored)\n"
+"   -m,--no-mount           (ignored)\n"
 "   -g,--local-groups       (ignored)\n"
 "   -h,--help               displays this message\n"
-"   -v,--version            version information and exit\n"
+"   -V,--version            version information and exit\n"
 "\n"
 "Default is to print local accounts on stand-alone machines, domain accounts\n"
-"on domain controllers and domain member machines.\n");
+"on domain controllers and domain member machines.\n"
+"\n", program_invocation_short_name);
   return 1;
 }
 
@@ -628,33 +560,24 @@ static struct option longopts[] = {
   {"separator", required_argument, NULL, 'S'},
   {"username", required_argument, NULL, 'u'},
   {"unix", required_argument, NULL, 'U'},
-  {"version", no_argument, NULL, 'v'},
+  {"version", no_argument, NULL, 'V'},
   {0, no_argument, NULL, 0}
 };
 
-static char opts[] = "cCd::D::ghl::L::mo:sS:p:u:U:v";
+static char opts[] = "cCd::D::ghl::L::mo:sS:p:u:U:V";
 
 static void
 print_version ()
 {
-  const char *v = strchr (version, ':');
-  int len;
-  if (!v)
-    {
-      v = "?";
-      len = 1;
-    }
-  else
-    {
-      v += 2;
-      len = strchr (v, ' ') - v;
-    }
-  printf ("\
-mkpasswd (cygwin) %.*s\n\
-passwd File Generator\n\
-Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2005, 2006, 2008 Red Hat, Inc.\n\
-Compiled on %s\n\
-", len, v, __DATE__);
+  printf ("mkpasswd (cygwin) %d.%d.%d\n"
+	  "Passwd File Generator\n"
+	  "Copyright (C) 1997 - %s Red Hat, Inc.\n"
+	  "This is free software; see the source for copying conditions.  There is NO\n"
+	  "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n",
+	  CYGWIN_VERSION_DLL_MAJOR / 1000,
+	  CYGWIN_VERSION_DLL_MAJOR % 1000,
+	  CYGWIN_VERSION_DLL_MINOR,
+	  strrchr (__DATE__, ' ') + 1);
 }
 
 static void
@@ -698,7 +621,6 @@ main (int argc, char **argv)
   int print_domlist = 0;
   domlist_t domlist[32];
   char *opt, *p, *ep;
-  int print_cygpath = 1;
   int print_current = 0;
   char *print_unix = NULL;
   const char *sep_char = "\\";
@@ -717,7 +639,6 @@ main (int argc, char **argv)
   setlocale (LC_CTYPE, "");
   if (!strcmp (setlocale (LC_CTYPE, NULL), "C"))
     setlocale (LC_CTYPE, "en_US.UTF-8");
-  load_dsgetdcname ();
   in_domain = fetch_primary_domain ();
   fetch_current_user_sid ();
 
@@ -725,10 +646,10 @@ main (int argc, char **argv)
     {
       enum_std_accounts ();
       if (in_domain)
-	enum_users (TRUE, NULL, sep_char, print_cygpath, passed_home_path,
-		    10000, disp_username, 0);
+	enum_users (TRUE, NULL, sep_char, passed_home_path, 10000,
+		    disp_username, 0);
       else
-	enum_users (FALSE, NULL, sep_char, print_cygpath, passed_home_path, 0,
+	enum_users (FALSE, NULL, sep_char, passed_home_path, 0,
 		    disp_username, 0);
       return 0;
     }
@@ -744,7 +665,8 @@ main (int argc, char **argv)
 	if (print_domlist >= 32)
 	  {
 	    fprintf (stderr, "%s: Can not enumerate from more than 32 "
-			     "domains and machines.\n", __progname);
+			     "domains and machines.\n",
+			     program_invocation_short_name);
 	    return 1;
 	  }
 	domlist[print_domlist].domain = (c == 'd' || c == 'D');
@@ -761,7 +683,8 @@ main (int argc, char **argv)
 		      && (!opt[off] || opt[off] == ','))))
 	    {
 	      fprintf (stderr, "%s: Duplicate %s '%s'.  Skipping...\n",
-		       __progname, domlist[i].domain ? "domain" : "machine",
+		       program_invocation_short_name,
+		       domlist[i].domain ? "domain" : "machine",
 		       domlist[i].str);
 	      goto skip;
 	    }
@@ -775,7 +698,7 @@ main (int argc, char **argv)
 		    , *ep))
 	      {
 		fprintf (stderr, "%s: Malformed domain,offset string '%s'.  "
-			 "Skipping...\n", __progname, opt);
+			 "Skipping...\n", program_invocation_short_name, opt);
 		break;
 	      }
 	    *p = '\0';
@@ -788,13 +711,14 @@ skip:
 	if (strlen (sep_char) > 1)
 	  {
 	    fprintf (stderr, "%s: Only one character allowed as domain\\user "
-			     "separator character.\n", __progname);
+			     "separator character.\n",
+			     program_invocation_short_name);
 	    return 1;
 	  }
 	if (*sep_char == ':')
 	  {
 	    fprintf (stderr, "%s: Colon not allowed as domain\\user separator "
-			     "character.\n", __progname);
+			     "character.\n", program_invocation_short_name);
 	    return 1;
 	  }
 	break;
@@ -812,22 +736,15 @@ skip:
 	if (*ep)
 	  {
 	    fprintf (stderr, "%s: Malformed offset '%s'.  "
-		     "Skipping...\n", __progname, optarg);
+		     "Skipping...\n", program_invocation_short_name, optarg);
 	    return 1;
 	  }
-	break;
-      case 'g':
-	break;
-      case 's':
-	break;
-      case 'm':
-	print_cygpath = 0;
 	break;
       case 'p':
 	if (optarg[0] != '/')
 	{
 	  fprintf (stderr, "%s: '%s' is not a fully qualified path.\n",
-		   __progname, optarg);
+		   program_invocation_short_name, optarg);
 	  return 1;
 	}
 	strcpy (passed_home_path, optarg);
@@ -840,11 +757,16 @@ skip:
       case 'h':
 	usage (stdout);
 	return 0;
-      case 'v':
+      case 'V':
 	print_version ();
 	return 0;
+      case 'g':		/* deprecated */
+      case 's':		/* deprecated */
+      case 'm':		/* deprecated */
+	break;
       default:
-	fprintf (stderr, "Try '%s --help' for more information.\n", __progname);
+	fprintf (stderr, "Try `%s --help' for more information.\n",
+		 program_invocation_short_name);
 	return 1;
       }
 
@@ -867,15 +789,14 @@ skip:
 	enum_unix_users (domlist + i, sep_char, my_off, print_unix);
       if (!my_off && !disp_username)
 	enum_std_accounts ();
-      enum_users (domlist[i].domain, domlist + i, sep_char, print_cygpath,
-		  passed_home_path, my_off, disp_username, print_current);
+      enum_users (domlist[i].domain, domlist + i, sep_char, passed_home_path,
+		  my_off, disp_username, print_current);
       if (my_off)
 	off += id_offset;
     }
 
   if (print_current && !got_curr_user)
-    current_user (print_cygpath, sep_char, passed_home_path, off,
-		  disp_username);
+    current_user (sep_char, passed_home_path, off, disp_username);
 
   return 0;
 }

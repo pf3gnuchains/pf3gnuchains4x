@@ -1,7 +1,7 @@
 /* poll.cc. Implements poll(2) via usage of select(2) call.
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009
-   Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
+   2011 Red Hat, Inc.
 
    This file is part of Cygwin.
 
@@ -21,11 +21,14 @@
 #include "fhandler.h"
 #include "dtable.h"
 #include "cygheap.h"
+#include "pinfo.h"
+#include "sigproc.h"
 
 extern "C" int
 poll (struct pollfd *fds, nfds_t nfds, int timeout)
 {
   int max_fd = 0;
+  int invalid_fds = 0;
   fd_set *read_fds, *write_fds, *except_fds;
   struct timeval tv = { timeout / 1000, (timeout % 1000) * 1000 };
 
@@ -49,7 +52,6 @@ poll (struct pollfd *fds, nfds_t nfds, int timeout)
   memset (write_fds, 0, fds_size);
   memset (except_fds, 0, fds_size);
 
-  int invalid_fds = 0;
   for (unsigned int i = 0; i < nfds; ++i)
     {
       fds[i].revents = 0;
@@ -69,27 +71,42 @@ poll (struct pollfd *fds, nfds_t nfds, int timeout)
 	}
     }
 
-  if (invalid_fds)
-    return invalid_fds;
+  /* Invalid fds? */
+  if (invalid_fds > 0)
+    {
+      /* Only invalid fds?  Return. */
+      if ((nfds_t) invalid_fds == nfds)
+	return invalid_fds;
+      /* POSIX doesn't explicitely define this behaviour, but on Linux,
+	 the timeout is set to 0 if an error occurs, and POLLNVAL is one
+	 of these errors.  So, for Linux-compatibility's sake... */
+      tv.tv_sec = tv.tv_usec = 0;
+    }
 
   int ret = cygwin_select (max_fd + 1, read_fds, write_fds, except_fds,
 			   timeout < 0 ? NULL : &tv);
+  /* timeout, signal, whatever?  Return.  If invalid fds exist, return with
+     their number. */
   if (ret <= 0)
-    return ret;
+    return invalid_fds ?: ret;
 
   /* Set revents fields and count fds with non-zero revents fields for
      return value. */
   ret = 0;
   for (unsigned int i = 0; i < nfds; ++i)
     {
-      if (fds[i].fd >= 0)
+      if (fds[i].fd >= 0 && fds[i].revents != POLLNVAL)
 	{
-	  if (cygheap->fdtab.not_open (fds[i].fd))
+	  fhandler_socket *sock;
+
+	  /* Check if the descriptor has been closed, or if shutdown for the
+	     read side has been called on a socket. */
+	  if (cygheap->fdtab.not_open (fds[i].fd)
+	      || ((sock = cygheap->fdtab[fds[i].fd]->is_socket ())
+		  && sock->saw_shutdown_read ()))
 	    fds[i].revents = POLLHUP;
 	  else
 	    {
-	      fhandler_socket *sock;
-
 	      if (FD_ISSET(fds[i].fd, read_fds))
 		/* This should be sufficient for sockets, too.  Using
 		   MSG_PEEK, as before, can be considered dangerous at
@@ -117,6 +134,27 @@ poll (struct pollfd *fds, nfds_t nfds, int timeout)
 	    ++ret;
 	}
     }
+  /* Number of fds with event includes the invalid fds. */
+  return ret + invalid_fds;
+}
 
+extern "C" int
+ppoll (struct pollfd *fds, nfds_t nfds, const struct timespec *timeout_ts,
+       const sigset_t *sigmask)
+{
+  int timeout;
+  sigset_t oldset = _my_tls.sigmask;
+
+  myfault efault;
+  if (efault.faulted (EFAULT))
+    return -1;
+  timeout = (timeout_ts == NULL)
+	    ? -1
+	    : (timeout_ts->tv_sec * 1000 + timeout_ts->tv_nsec / 1000000);
+  if (sigmask)
+    set_signal_mask (*sigmask, _my_tls.sigmask);
+  int ret = poll (fds, nfds, timeout);
+  if (sigmask)
+    set_signal_mask (oldset, _my_tls.sigmask);
   return ret;
 }

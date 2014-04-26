@@ -2,7 +2,7 @@
 
 THIS FILE IS MACHINE GENERATED WITH CGEN.
 
-Copyright 1996-2010 Free Software Foundation, Inc.
+Copyright 1996-2010, 2012 Free Software Foundation, Inc.
 
 This file is part of the GNU simulators.
 
@@ -997,7 +997,7 @@ model_lm32_xnori (SIM_CPU *current_cpu, void *sem_arg)
 static int
 model_lm32_break (SIM_CPU *current_cpu, void *sem_arg)
 {
-#define FLD(f) abuf->fields.fmt_empty.f
+#define FLD(f) abuf->fields.sfmt_empty.f
   const ARGBUF * UNUSED abuf = SEM_ARGBUF ((SEM_ARG) sem_arg);
   const IDESC * UNUSED idesc = abuf->idesc;
   int cycles = 0;
@@ -1013,7 +1013,7 @@ model_lm32_break (SIM_CPU *current_cpu, void *sem_arg)
 static int
 model_lm32_scall (SIM_CPU *current_cpu, void *sem_arg)
 {
-#define FLD(f) abuf->fields.fmt_empty.f
+#define FLD(f) abuf->fields.sfmt_empty.f
   const ARGBUF * UNUSED abuf = SEM_ARGBUF ((SEM_ARG) sem_arg);
   const IDESC * UNUSED idesc = abuf->idesc;
   int cycles = 0;

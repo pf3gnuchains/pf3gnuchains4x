@@ -1,3 +1,258 @@
+2011-11-30  Ozkan Sezer  <sezero@users.sourceforge.net>
+
+	* include/io.h (_wfindfirst, _wfindnext, _wfindfirst32, _wfindnext32,
+	_wfindfirsti64, _wfindnexti64, _wfindfirst32i64, _wfindfirst64i32,
+	_wfindnext32i64, _wfindnext64i32, _wfindnext64): Update to use intptr_t.
+
+2011-11-30  Earnie Boyd  <earnie@users.sourceforge.net>
+
+	* include/stdio.h (getc, putc, getchar, putchar, fopen64, ftello64): Add
+	function definitions to fix warnings when building GCC.
+
+2011-11-30  Rodrigo Rivas Costa  <rodrigorivascosta@gmail.com>
+
+	* tlssup.c (__dyn_tls_init): Reapply patch from 3105314.
+
+	Thank you to Earnie for creating the patch file.
+
+2011-11-26  Keith Marshall  <keithmarshall@users.sourceforge.net>
+
+	Clean up DIRENT errno handling; make it more POSIX conformant.
+
+	* mingwex/dirent.c (errno): Never zero it; POSIX forbids this.
+	(_tclosedir): Save errno at entry; restore it when no more files.
+	(DIRENT_RETURN_NOTHING): New macro; define it; use it in functions
+	with `void' return type, in place of the return arg when invoking...
+	(DIRENT_REJECT): New macro; define it; use it in all functions, to
+	set `errno' and bail out, on detection of an abnormal condition.
+	[errno = EFAULT]: Do not assign as this; POSIX specifies...
+	[errno = EBADF]: ...this instead.
+
+2011-10-01  Keith Marshall  <keithmarshall@users.sourceforge.net>
+
+	Rationalise DIRENT structure layout; add dirent.d_type field.
+
+	* include/dirent.h (struct dirent): Rearrange; add d_type field.
+	Add extra padding fields between d_type and d_name, to represent a
+	union with a _finddata_t struct, aligned at the d_type field.
+	(struct _wdirent): Likewise, with _wfinddata_t aligned at d_type.
+	(DT_REG, DT_DIR): New macros; define them to be equivalent to...
+	(_A_NORMAL, _A_SUBDIR): ...these Microsoft attributes respectively.
+	(DT_BLK, DT_CHR, DT_FIFO, DT_LNK, DT_SOCK): New macros; define them.
+	They have little relevance on Win32, so don't use them, substitute...
+	(DT_UNKNOWN): ...this new catch-all macro instead; define it.
+	(struct __dirstream_t): Change declaration; replace by opaque union.
+	(struct __wdirstream_t): Likewise.
+
+	* mingwex/dirent.c (struct __dirstream_t): Redefine as union; map...
+	(struct dirent, struct __dirstream_private_t): ...these to a common
+	address; the latter encapsulates the private data into...
+	(dd_private): ...this new member; update all references accordingly.
+	Adjust field layout to align with corresponding dirent fields.
+	(struct __wdirstream_t): Similarly redefine as union, mapping...
+	(struct _wdirent, struct __wdirstream_private_t): ...these.
+	(_treaddir): Set dirent.d_type to appropriate selection from...
+	(DT_REG, DT_DIR, DT_UNKNOWN): ...these.
+
+2011-08-27  Keith Marshall  <keithmarshall@users.sourceforge.net>
+
+	Don't expose implementation detail for opaque DIRENT structures.
+
+	* include/dirent.h (DIR, _WDIR): Declare as opaque data types.
+	(__dirstream_t, __wdirstream_t): Add these tags for their underlying
+	structures, respectively; move their detailed declarations to...
+	* mingwex/dirent.c: ...here.
+
+2011-08-23 Chris Sutcliffe <ir0nh34d@users.sourceforge.net>
+
+	* include/_mingw.h: Increment version to 3.20.
+
+2011-08-23 Chris Sutcliffe <ir0nh34d@users.sourceforge.net>
+
+	* tlsmthread.c: Update to reflect changes in tlssup.c.
+	* tlssup.c: code clean-up.
+
+2011-08-20 Chris Sutcliffe <ir0nh34d@users.sourceforge.net>
+
+	* include/_mingw.h: Increment version to 3.19.
+
+2011-08-19  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/float.h: Modify guard to accomodate CLang.
+
+	Thanks to Ruben Van Boxem for the report.
+
+2011-08-19  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* tlssup.c: Remove mingwm10.dll fallback.
+
+2011-08-19  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/sys/types.h (ssize_t): Defined as int as opposed to long.
+
+	Thanks to bvassche for the report.
+
+2011-05-31  Keith Marshall  <keithmarshall@users.sourceforge.net>
+
+	Correct checking for short option matches in getopt_long_only().
+
+	* mingwex/getopt.c (getopt_verify): New static inline function.
+	(getopt_parse) [getopt_mode_long_only]: Use it, to validate as a
+	possible short option match after failing to match, or ambiguously
+	matching as a long option.
+
+2011-05-24  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/stdlib.h (strtod): Declare as extern to resolve compilation issues.
+
+	Thanks to cgf for the report.
+
+2011-05-23  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/time.h (daylight, timezone, tzname): Rework guards to expose when
+	compiles with __STRICT_ANSI__.
+
+	Thanks to Felipe Contreras for the report.
+
+2011-05-22  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/stdlib.h (strtod): Remove possible static declaration to resolve
+	issue with gcc.
+
+	Thanks to Tobias Burnus for the report.
+
+2011-05-22  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/stdlib.h (_rotl, _lrotl, _rotr, _lrotr): Resolve conflict with gcc
+	by wrapping the functions in brackets.
+
+	Thanks to Kai Tietz for the report.
+
+2011-05-22  A.B., Khalid  <abkhd@users.sourceforge.net>
+
+	* Makefile.in: Add support for msvcr100.dll.
+	* msvcrt.def.in: Ditto.
+
+2011-05-22  Antoine LECA  <antoinel@users.sourceforge.net>
+
+	* mingwex/mingw-fseek.c: The anonymous union feature for LARGE_INTEGER is
+	not always available, go the long way and use the explicit named union
+	members, which are also declared in winnt.h.
+
+2011-05-22  Antoine LECA  <antoinel@users.sourceforge.net>
+
+	* mingwex/isblank.c: Fix typo in declaration.
+
+2011-05-22  Antoine LECA  <antoinel@users.sourceforge.net>
+
+	* include/_mingw.h: Define GCC system_header only if PCC is not defined.
+	* include/stdlib.h: Fix a long-standing typo which prevented correct use of
+	the MB_CUR_MAX macro/variable when DECLSPEC is not supported and <stdlib.h>
+	is included before <ctype.h>.
+
+2011-05-22  Chris Sutcliffe  <ir0nh34d@users.sourceforge.net>
+
+	* include/wchar.h: Include stdio.h to grab definition of FILENAME_MAX.
+
+	Thanks to Jim Bell for the report and Greg Chicares for the fix.
+
+2011-01-07  Jacky Lai  <crazyjacky@users.sourceforge.net>
+
+	Correct hexadecimal formatting of double and long double values.
+
+	* mingwex/stdio/pformat.c (__pformat_xdouble): Delete function.
+	(__pformat) [A format]: Cast double values to long double, and use...
+	(__pformat_xldouble): ...this instead, with corrected adjustment of
+	exponent and alignment of mantissa, when formatting subnormals.
+
+2010-12-27  Ozkan Sezer  <sezero@users.sourceforge.net>
+
+	* include/dirent.h (dd_handle): Define as intptr_t.
+
+2010-11-08  Rodrigo Rivas Costa  <rodrigorivascosta@gmail.com>
+
+	* tlssup.c (__dyn_tls_init): Use an integer variable to iterate between
+	__xd_a and __xd_z.
+
+2010-08-17  Keith Marshall  <keithmarshall@users.sourceforge.net>
+
+	* include/limits.h (PATH_MAX): Make it agree with Microsoft's
+	semantically identical MAX_PATH; correct value is 260.
+
+2010-07-25  Keith Marshall  <keithmarshall@users.sourceforge.net>
+
+	Accept that mingwrt headers are not guaranteed to precede GCC's in the
+	system include search path; (issue reported by Mark Brand).
+
+	* include/float.h: Add multiple inclusion guard around...
+	[! defined _FLOAT_H___]: ...include_next <float.h> for GCC's version,
+	only when this define does not indicate that it has already been seen;
+	update comments to document rationale; move it within the scope of...
+	[! defined _MINGW_FLOAT_H_]: ...this multiple inclusion guard, so that
+	GCC's float.h, after an appropriate complementary modification, need
+	not perform a further include path search when this implementation
+	specific extension has already been processed.
+
+2010-07-22  Ozkan Sezer  <sezero@users.sourceforge.net>
+
+	* include/io.h (_findfirst, _findnext, _findclose, _findfirst32,
+	_findnext32, _findfirsti64, _findnexti64, _findfirst32i64, _findfirst64i32,
+	_findnext32i64, _findnext64i32, _findnext64, _findfirst, _findnext,
+	_findfirsti64, _findnexti64, _findfirst, _findnext, _findfirsti64,
+	_findnexti64): Correct definition.
+
+2010-04-27 Danny Smith <dannysmith@users.sourceforge.net>
+
+	* mingwex/mb_wc_common.h (get_codepage): Revert change of 2006-09-19.
+
+2010-03-06 Chris Sutcliffe <ir0nh34d@users.sourceforge.net>
+
+	* include/_mingw.h: Increment version to 3.18.
+
+2010-03-02  Daniel Atallah <datallah@users.sourceforge.net>
+
+	* include/stdio.h: (_vscprintf, _vscwprintf)
+	* include/tchar.h: (_vsctprintf)
+	
+2010-02-14  Roumen Petrov  <rumen@users.sourceforge.net>
+
+	Issue [2134161]: time64 functions and types for msvcrt >= 8.0
+	(initial implementation)
+
+	* new type: __time32_t
+
+	* new structures: _finddata32_t, _finddata32i64_t, _finddata64i32_t,
+	__stat32, _stat32i64, _stat64i32, __timeb32, __utimbuf32,
+	__wfinddata32_t, _wfinddata32i64_t, _wfinddata64i32_t
+
+	* new functions: _ctime32, _difftime32, _difftime64, _findfirst32
+	_findfirst32i64, _findfirst64i32, _findnext32, _findnext32i64,
+	_findnext64i32, _fstat32, _fstat32i64, _fstat64i32, _ftime32,
+	_futime32, _gmtime32, _localtime32, _mkgmtime32, _mkgmtime64,
+	_mktime32, _stat32, _stat32i64, _stat64i32, _time32, _utime32,
+	_wctime32, _wfindfirst32, _wfindfirst32i64, _wfindfirst64i32,
+	_wfindnext32, _wfindnext32i64, _wfindnext64i32, _wstat32,
+	_wstat32i64, _wstat64i32,_wutime32
+
+	* new define _USE_32BIT_TIME_T set 32 or 64 aliases for: time_t,
+	ctime, difftime, _findfirst, _findfirsti64, _findnext, _findnexti64,
+	_fstat, _fstati64, _ftime, _futime, gmtime, localtime, mktime,
+	_stat, _stati64, time, _utime, _wctime, _wfindfirst, _wfindfirsti64,
+	_wfindnext, _wfindnexti64, _wstat, _wstati64, _wutime
+
+2010-01-25  Kai Tietz  <kai.tietz@onevision.com>
+
+	Implement TLS Callback.
+
+	* tlsmcrt.c: New file.
+	* tlsmthread.c: Ditto.
+	* tlssup.c: Ditto.
+	* tlsthrd.c: Ditto.
+	* Makefile.in: Include new files.
+	* crt1.c: Implement TLS Callback.
+	* dllcrt1.c: Ditto.
+	* mthr_stub.c: Remove.
+
 2009-11-29 Chris Sutcliffe <ir0nh34d@users.sourceforge.net>
 
 	* include/_mingw.h: Increment version to 3.17.
@@ -2872,7 +3127,7 @@
 2002-09-17 Danny Smith <dannysmith@users.sourceforge.net>
 
 	* include/time.h (__need_NULL): Define before including
-	stddef.h. Thanks to: Rüdiger Dehmel <de@lmnet.de>.
+	stddef.h. Thanks to: RÃ¼diger Dehmel <de@lmnet.de>.
 
 2002-09-16 Ranjit Matthew <rmathew@hotmail.com>
 

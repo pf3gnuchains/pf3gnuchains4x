@@ -10,6 +10,9 @@ __ctype_ptr__ DATA
 __cygwin_environ DATA
 __cygwin_user_data DATA
 _daylight DATA
+error_message_count DATA
+error_one_per_line DATA
+error_print_progname DATA
 h_errno DATA
 _impure_ptr DATA
 in6addr_any DATA
@@ -28,12 +31,13 @@ _sys_errlist DATA
 sys_nerr = _sys_nerr DATA
 _sys_nerr DATA
 sys_sigabbrev DATA
+sys_siglist DATA
 _timezone DATA
 _tzname DATA
 _Exit SIGFE
 a64l NOSIGFE
 abort NOSIGFE
-_abort = abort SIGFE
+_abort = abort NOSIGFE
 abs NOSIGFE
 _abs = abs NOSIGFE
 accept = cygwin_accept SIGFE
@@ -121,9 +125,9 @@ asprintf SIGFE
 _asprintf = asprintf SIGFE
 asprintf_r = _asprintf_r SIGFE
 _asprintf_r SIGFE
-__assert SIGFE
-__assert_func SIGFE
-__assertfail SIGFE
+__assert NOSIGFE
+__assert_func NOSIGFE
+__assertfail NOSIGFE
 atan NOSIGFE
 _atan = atan NOSIGFE
 atan2 NOSIGFE
@@ -164,17 +168,37 @@ cabs NOSIGFE
 _cabs = cabs NOSIGFE
 cabsf NOSIGFE
 _cabsf = cabsf NOSIGFE
+cacos NOSIGFE
+cacosf NOSIGFE
+cacosh NOSIGFE
+cacoshf NOSIGFE
 calloc SIGFE
 _calloc = calloc SIGFE
 canonicalize_file_name SIGFE
+carg NOSIGFE
+cargf NOSIGFE
+casin NOSIGFE
+casinf NOSIGFE
+casinh NOSIGFE
+casinhf NOSIGFE
+catan NOSIGFE
+catanf NOSIGFE
+catanh NOSIGFE
+catanhf NOSIGFE
 cbrt NOSIGFE
 _cbrt = cbrt NOSIGFE
 cbrtf NOSIGFE
 _cbrtf = cbrtf NOSIGFE
+ccos NOSIGFE
+ccosf NOSIGFE
+ccosh NOSIGFE
+ccoshf NOSIGFE
 ceil NOSIGFE
 _ceil = ceil NOSIGFE
 ceilf NOSIGFE
 _ceilf = ceilf NOSIGFE
+cexp NOSIGFE
+cexpf NOSIGFE
 cfgetispeed NOSIGFE
 cfgetospeed NOSIGFE
 cfmakeraw NOSIGFE
@@ -189,20 +213,29 @@ _chown = chown SIGFE
 _chown32 = chown32 SIGFE
 chroot SIGFE
 _chroot = chroot SIGFE
+cimag NOSIGFE
+cimagf NOSIGFE
 cleanup_glue NOSIGFE
 clearerr SIGFE
 _clearerr = clearerr SIGFE
 clock SIGFE
 _clock = clock SIGFE
+clock_getcpuclockid SIGFE
 clock_getres SIGFE
 clock_gettime SIGFE
+clock_nanosleep SIGFE
 clock_setres SIGFE
+clock_settime SIGFE
+clog NOSIGFE
+clogf NOSIGFE
 close SIGFE
 _close = close SIGFE
 closedir SIGFE
 _closedir = closedir SIGFE
 closelog SIGFE
 confstr NOSIGFE
+conj NOSIGFE
+conjf NOSIGFE
 connect = cygwin_connect SIGFE
 copysign NOSIGFE
 _copysign = copysign NOSIGFE
@@ -216,8 +249,24 @@ cosh NOSIGFE
 _cosh = cosh NOSIGFE
 coshf NOSIGFE
 _coshf = coshf NOSIGFE
+cpow NOSIGFE
+cpowf NOSIGFE
+cproj NOSIGFE
+cprojf NOSIGFE
+creal NOSIGFE
+crealf NOSIGFE
 creat SIGFE
 _creat = creat SIGFE
+csin NOSIGFE
+csinf NOSIGFE
+csinh NOSIGFE
+csinhf NOSIGFE
+csqrt NOSIGFE
+csqrtf NOSIGFE
+ctan NOSIGFE
+ctanf NOSIGFE
+ctanh NOSIGFE
+ctanhf NOSIGFE
 ctermid SIGFE
 ctime SIGFE
 _ctime = ctime SIGFE
@@ -344,6 +393,8 @@ erff NOSIGFE
 _erff = erff NOSIGFE
 err SIGFE
 __errno NOSIGFE
+error SIGFE
+error_at_line SIGFE
 errx SIGFE
 euidaccess SIGFE
 execl SIGFE
@@ -453,10 +504,29 @@ fdopen SIGFE
 _fdopen = fdopen SIGFE
 _fdopen64 = fdopen64 SIGFE
 fdopendir SIGFE
+_fe_dfl_env DATA
+_fe_nomask_env DATA
+feclearexcept NOSIGFE
+fedisableexcept NOSIGFE
+feenableexcept SIGFE
+fegetenv NOSIGFE
+fegetexcept NOSIGFE
+fegetexceptflag NOSIGFE
+fegetprec NOSIGFE
+fegetround NOSIGFE
+feholdexcept SIGFE
+_feinitialise NOSIGFE
 feof SIGFE
 _feof = feof SIGFE
+feraiseexcept SIGFE
 ferror SIGFE
 _ferror = ferror SIGFE
+fesetenv SIGFE
+fesetexceptflag SIGFE
+fesetprec NOSIGFE
+fesetround NOSIGFE
+fetestexcept NOSIGFE
+feupdateenv SIGFE
 fexecve SIGFE
 fflush SIGFE
 _fflush = fflush SIGFE
@@ -513,6 +583,7 @@ __fpclassifyf NOSIGFE
 fprintf SIGFE
 _fprintf = fprintf SIGFE
 fpurge SIGFE
+__fpurge SIGFE
 fputc SIGFE
 _fputc = fputc SIGFE
 fputs SIGFE
@@ -601,6 +672,7 @@ _gcvt = gcvt SIGFE
 gcvtf SIGFE
 _gcvtf = gcvtf SIGFE
 get_avphys_pages SIGFE
+get_current_dir_name SIGFE
 get_nprocs SIGFE
 get_nprocs_conf SIGFE
 get_osfhandle SIGFE
@@ -645,6 +717,7 @@ getgrnam SIGFE
 _getgrnam = getgrnam SIGFE
 _getgrnam32 = getgrnam32 SIGFE
 getgrnam_r SIGFE
+getgrouplist SIGFE
 getgroups SIGFE
 _getgroups = getgroups SIGFE
 _getgroups32 = getgroups32 SIGFE
@@ -687,6 +760,7 @@ getprogname NOSIGFE
 getprotobyname = cygwin_getprotobyname SIGFE
 getprotobynumber = cygwin_getprotobynumber SIGFE
 getprotoent = cygwin_getprotoent SIGFE
+getpt SIGFE
 getpwduid NOSIGFE
 _getpwduid = getpwduid NOSIGFE
 getpwent SIGFE
@@ -899,6 +973,9 @@ llistxattr SIGFE
 llrint = _f_llrint NOSIGFE
 llrintf = _f_llrintf NOSIGFE
 llrintl = _f_llrintl NOSIGFE
+llround NOSIGFE
+llroundf NOSIGFE
+__locale_mb_cur_max NOSIGFE
 localeconv NOSIGFE
 _localeconv = localeconv NOSIGFE
 localtime SIGFE
@@ -948,6 +1025,7 @@ _lstat = lstat SIGFE
 _lstat64 = lstat64 SIGFE
 lutimes SIGFE
 __main NOSIGFE
+madvise = posix_madvise SIGFE
 mallinfo SIGFE
 malloc SIGFE
 _malloc = malloc SIGFE
@@ -994,6 +1072,8 @@ mknod SIGFE
 _mknod = mknod SIGFE
 _mknod32 = mknod32 SIGFE
 mknodat SIGFE
+mkostemp SIGFE
+mkostemps SIGFE
 mkstemp SIGFE
 _mkstemp = mkstemp SIGFE
 mkstemps SIGFE
@@ -1093,24 +1173,35 @@ pow10 NOSIGFE
 pow10f NOSIGFE
 powf NOSIGFE
 _powf = powf NOSIGFE
+ppoll SIGFE
 pread SIGFE
 printf SIGFE
+program_invocation_name DATA
+program_invocation_short_name DATA
 _printf = printf SIGFE
 pselect SIGFE
+psiginfo SIGFE
+psignal SIGFE
 pthread_atfork SIGFE
 pthread_attr_destroy SIGFE
 pthread_attr_getdetachstate SIGFE
+pthread_attr_getguardsize SIGFE
 pthread_attr_getinheritsched SIGFE
 pthread_attr_getschedparam SIGFE
 pthread_attr_getschedpolicy SIGFE
 pthread_attr_getscope SIGFE
+pthread_attr_getstack SIGFE
+pthread_attr_getstackaddr SIGFE
 pthread_attr_getstacksize SIGFE
 pthread_attr_init SIGFE
 pthread_attr_setdetachstate SIGFE
+pthread_attr_setguardsize SIGFE
 pthread_attr_setinheritsched SIGFE
 pthread_attr_setschedparam SIGFE
 pthread_attr_setschedpolicy SIGFE
 pthread_attr_setscope SIGFE
+pthread_attr_setstack SIGFE
+pthread_attr_setstackaddr SIGFE
 pthread_attr_setstacksize SIGFE
 pthread_cancel SIGFE
 _pthread_cleanup_pop SIGFE
@@ -1122,15 +1213,19 @@ pthread_cond_signal SIGFE
 pthread_cond_timedwait SIGFE
 pthread_cond_wait SIGFE
 pthread_condattr_destroy SIGFE
+pthread_condattr_getclock SIGFE
 pthread_condattr_getpshared SIGFE
 pthread_condattr_init SIGFE
+pthread_condattr_setclock SIGFE
 pthread_condattr_setpshared SIGFE
 pthread_continue SIGFE
 pthread_create SIGFE
 pthread_detach SIGFE
 pthread_equal SIGFE
 pthread_exit SIGFE
+pthread_getattr_np SIGFE
 pthread_getconcurrency SIGFE
+pthread_getcpuclockid SIGFE
 pthread_getschedparam SIGFE
 pthread_getsequence_np SIGFE
 pthread_getspecific SIGFE
@@ -1172,11 +1267,20 @@ pthread_setcancelstate SIGFE
 pthread_setcanceltype SIGFE
 pthread_setconcurrency SIGFE
 pthread_setschedparam SIGFE
+pthread_setschedprio SIGFE
 pthread_setspecific SIGFE
 pthread_sigmask SIGFE
+pthread_sigqueue SIGFE
 pthread_suspend SIGFE
+pthread_spin_destroy SIGFE
+pthread_spin_init SIGFE
+pthread_spin_lock SIGFE
+pthread_spin_trylock SIGFE
+pthread_spin_unlock SIGFE
 pthread_testcancel SIGFE
+pthread_yield = sched_yield SIGFE
 ptsname SIGFE
+ptsname_r SIGFE
 putc SIGFE
 _putc = putc SIGFE
 putc_unlocked SIGFE
@@ -1513,6 +1617,7 @@ strcat NOSIGFE
 _strcat = strcat NOSIGFE
 strchr NOSIGFE
 _strchr = strchr NOSIGFE
+strchrnul NOSIGFE
 strcmp NOSIGFE
 _strcmp = strcmp NOSIGFE
 strcoll NOSIGFE
@@ -1527,6 +1632,7 @@ strerror SIGFE
 _strerror = strerror SIGFE
 strerror_r SIGFE
 _strerror_r = strerror_r SIGFE
+strfmon SIGFE
 strftime SIGFE
 _strftime = strftime SIGFE
 strlcat NOSIGFE
@@ -1597,6 +1703,7 @@ symlinkat SIGFE
 sync SIGFE
 sysconf SIGFE
 _sysconf = sysconf SIGFE
+sysinfo SIGFE
 syslog SIGFE
 _syslog = syslog SIGFE
 system SIGFE
@@ -1610,21 +1717,14 @@ _tanh = tanh NOSIGFE
 tanhf NOSIGFE
 _tanhf = tanhf NOSIGFE
 tcdrain SIGFE
-_tcdrain = tcdrain SIGFE
 tcflow SIGFE
-_tcflow = tcflow SIGFE
 tcflush SIGFE
-_tcflush = tcflush SIGFE
 tcgetattr SIGFE
-_tcgetattr = tcgetattr SIGFE
 tcgetpgrp SIGFE
-_tcgetpgrp = tcgetpgrp SIGFE
+tcgetsid SIGFE
 tcsendbreak SIGFE
-_tcsendbreak = tcsendbreak SIGFE
 tcsetattr SIGFE
-_tcsetattr = tcsetattr SIGFE
 tcsetpgrp SIGFE
-_tcsetpgrp = tcsetpgrp SIGFE
 tdelete SIGFE
 tdestroy NOSIGFE
 telldir SIGFE
@@ -1814,6 +1914,56 @@ _write = write SIGFE
 writev SIGFE
 _writev = writev SIGFE
 wscanf SIGFE
+xdr_array SIGFE
+xdr_bool SIGFE
+xdr_bytes SIGFE
+xdr_char SIGFE
+xdr_double SIGFE
+xdr_enum SIGFE
+xdr_float SIGFE
+xdr_free SIGFE
+xdr_hyper SIGFE
+xdr_int SIGFE
+xdr_int16_t SIGFE
+xdr_int32_t SIGFE
+xdr_int64_t SIGFE
+xdr_int8_t SIGFE
+xdr_long SIGFE
+xdr_longlong_t SIGFE
+xdr_netobj SIGFE
+xdr_opaque SIGFE
+xdr_pointer SIGFE
+xdr_reference SIGFE
+xdr_short SIGFE
+xdr_sizeof SIGFE
+xdr_string SIGFE
+xdr_u_char SIGFE
+xdr_u_hyper SIGFE
+xdr_u_int SIGFE
+xdr_u_int16_t SIGFE
+xdr_u_int32_t SIGFE
+xdr_u_int64_t SIGFE
+xdr_u_int8_t SIGFE
+xdr_u_long SIGFE
+xdr_u_longlong_t SIGFE
+xdr_u_short SIGFE
+xdr_uint16_t SIGFE
+xdr_uint32_t SIGFE
+xdr_uint64_t SIGFE
+xdr_uint8_t SIGFE
+xdr_union SIGFE
+xdr_vector SIGFE
+xdr_void SIGFE
+xdr_wrapstring SIGFE
+xdrmem_create SIGFE
+xdrrec_create SIGFE
+xdrrec_endofrecord SIGFE
+xdrrec_eof SIGFE
+xdrrec_skiprecord SIGFE
+__xdrrec_getrec SIGFE
+__xdrrec_setnonblock SIGFE
+xdrstdio_create SIGFE
+__xpg_strerror_r SIGFE
 y0 NOSIGFE
 y0f NOSIGFE
 y1 NOSIGFE

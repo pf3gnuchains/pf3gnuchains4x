@@ -1,4 +1,4 @@
-# Copyright (C) 2009, 2010 Free Software Foundation, Inc.
+# Copyright (C) 2009-2012 Free Software Foundation, Inc.
 #
 # This file is part of GDB.
 #
@@ -23,8 +23,8 @@ class TypeFlag:
     and its value.
 
     In the GDB sources, struct type has a component called instance_flags
-    whose the value is the addition of various flags.  These flags are
-    defined by two emumerates: type_flag_value, and type_instance_flag_value.
+    in which the value is the addition of various flags.  These flags are
+    defined by two enumerates: type_flag_value, and type_instance_flag_value.
     This class helps us recreate a list with all these flags that is
     easy to manipulate and sort.  Because all flag names start with either
     TYPE_FLAG_ or TYPE_INSTANCE_FLAG_, a short_name attribute is provided
@@ -203,9 +203,10 @@ class StructMainTypePrettyPrinter:
                    % type_specific['gnat_stuff']['descriptive_type'])
         elif type_specific_kind == "TYPE_SPECIFIC_FLOATFORMAT":
             img = "floatformat[0..1] = %s" % type_specific['floatformat']
-        elif type_specific_kind == "TYPE_SPECIFIC_CALLING_CONVENTION":
+        elif type_specific_kind == "TYPE_SPECIFIC_FUNC":
             img = ("calling_convention = %d"
-                   % type_specific['calling_convention'])
+                   % type_specific['func_stuff']['calling_convention'])
+            # tail_call_list is not printed.
         else:
             img = ("type_specific = ??? (unknown type_secific_kind: %s)"
                    % type_specific_kind)

@@ -1,12 +1,15 @@
 /* devices.h
 
-   Copyright 2002, 2003, 2004, 2005 Red Hat, Inc.
+   Copyright 2002, 2003, 2004, 2005, 2007, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
 This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
 details. */
+
+#ifndef _DEVICES_H
+#define _DEVICES_H
 
 typedef unsigned short _major_t;
 typedef unsigned short _minor_t;
@@ -17,42 +20,55 @@ typedef __dev32_t _dev_t;
 #define _minor(dev) ((dev) & ((1 << (sizeof (_minor_t) * 8)) - 1))
 #define _major(dev) ((dev) >> (sizeof (_major_t) * 8))
 
+#define MAX_CONSOLES 63
 enum fh_devices
 {
   FH_TTY     = FHDEV (5, 0),
   FH_CONSOLE = FHDEV (5, 1),
-  FH_PTYM    = FHDEV (5, 2),	/* /dev/ptmx */
+  FH_PTMX    = FHDEV (5, 2),
   FH_CONIN   = FHDEV (5, 255),
   FH_CONOUT  = FHDEV (5, 254),
 
-  DEV_TTYM_MAJOR = 128,
-  FH_TTYM    = FHDEV (DEV_TTYM_MAJOR, 0),
-  FH_TTYM_MAX= FHDEV (DEV_TTYM_MAJOR, 255),
+  DEV_CONS_MAJOR = 3,
+  FH_CONS     = FHDEV (DEV_CONS_MAJOR, 0),
+  FH_CONS_MAX = FHDEV (DEV_CONS_MAJOR, MAX_CONSOLES),
 
-  DEV_TTYS_MAJOR = 136,
-  FH_TTYS    = FHDEV (DEV_TTYS_MAJOR, 0),	/* FIXME: Should separate ttys and ptys */
-  FH_TTYS_MAX= FHDEV (DEV_TTYS_MAJOR, 255),	/* FIXME: Should separate ttys and ptys */
+  DEV_PTYM_MAJOR = 128,
+  FH_PTYM    = FHDEV (DEV_PTYM_MAJOR, 0),
+  FH_PTYM_MAX= FHDEV (DEV_PTYM_MAJOR, 255),
+
+  DEV_PTYS_MAJOR = 136,
+  FH_PTYS    = FHDEV (DEV_PTYS_MAJOR, 0),	/* FIXME: Should separate ttys and ptys */
+  FH_PTYS_MAX= FHDEV (DEV_PTYS_MAJOR, 255),	/* FIXME: Should separate ttys and ptys */
 
   DEV_SERIAL_MAJOR = 117,
   FH_SERIAL  = FHDEV (117, 0),	/* /dev/ttyS? */
 
-  FH_WINDOWS = FHDEV (13, 255),
-  FH_CLIPBOARD=FHDEV (13, 254),
+  DEV_MISC_MAJOR = 13,
+  FH_WINDOWS = FHDEV (DEV_MISC_MAJOR, 255),
+  FH_CLIPBOARD=FHDEV (DEV_MISC_MAJOR, 254),
 
-  FH_PIPE    = FHDEV (0, 255),
-  FH_PIPER   = FHDEV (0, 254),
-  FH_PIPEW   = FHDEV (0, 253),
-  FH_FIFO    = FHDEV (0, 252),
-  FH_PROC    = FHDEV (0, 250),
-  FH_REGISTRY= FHDEV (0, 249),
-  FH_PROCESS = FHDEV (0, 248),
+  /* begin /proc directories */
 
-  FH_FS      = FHDEV (0, 247),	/* filesystem based device */
+  FH_PROC_MIN_MINOR = FHDEV (0, 200),
+  FH_PROCSYSVIPC = FHDEV (0, 249),
+  FH_PROCSYS = FHDEV (0, 250),
+  FH_PROCESSFD = FHDEV (0, 251),
+  FH_PROCNET = FHDEV (0, 252),
+  FH_REGISTRY= FHDEV (0, 253),
+  FH_PROCESS = FHDEV (0, 254),
+  FH_PROC    = FHDEV (0, 255),
+  FH_PROC_MAX_MINOR = FHDEV (0, 255),
 
-  FH_NETDRIVE= FHDEV (0, 246),
-  FH_DEV     = FHDEV (0, 245),
-  FH_PROCNET = FHDEV (0, 244),
-  FH_PROCESSFD = FHDEV (0, 243),
+  /* end /proc directories */
+
+  FH_PIPE    = FHDEV (0, 199),
+  FH_PIPER   = FHDEV (0, 198),
+  FH_PIPEW   = FHDEV (0, 197),
+  FH_FIFO    = FHDEV (0, 196),
+  FH_FS      = FHDEV (0, 195),  /* filesystem based device */
+  FH_NETDRIVE= FHDEV (0, 194),
+  FH_DEV     = FHDEV (0, 193),
 
   DEV_FLOPPY_MAJOR = 2,
   FH_FLOPPY  = FHDEV (DEV_FLOPPY_MAJOR, 0),
@@ -210,16 +226,19 @@ enum fh_devices
   FH_SDDW    = FHDEV (DEV_SD7_MAJOR, 224),
   FH_SDDX    = FHDEV (DEV_SD7_MAJOR, 240),
 
-  FH_MEM     = FHDEV (1, 1),
-  FH_KMEM    = FHDEV (1, 2),	/* not implemented yet */
-  FH_NULL    = FHDEV (1, 3),
-  FH_PORT    = FHDEV (1, 4),
-  FH_ZERO    = FHDEV (1, 5),
-  FH_FULL    = FHDEV (1, 7),
-  FH_RANDOM  = FHDEV (1, 8),
-  FH_URANDOM = FHDEV (1, 9),
-  FH_KMSG    = FHDEV (1, 11),
-  FH_OSS_DSP = FHDEV (14, 3),
+  DEV_MEM_MAJOR = 1,
+  FH_MEM     = FHDEV (DEV_MEM_MAJOR, 1),
+  FH_KMEM    = FHDEV (DEV_MEM_MAJOR, 2),	/* not implemented yet */
+  FH_NULL    = FHDEV (DEV_MEM_MAJOR, 3),
+  FH_PORT    = FHDEV (DEV_MEM_MAJOR, 4),
+  FH_ZERO    = FHDEV (DEV_MEM_MAJOR, 5),
+  FH_FULL    = FHDEV (DEV_MEM_MAJOR, 7),
+  FH_RANDOM  = FHDEV (DEV_MEM_MAJOR, 8),
+  FH_URANDOM = FHDEV (DEV_MEM_MAJOR, 9),
+  FH_KMSG    = FHDEV (DEV_MEM_MAJOR, 11),
+
+  DEV_SOUND_MAJOR = 14,
+  FH_OSS_DSP = FHDEV (DEV_SOUND_MAJOR, 3),
 
   DEV_CYGDRIVE_MAJOR = 98,
   FH_CYGDRIVE= FHDEV (DEV_CYGDRIVE_MAJOR, 0),
@@ -232,21 +251,25 @@ enum fh_devices
   FH_STREAM = FHDEV (DEV_TCP_MAJOR, 121),
   FH_DGRAM = FHDEV (DEV_TCP_MAJOR, 122),
 
-  FH_BAD     = FHDEV (0, 0)
+  FH_NADA     = FHDEV (0, 0),
+  FH_ERROR   = FHDEV (255, 255)	/* Set by fh constructor when error detected */
 };
 
 struct device
 {
   const char *name;
-  union
+  union __cygwin_dev
   {
     _dev_t devn;
+    DWORD devn_dword;
+    int devn_int;
+    fh_devices devn_fh_devices;
     struct
     {
       _minor_t minor;
       _major_t major;
     };
-  };
+  } d;
   const char *native;
   _mode_t mode;
   bool dev_on_fs;
@@ -257,20 +280,45 @@ struct device
   void parsedisk (int, int);
   inline bool setunit (unsigned n)
   {
-    minor = n;
+    d.minor = n;
     return true;
   }
   static void init ();
-  void tty_to_real_device ();
-  inline operator int () const {return devn;}
+
+  static _major_t major (_dev_t n)
+  {
+    __cygwin_dev d;
+    d.devn = n;
+    return d.major;
+  }
+  static _minor_t minor (_dev_t n)
+  {
+    __cygwin_dev d;
+    d.devn = n;
+    return d.minor;
+  }
+  static _major_t major (int n) {return major ((_dev_t) n);}
+  static _minor_t minor (int n) {return minor ((_dev_t) n);}
+
+  bool is_device (_dev_t n) const {return n == d.devn; }
+  bool not_device (_dev_t n) const {return d.devn && n != d.devn; }
+
+  _minor_t get_minor () const {return d.minor;}
+  _minor_t get_major () const {return d.major;}
+
+  inline operator int& () {return d.devn_int;}
+  inline operator fh_devices () {return d.devn_fh_devices;}
+  inline operator bool () {return !!d.devn_int;}
+  inline operator DWORD& () {return d.devn_dword;}
+  fh_devices operator = (fh_devices n) {return d.devn_fh_devices = n;}
   inline void setfs (bool x) {dev_on_fs = x;}
-  inline bool isfs () const {return dev_on_fs || devn == FH_FS;}
-  inline bool is_fs_special () const {return dev_on_fs && devn != FH_FS;}
+  inline bool isfs () const {return dev_on_fs || d.devn == FH_FS;}
+  inline bool is_fs_special () const {return dev_on_fs && d.devn != FH_FS;}
 };
 
 extern const device *console_dev;
-extern const device *ttym_dev;
-extern const device *ttys_dev;
+extern const device *ptmx_dev;
+extern const device *ptys_dev;
 extern const device *urandom_dev;
 
 extern const device dev_dgram_storage;
@@ -296,3 +344,20 @@ extern const device dev_fh_storage;
 #define fh_dev (&dev_fh_storage)
 extern const device dev_fs_storage;
 #define fs_dev (&dev_fs_storage)
+
+#define isproc_dev(devn) \
+  (devn >= FH_PROC_MIN_MINOR && devn <= FH_PROC_MAX_MINOR)
+
+#define isprocsys_dev(devn) (devn == FH_PROCSYS)
+
+#define isvirtual_dev(devn) \
+  (isproc_dev (devn) || devn == FH_CYGDRIVE || devn == FH_NETDRIVE)
+
+#define iscons_dev(n) \
+  ((device::major ((int) (n)) == DEV_CONS_MAJOR) \
+   || (((int) n) == FH_CONSOLE) \
+   || (((int) n) == FH_CONIN) \
+   || (((int) n) == FH_CONOUT))
+
+#define istty_slave_dev(n) (device::major (n) == DEV_PTYS_MAJOR)
+#endif /*_DEVICES_H*/

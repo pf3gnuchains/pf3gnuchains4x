@@ -130,6 +130,9 @@ SEEALSO
 #include "local.h"
 #include "fvwrite.h"
 #include "vfieeefp.h"
+#ifdef __HAVE_LOCALE_INFO_EXTENDED__
+#include "../locale/lnumeric.h"
+#endif
 
 /* Currently a test is made to see if long double processing is warranted.
    This could be changed in the future should the _ldtoa_r code be
@@ -201,8 +204,10 @@ _DEFUN(__sbwprintf, (rptr, fp, fmt, ap),
 #endif /* !STRING_ONLY */
 
 
-#ifdef FLOATING_POINT
+#if defined (FLOATING_POINT) || defined (_WANT_IO_C99_FORMATS)
 # include <locale.h>
+#endif
+#ifdef FLOATING_POINT
 # include <math.h>
 
 /* For %La, an exponent of 15 bits occupies the exponent character, a
@@ -235,7 +240,7 @@ extern int _EXFUN(_ldcheck,(_LONG_DOUBLE *));
 # endif /* !_NO_LONGDBL */
 
 static wchar_t *wcvt(struct _reent *, _PRINTF_FLOAT_TYPE, int, int, wchar_t *,
-		    int *, int, int *, wchar_t *);
+		    int *, int, int *, wchar_t *, int);
 
 static int wexponent(wchar_t *, int, int);
 
@@ -249,8 +254,16 @@ static int wexponent(wchar_t *, int, int);
    reentrant storage shared with mprec.  All other formats that use
    buf get by with fewer characters.  Making BUF slightly bigger
    reduces the need for malloc in %.*a and %ls/%S, when large precision or
-   long strings are processed.  */
+   long strings are processed.
+   The bigger size of 100 bytes is used on systems which allow number
+   strings using the locale's grouping character.  Since that's a multibyte
+   value, we should use a conservative value.
+   */
+#ifdef _WANT_IO_C99_FORMATS
+#define BUF             100
+#else
 #define	BUF		40
+#endif
 #if defined _MB_CAPABLE && MB_LEN_MAX > BUF
 # undef BUF
 # define BUF MB_LEN_MAX
@@ -336,6 +349,9 @@ _EXFUN(get_arg, (struct _reent *data, int n, wchar_t *fmt,
 #else /* define as 0, to make SARG and UARG occupy fewer instructions  */
 # define CHARINT	0
 #endif
+#ifdef _WANT_IO_C99_FORMATS
+# define GROUPING	0x400		/* use grouping ("'" flag) */
+#endif
 
 #ifndef STRING_ONLY
 int
@@ -378,19 +394,31 @@ _DEFUN(_VFWPRINTF_R, (data, fp, fmt0, ap),
 	int width;		/* width from format (%8d), or 0 */
 	int prec;		/* precision from format (%.3d), or -1 */
 	wchar_t sign;		/* sign prefix (' ', '+', '-', or \0) */
-#ifdef FLOATING_POINT
-	wchar_t decimal_point;
+#ifdef _WANT_IO_C99_FORMATS
+				/* locale specific numeric grouping */
+	wchar_t thousands_sep;
+	const char *grouping;
+#endif
 #ifdef _MB_CAPABLE
 	mbstate_t state;        /* mbtowc calls from library must not change state */
 #endif
+#ifdef FLOATING_POINT
+	wchar_t decimal_point;
 	wchar_t softsign;		/* temporary negative sign for floats */
 	union { int i; _PRINTF_FLOAT_TYPE fp; } _double_ = {0};
 # define _fpvalue (_double_.fp)
 	int expt;		/* integer value of exponent */
 	int expsize = 0;	/* character count for expstr */
-	int ndig = 0;		/* actual number of digits returned by wcvt */
 	wchar_t expstr[MAXEXPLEN];	/* buffer for exponent string */
+	int lead;		/* sig figs before decimal or group sep */
 #endif /* FLOATING_POINT */
+#if defined (FLOATING_POINT) || defined (_WANT_IO_C99_FORMATS)
+	int ndig = 0;		/* actual number of digits returned by cvt */
+#endif
+#ifdef _WANT_IO_C99_FORMATS
+	int nseps;		/* number of group separators with ' */
+	int nrepeats;		/* number of repeats of the last group */
+#endif
 	u_quad_t _uquad;	/* integer arguments %[diouxX] */
 	enum { OCT, DEC, HEX } base;/* base for [diouxX] conversion */
 	int dprec;		/* a copy of prec if [diouxX], 0 otherwise */
@@ -419,9 +447,20 @@ _DEFUN(_VFWPRINTF_R, (data, fp, fmt0, ap),
 
 #ifdef FLOATING_POINT
 #ifdef _MB_CAPABLE
-	memset (&state, '\0', sizeof (state));
-	_mbrtowc_r (data, &decimal_point, _localeconv_r (data)->decimal_point,
-		    MB_CUR_MAX, &state);
+#ifdef __HAVE_LOCALE_INFO_EXTENDED__
+	decimal_point = *__get_current_numeric_locale ()->wdecimal_point;
+#else
+	{
+	  size_t nconv;
+
+	  memset (&state, '\0', sizeof (state));
+	  nconv = _mbrtowc_r (data, &decimal_point,
+			      _localeconv_r (data)->decimal_point,
+			      MB_CUR_MAX, &state);
+	  if (nconv == (size_t) -1 || nconv == (size_t) -2)
+	    decimal_point = L'.';
+	}
+#endif
 #else
 	decimal_point = (wchar_t) *_localeconv_r (data)->decimal_point;
 #endif
@@ -448,6 +487,14 @@ _DEFUN(_VFWPRINTF_R, (data, fp, fmt0, ap),
 		} \
 		PRINT (with, n); \
 	} \
+}
+#define PRINTANDPAD(p, ep, len, with) { \
+	int n = (ep) - (p); \
+	if (n > (len)) \
+		n = (len); \
+	if (n > 0) \
+		PRINT((p), n); \
+	PAD((len) - (n > 0 ? n : 0), (with)); \
 }
 #define	FLUSH() { \
 	if (uio.uio_resid && __SPRINT(data, fp, &uio)) \
@@ -570,6 +617,12 @@ _DEFUN(_VFWPRINTF_R, (data, fp, fmt0, ap),
 		width = 0;
 		prec = -1;
 		sign = L'\0';
+#ifdef FLOATING_POINT
+		lead = 0;
+#endif
+#ifdef _WANT_IO_C99_FORMATS
+		nseps = nrepeats = 0;
+#endif
 #ifndef _NO_POS_ARGS
 		N = arg_index;
 		is_pos_arg = 0;
@@ -579,8 +632,27 @@ rflag:		ch = *fmt++;
 reswitch:	switch (ch) {
 #ifdef _WANT_IO_C99_FORMATS
 		case L'\'':
-		  /* The ' flag is required by POSIX, but not C99.
-		     FIXME:  this flag is currently a no-op.  */
+#ifdef _MB_CAPABLE
+#ifdef __HAVE_LOCALE_INFO_EXTENDED__
+		  thousands_sep = *__get_current_numeric_locale ()->wthousands_sep;
+#else
+		  {
+		    size_t nconv;
+
+		    memset (&state, '\0', sizeof (state));
+		    nconv = _mbrtowc_r (data, &thousands_sep,
+					_localeconv_r (data)->thousands_sep,
+					MB_CUR_MAX, &state);
+		    if (nconv == (size_t) -1 || nconv == (size_t) -2)
+		      thousands_sep = L'\0';
+		  }
+#endif
+#else
+		  thousands_sep = (wchar_t) *_localeconv_r(data)->thousands_sep;
+#endif
+		  grouping = _localeconv_r (data)->grouping;
+		  if (thousands_sep && grouping && *grouping)
+		    flags |= GROUPING;
 		  goto rflag;
 #endif
 		case L' ':
@@ -924,7 +996,23 @@ reswitch:	switch (ch) {
 			flags |= FPT;
 
 			cp = wcvt (data, _fpvalue, prec, flags, &softsign,
-				   &expt, ch, &ndig, cp);
+				   &expt, ch, &ndig, cp, BUF);
+
+			/* If buf is not large enough for the converted wchar_t
+			   sequence, call wcvt again with a malloced new buffer.
+			   This should happen fairly rarely.
+			 */
+			if (cp == buf && ndig > BUF && malloc_buf == NULL) {
+				if ((malloc_buf =
+				    (wchar_t *)_malloc_r (data, ndig * sizeof (wchar_t)))
+				    == NULL)
+				  {
+				    fp->_flags |= __SERR;
+				    goto error;
+				  }
+				cp = wcvt (data, _fpvalue, prec, flags, &softsign,
+					   &expt, ch, &ndig, malloc_buf, ndig);
+			}
 
 			if (ch == L'g' || ch == L'G') {
 				if (expt <= -4 || expt > prec)
@@ -942,27 +1030,59 @@ reswitch:	switch (ch) {
 				size = expsize + ndig;
 				if (ndig > 1 || flags & ALT)
 					++size;
-			} else if (ch == L'f') {		/* f fmt */
-				if (expt > 0) {
+# ifdef _WANT_IO_C99_FORMATS
+				flags &= ~GROUPING;
+# endif
+			} else {
+				if (ch == L'f') {		/* f fmt */
+					if (expt > 0) {
+						size = expt;
+						if (prec || flags & ALT)
+							size += prec + 1;
+					} else	/* "0.X" */
+						size = (prec || flags & ALT)
+							  ? prec + 2
+							  : 1;
+				} else if (expt >= ndig) { /* fixed g fmt */
 					size = expt;
-					if (prec || flags & ALT)
-						size += prec + 1;
-				} else	/* "0.X" */
-					size = (prec || flags & ALT)
-						  ? prec + 2
-						  : 1;
-			} else if (expt >= ndig) {	/* fixed g fmt */
-				size = expt;
-				if (flags & ALT)
-					++size;
-			} else
-				size = ndig + (expt > 0 ?
-					1 : 2 - expt);
-
+					if (flags & ALT)
+						++size;
+				} else
+					size = ndig + (expt > 0 ?
+						1 : 2 - expt);
+# ifdef _WANT_IO_C99_FORMATS
+				if ((flags & GROUPING) && expt > 0) {
+					/* space for thousands' grouping */
+					nseps = nrepeats = 0;
+					lead = expt;
+					while (*grouping != CHAR_MAX) {
+						if (lead <= *grouping)
+							break;
+						lead -= *grouping;
+						if (grouping[1]) {
+							nseps++;
+							grouping++;
+						} else
+							nrepeats++;
+					}
+					size += nseps + nrepeats;
+				} else
+# endif
+				lead = expt;
+			}
 			if (softsign)
 				sign = L'-';
 			break;
 #endif /* FLOATING_POINT */
+#ifdef _GLIBC_EXTENSION
+		case L'm':  /* GNU extension */
+			{
+				int dummy;
+				cp = (wchar_t *) _strerror_r (data, data->_errno, 1, &dummy);
+			}
+			flags &= ~LONGINT;
+			goto string;
+#endif
 		case L'n':
 #ifndef _NO_LONGLONG
 			if (flags & QUADINT)
@@ -983,6 +1103,9 @@ reswitch:	switch (ch) {
 		case L'o':
 			_uquad = UARG ();
 			base = OCT;
+#ifdef _WANT_IO_C99_FORMATS
+			flags &= ~GROUPING;
+#endif
 			goto nosign;
 		case L'p':
 			/*
@@ -1004,8 +1127,11 @@ reswitch:	switch (ch) {
 #ifdef _WANT_IO_C99_FORMATS
 		case L'S':	/* POSIX extension */
 #endif
-			sign = '\0';
 			cp = GET_ARG (N, ap, wchar_ptr_t);
+#ifdef _GLIBC_EXTENSION
+string:
+#endif
+			sign = '\0';
 #ifndef __OPTIMIZE_SIZE__
 			/* Behavior is undefined if the user passed a
 			   NULL string when precision is not 0.
@@ -1018,7 +1144,7 @@ reswitch:	switch (ch) {
 			else
 #endif /* __OPTIMIZE_SIZE__ */
 #ifdef _MB_CAPABLE
-			if (ch == L's' && !(flags & LONGINT)) {
+			if (ch != L'S' && !(flags & LONGINT)) {
 				char *arg = (char *) cp;
 				size_t insize = 0, nchars = 0, nconv = 0;
 				mbstate_t ps;
@@ -1106,6 +1232,9 @@ hex:			_uquad = UARG ();
 				flags |= HEXPREFIX;
 			}
 
+#ifdef _WANT_IO_C99_FORMATS
+			flags &= ~GROUPING;
+#endif
 			/* unsigned conversions */
 nosign:			sign = L'\0';
 			/*
@@ -1141,11 +1270,35 @@ number:			if ((dprec = prec) >= 0)
 
 				case DEC:
 					/* many numbers are 1 digit */
-					while (_uquad >= 10) {
-						*--cp = to_char (_uquad % 10);
-						_uquad /= 10;
+					if (_uquad < 10) {
+						*--cp = to_char(_uquad);
+						break;
 					}
-					*--cp = to_char (_uquad);
+#ifdef _WANT_IO_C99_FORMATS
+					ndig = 0;
+#endif
+					do {
+					  *--cp = to_char (_uquad % 10);
+#ifdef _WANT_IO_C99_FORMATS
+					  ndig++;
+					  /* If (*grouping == CHAR_MAX) then no
+					     more grouping */
+					  if ((flags & GROUPING)
+					      && ndig == *grouping
+					      && *grouping != CHAR_MAX
+					      && _uquad > 9) {
+					    *--cp = thousands_sep;
+					    ndig = 0;
+					    /* If (grouping[1] == '\0') then we
+					       have to use *grouping character
+					       (last grouping rule) for all
+					       next cases. */
+					    if (grouping[1] != '\0')
+					      grouping++;
+					  }
+#endif
+					  _uquad /= 10;
+					} while (_uquad != 0);
 					break;
 
 				case HEX:
@@ -1245,17 +1398,35 @@ number:			if ((dprec = prec) >= 0)
 						PAD (-expt, zeroes);
 						PRINT (cp, ndig);
 					}
-				} else if (expt >= ndig) {
-					PRINT (cp, ndig);
-					PAD (expt - ndig, zeroes);
-					if (flags & ALT)
-						PRINT (&decimal_point, 1);
 				} else {
-					PRINT (cp, expt);
-					cp += expt;
-					PRINT (&decimal_point, 1);
-					PRINT (cp, ndig - expt);
+					wchar_t *convbuf = cp;
+					PRINTANDPAD(cp, convbuf + ndig,
+						    lead, zeroes);
+					cp += lead;
+#ifdef _WANT_IO_C99_FORMATS
+					if (flags & GROUPING) {
+					    while (nseps > 0 || nrepeats > 0) {
+						if (nrepeats > 0)
+						    nrepeats--;
+						else {
+						    grouping--;
+						    nseps--;
+						}
+						PRINT (&thousands_sep, 1);
+						PRINTANDPAD (cp, convbuf + ndig,
+							     *grouping, zeroes);
+						cp += *grouping;
+					    }
+					    if (cp > convbuf + ndig)
+						cp = convbuf + ndig;
+					}
+#endif
+					if (expt < ndig || flags & ALT)
+					    PRINT (&decimal_point, 1);
+					PRINTANDPAD (cp, convbuf + ndig,
+						     ndig - expt, zeroes);
 				}
+
 			} else {	/* 'a', 'A', 'e', or 'E' */
 				if (ndig > 1 || flags & ALT) {
 					PRINT (cp, 1);
@@ -1307,11 +1478,15 @@ error:
    to whether trailing zeros must be included.  Set *SIGN to nonzero
    if VALUE was negative.  Set *DECPT to the exponent plus one.  Set
    *LENGTH to the length of the returned string.  CH must be one of
-   [aAeEfFgG]; if it is [aA], then the return string lives in BUF,
-   otherwise the return value shares the mprec reentrant storage.  */
+   [aAeEfFgG]; different from vfprintf.c:cvt(), the return string
+   lives in BUF regardless of CH.  LEN is the length of BUF, except
+   when CH is [aA], in which case LEN is not in use.  If BUF is not
+   large enough for the converted string, only the first LEN number
+   of characters will be returned in BUF, but *LENGTH will be set to
+   the full length of the string before the truncation.  */
 static wchar_t *
 wcvt(struct _reent *data, _PRINTF_FLOAT_TYPE value, int ndigits, int flags,
-     wchar_t *sign, int *decpt, int ch, int *length, wchar_t *buf)
+     wchar_t *sign, int *decpt, int ch, int *length, wchar_t *buf, int len)
 {
 	int mode, dsgn;
 # ifdef _NO_LONGDBL
@@ -1405,12 +1580,13 @@ wcvt(struct _reent *data, _PRINTF_FLOAT_TYPE value, int ndigits, int flags,
 		while (rve < bp)
 			*rve++ = '0';
 	  }
+
+	  *length = rve - digits; /* full length of the string */
 #ifdef _MB_CAPABLE
-	  *length = _mbsnrtowcs_r (data, buf, (const char **) &digits,
-				   rve - digits, BUF, NULL);
+	  _mbsnrtowcs_r (data, buf, (const char **) &digits, *length,
+			 len, NULL);
 #else
-	  *length = rve - digits;
-	  for (i = 0; i < *length && i < BUF; ++i)
+	  for (i = 0; i < *length && i < len; ++i)
 	    buf[i] = (wchar_t) digits[i];
 #endif
 	  return buf;

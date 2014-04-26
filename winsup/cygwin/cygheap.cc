@@ -1,6 +1,7 @@
 /* cygheap.cc: Cygwin heap manager.
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
+   2010, 2011 Red Hat, Inc.
 
    This file is part of Cygwin.
 
@@ -14,6 +15,7 @@
 #include "cygerrno.h"
 #include "security.h"
 #include "path.h"
+#include "tty.h"
 #include "fhandler.h"
 #include "dtable.h"
 #include "cygheap.h"
@@ -24,15 +26,14 @@
 #include <unistd.h>
 #include <wchar.h>
 
-static mini_cygheap NO_COPY cygheap_at_start =
+static mini_cygheap NO_COPY cygheap_dummy =
 {
   {__utf8_mbtowc, __utf8_wctomb}
 };
 
-init_cygheap NO_COPY *cygheap = (init_cygheap *) &cygheap_at_start;
+init_cygheap NO_COPY *cygheap = (init_cygheap *) &cygheap_dummy;
 void NO_COPY *cygheap_max;
 
-extern "C" char  _cygheap_mid[] __attribute__((section(".cygheap")));
 extern "C" char  _cygheap_end[];
 
 static NO_COPY muto cygheap_protect;
@@ -60,8 +61,7 @@ static void *__stdcall _csbrk (int);
 void __stdcall
 cygheap_fixup_in_child (bool execed)
 {
-  cygheap_max = child_proc_info->cygheap;
-  cygheap = (init_cygheap *) cygheap_max;
+  cygheap_max = cygheap = (init_cygheap *) _cygheap_start;
   _csbrk ((char *) child_proc_info->cygheap_max - (char *) cygheap);
   child_copy (child_proc_info->parent, false, "cygheap", cygheap, cygheap_max, NULL);
   cygheap_init ();
@@ -70,18 +70,22 @@ cygheap_fixup_in_child (bool execed)
     {
       cygheap->hooks.next = NULL;
       cygheap->user_heap.base = NULL;		/* We can allocate the heap anywhere */
-      /* Walk the allocated memory chain looking for orphaned memory from
-	 previous execs */
-      for (_cmalloc_entry *rvc = cygheap->chain; rvc; rvc = rvc->prev)
-	{
-	  cygheap_entry *ce = (cygheap_entry *) rvc->data;
-	  if (!rvc->ptr || rvc->b >= NBUCKETS || ce->type <= HEAP_1_START)
-	    continue;
-	  else if (ce->type < HEAP_1_MAX)
-	    ce->type += HEAP_1_MAX;	/* Mark for freeing after next exec */
-	  else
-	    _cfree (ce);		/* Marked by parent for freeing in child */
-	}
+    }
+  /* Walk the allocated memory chain looking for orphaned memory from
+     previous execs or forks */
+  for (_cmalloc_entry *rvc = cygheap->chain; rvc; rvc = rvc->prev)
+    {
+      cygheap_entry *ce = (cygheap_entry *) rvc->data;
+      if (!rvc->ptr || rvc->b >= NBUCKETS || ce->type <= HEAP_1_START)
+	continue;
+      else if (ce->type > HEAP_2_MAX)
+	_cfree (ce);		/* Marked for freeing in any child */
+      else if (!execed)
+	continue;
+      else if (ce->type > HEAP_1_MAX)
+	_cfree (ce);		/* Marked for freeing in execed child */
+      else
+	ce->type += HEAP_1_MAX;	/* Mark for freeing after next exec */
     }
 }
 
@@ -106,7 +110,7 @@ void
 init_cygheap::close_ctty ()
 {
   debug_printf ("closing cygheap->ctty %p", cygheap->ctty);
-  cygheap->ctty->close ();
+  cygheap->ctty->close_with_arch ();
   cygheap->ctty = NULL;
 }
 
@@ -122,7 +126,7 @@ static void *__stdcall
 _csbrk (int sbs)
 {
   void *prebrk = cygheap_max;
-  size_t granmask = getpagesize () - 1;
+  size_t granmask = wincap.allocation_granularity () - 1;
   char *newbase = nextpage (prebrk);
   cygheap_max = (char *) cygheap_max + sbs;
   if (!sbs || (newbase >= cygheap_max) || (cygheap_max <= _cygheap_end))
@@ -155,10 +159,10 @@ void __stdcall
 cygheap_init ()
 {
   cygheap_protect.init ("cygheap_protect");
-  if (cygheap == &cygheap_at_start)
+  if (cygheap == &cygheap_dummy)
     {
       cygheap = (init_cygheap *) memset (_cygheap_start, 0,
-					 _cygheap_mid - _cygheap_start);
+					 sizeof (*cygheap));
       cygheap_max = cygheap;
       _csbrk (sizeof (*cygheap));
       /* Default locale settings. */
@@ -167,6 +171,7 @@ cygheap_init ()
       strcpy (cygheap->locale.charset, "UTF-8");
       /* Set umask to a sane default. */
       cygheap->umask = 022;
+      cygheap->rlim_core = RLIM_INFINITY;
     }
   if (!cygheap->fdtab)
     cygheap->fdtab.init ();
@@ -176,10 +181,10 @@ cygheap_init ()
 
 /* Copyright (C) 1997, 2000 DJ Delorie */
 
-static void *_cmalloc (unsigned size) __attribute ((regparm(1)));
-static void *__stdcall _crealloc (void *ptr, unsigned size) __attribute ((regparm(2)));
+static void *__stdcall _cmalloc (unsigned size) __attribute__ ((regparm(1)));
+static void *__stdcall _crealloc (void *ptr, unsigned size) __attribute__ ((regparm(2)));
 
-static void *__stdcall
+static void *__stdcall __attribute__ ((regparm(1)))
 _cmalloc (unsigned size)
 {
   _cmalloc_entry *rvc;
@@ -213,7 +218,7 @@ _cmalloc (unsigned size)
   return rvc->data;
 }
 
-static void __stdcall
+static void __stdcall __attribute__ ((regparm(1)))
 _cfree (void *ptr)
 {
   cygheap_protect.acquire ();
@@ -224,7 +229,7 @@ _cfree (void *ptr)
   cygheap_protect.release ();
 }
 
-static void *__stdcall
+static void *__stdcall __attribute__ ((regparm(2)))
 _crealloc (void *ptr, unsigned size)
 {
   void *newptr;
@@ -307,19 +312,19 @@ crealloc (void *s, DWORD n, const char *fn)
   return creturn (t, c, n, fn);
 }
 
-extern "C" void *__stdcall
+extern "C" void *__stdcall  __attribute__ ((regparm(2)))
 crealloc (void *s, DWORD n)
 {
   return crealloc (s, n, NULL);
 }
 
-extern "C" void *__stdcall
+extern "C" void *__stdcall  __attribute__ ((regparm(2)))
 crealloc_abort (void *s, DWORD n)
 {
   return crealloc (s, n, "crealloc");
 }
 
-extern "C" void __stdcall
+extern "C" void __stdcall __attribute__ ((regparm(1)))
 cfree (void *s)
 {
   assert (!inheap (s));
@@ -327,7 +332,7 @@ cfree (void *s)
   MALLOC_CHECK;
 }
 
-extern "C" void __stdcall
+extern "C" void __stdcall __attribute__ ((regparm(2)))
 cfree_and_set (char *&s, char *what)
 {
   if (s && s != almost_null)
@@ -347,23 +352,23 @@ ccalloc (cygheap_types x, DWORD n, DWORD size, const char *fn)
   return creturn (x, c, n, fn);
 }
 
-extern "C" void *__stdcall
+extern "C" void *__stdcall __attribute__ ((regparm(3)))
 ccalloc (cygheap_types x, DWORD n, DWORD size)
 {
   return ccalloc (x, n, size, NULL);
 }
 
-extern "C" void *__stdcall
+extern "C" void *__stdcall __attribute__ ((regparm(3)))
 ccalloc_abort (cygheap_types x, DWORD n, DWORD size)
 {
   return ccalloc (x, n, size, "ccalloc");
 }
 
-extern "C" PWCHAR __stdcall
+extern "C" PWCHAR __stdcall __attribute__ ((regparm(1)))
 cwcsdup (const PWCHAR s)
 {
   MALLOC_CHECK;
-  PWCHAR p = (PWCHAR) cmalloc (HEAP_STR, wcslen (s) + 1);
+  PWCHAR p = (PWCHAR) cmalloc (HEAP_STR, (wcslen (s) + 1) * sizeof (WCHAR));
   if (!p)
     return NULL;
   wcpcpy (p, s);
@@ -371,11 +376,11 @@ cwcsdup (const PWCHAR s)
   return p;
 }
 
-extern "C" PWCHAR __stdcall
+extern "C" PWCHAR __stdcall __attribute__ ((regparm(1)))
 cwcsdup1 (const PWCHAR s)
 {
   MALLOC_CHECK;
-  PWCHAR p = (PWCHAR) cmalloc (HEAP_1_STR, wcslen (s) + 1);
+  PWCHAR p = (PWCHAR) cmalloc (HEAP_1_STR, (wcslen (s) + 1) * sizeof (WCHAR));
   if (!p)
     return NULL;
   wcpcpy (p, s);
@@ -383,7 +388,7 @@ cwcsdup1 (const PWCHAR s)
   return p;
 }
 
-extern "C" char *__stdcall
+extern "C" char *__stdcall __attribute__ ((regparm(1)))
 cstrdup (const char *s)
 {
   MALLOC_CHECK;
@@ -395,7 +400,7 @@ cstrdup (const char *s)
   return p;
 }
 
-extern "C" char *__stdcall
+extern "C" char *__stdcall __attribute__ ((regparm(1)))
 cstrdup1 (const char *s)
 {
   MALLOC_CHECK;
@@ -444,7 +449,9 @@ cygheap_user::set_name (const char *new_name)
 
   if (allocated)
     {
-      if (strcasematch (new_name, pname))
+      /* Windows user names are case-insensitive.  Here we want the correct
+	 username, though, even if it only differs by case. */
+      if (!strcmp (new_name, pname))
 	return;
       cfree (pname);
     }

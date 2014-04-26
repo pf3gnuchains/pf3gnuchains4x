@@ -1,6 +1,6 @@
 /* Handle Darwin shared libraries for GDB, the GNU Debugger.
 
-   Copyright (C) 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2009-2012 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -68,7 +68,7 @@ struct gdb_dyld_all_image_infos
 
 /* Current all_image_infos version.  */
 #define DYLD_VERSION_MIN 1
-#define DYLD_VERSION_MAX 7
+#define DYLD_VERSION_MAX 12
 
 /* Address of structure dyld_all_image_infos in inferior.  */
 static CORE_ADDR dyld_all_image_addr;
@@ -158,6 +158,7 @@ lookup_symbol_from_bfd (bfd *abfd, char *symname)
   for (i = 0; i < number_of_symbols; i++)
     {
       asymbol *sym = symbol_table[i];
+
       if (strcmp (sym->name, symname) == 0
 	  && (sym->section->flags & (SEC_CODE | SEC_DATA)) != 0)
 	{
@@ -203,7 +204,7 @@ open_symbol_file_object (void *from_ttyp)
   return 0;
 }
 
-/* Build a list of currently loaded shared objects.  See solib-svr4.c  */
+/* Build a list of currently loaded shared objects.  See solib-svr4.c.  */
 
 static struct so_list *
 darwin_current_sos (void)
@@ -292,26 +293,19 @@ darwin_special_symbol_handling (void)
 {
 }
 
-/* Shared library startup support.  See documentation in solib-svr4.c  */
+/* Extract dyld_all_image_addr when the process was just created, assuming the
+   current PC is at the entry of the dynamic linker.  */
 
 static void
-darwin_solib_create_inferior_hook (int from_tty)
+darwin_solib_get_all_image_info_addr_at_init (void)
 {
-  struct minimal_symbol *msymbol;
-  char **bkpt_namep;
-  asection *interp_sect;
   gdb_byte *interp_name;
-  CORE_ADDR sym_addr;
   CORE_ADDR load_addr = 0;
-  int load_addr_found = 0;
-  int loader_found_in_list = 0;
-  struct so_list *so;
   bfd *dyld_bfd = NULL;
-  struct inferior *inf = current_inferior ();
 
-  /* First, remove all the solib event breakpoints.  Their addresses
-     may have changed since the last time we ran the program.  */
-  remove_solib_event_breakpoints ();
+  /* This method doesn't work with an attached process.  */
+  if (current_inferior ()->attach_flag)
+    return;
 
   /* Find the program interpreter.  */
   interp_name = find_program_interpreter ();
@@ -319,11 +313,11 @@ darwin_solib_create_inferior_hook (int from_tty)
     return;
 
   /* Create a bfd for the interpreter.  */
-  sym_addr = 0;
   dyld_bfd = bfd_openr (interp_name, gnutarget);
   if (dyld_bfd)
     {
       bfd *sub;
+
       sub = bfd_mach_o_fat_extract (dyld_bfd, bfd_object,
 				    gdbarch_bfd_arch_info (target_gdbarch));
       if (sub)
@@ -337,21 +331,11 @@ darwin_solib_create_inferior_hook (int from_tty)
   if (!dyld_bfd)
     return;
 
-  if (!inf->attach_flag)
-    {
-      /* We find the dynamic linker's base address by examining
-	 the current pc (which should point at the entry point for the
-	 dynamic linker) and subtracting the offset of the entry point.  */
-      load_addr = (regcache_read_pc (get_current_regcache ())
-		   - bfd_get_start_address (dyld_bfd));
-    }
-  else
-    {
-      /* FIXME: todo.
-	 Get address of __DATA.__dyld in exec_bfd, read address at offset 0.
-      */
-      return;
-    }
+  /* We find the dynamic linker's base address by examining
+     the current pc (which should point at the entry point for the
+     dynamic linker) and subtracting the offset of the entry point.  */
+  load_addr = (regcache_read_pc (get_current_regcache ())
+               - bfd_get_start_address (dyld_bfd));
 
   /* Now try to set a breakpoint in the dynamic linker.  */
   dyld_all_image_addr =
@@ -363,6 +347,40 @@ darwin_solib_create_inferior_hook (int from_tty)
     return;
 
   dyld_all_image_addr += load_addr;
+}
+
+/* Extract dyld_all_image_addr reading it from 
+   TARGET_OBJECT_DARWIN_DYLD_INFO.  */
+
+static void
+darwin_solib_read_all_image_info_addr (void)
+{
+  gdb_byte buf[8 + 8 + 4];
+  LONGEST len;
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
+
+  len = target_read (&current_target, TARGET_OBJECT_DARWIN_DYLD_INFO, NULL,
+                     buf, 0, sizeof (buf));
+  if (len != sizeof (buf))
+    return;
+
+  dyld_all_image_addr = extract_unsigned_integer (buf, 8, byte_order);
+}
+
+/* Shared library startup support.  See documentation in solib-svr4.c.  */
+
+static void
+darwin_solib_create_inferior_hook (int from_tty)
+{
+  dyld_all_image_addr = 0;
+
+  darwin_solib_read_all_image_info_addr ();
+
+  if (dyld_all_image_addr == 0)
+    darwin_solib_get_all_image_info_addr_at_init ();
+
+  if (dyld_all_image_addr == 0)
+    return;
 
   darwin_load_image_infos ();
 
@@ -408,7 +426,6 @@ darwin_relocate_section_addresses (struct so_list *so,
 static struct symbol *
 darwin_lookup_lib_symbol (const struct objfile *objfile,
 			  const char *name,
-			  const char *linkage_name,
 			  const domain_enum domain)
 {
   return NULL;

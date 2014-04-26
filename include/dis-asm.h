@@ -1,11 +1,11 @@
 /* Interface between the opcode library and its callers.
 
-   Copyright 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2009
-   Free Software Foundation, Inc.
+   Copyright 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2009, 2010,
+   2011  Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; either version 2, or (at your option)
+   the Free Software Foundation; either version 3, or (at your option)
    any later version.
 
    This program is distributed in the hope that it will be useful,
@@ -233,6 +233,7 @@ extern int print_insn_crx               (bfd_vma, disassemble_info *);
 extern int print_insn_d10v		(bfd_vma, disassemble_info *);
 extern int print_insn_d30v		(bfd_vma, disassemble_info *);
 extern int print_insn_dlx 		(bfd_vma, disassemble_info *);
+extern int print_insn_epiphany		(bfd_vma, disassemble_info *);
 extern int print_insn_fr30		(bfd_vma, disassemble_info *);
 extern int print_insn_frv		(bfd_vma, disassemble_info *);
 extern int print_insn_h8300		(bfd_vma, disassemble_info *);
@@ -261,8 +262,6 @@ extern int print_insn_m68hc11		(bfd_vma, disassemble_info *);
 extern int print_insn_m68hc12		(bfd_vma, disassemble_info *);
 extern int print_insn_m68k		(bfd_vma, disassemble_info *);
 extern int print_insn_m88k		(bfd_vma, disassemble_info *);
-extern int print_insn_maxq_big		(bfd_vma, disassemble_info *);
-extern int print_insn_maxq_little	(bfd_vma, disassemble_info *);
 extern int print_insn_mcore		(bfd_vma, disassemble_info *);
 extern int print_insn_mep		(bfd_vma, disassemble_info *);
 extern int print_insn_microblaze	(bfd_vma, disassemble_info *);
@@ -286,7 +285,10 @@ extern int print_insn_spu		(bfd_vma, disassemble_info *);
 extern int print_insn_tic30		(bfd_vma, disassemble_info *);
 extern int print_insn_tic4x		(bfd_vma, disassemble_info *);
 extern int print_insn_tic54x		(bfd_vma, disassemble_info *);
+extern int print_insn_tic6x		(bfd_vma, disassemble_info *);
 extern int print_insn_tic80		(bfd_vma, disassemble_info *);
+extern int print_insn_tilegx		(bfd_vma, disassemble_info *);
+extern int print_insn_tilepro		(bfd_vma, disassemble_info *);
 extern int print_insn_v850		(bfd_vma, disassemble_info *);
 extern int print_insn_vax		(bfd_vma, disassemble_info *);
 extern int print_insn_w65		(bfd_vma, disassemble_info *);
@@ -297,6 +299,7 @@ extern int print_insn_z80		(bfd_vma, disassemble_info *);
 extern int print_insn_z8001		(bfd_vma, disassemble_info *);
 extern int print_insn_z8002		(bfd_vma, disassemble_info *);
 extern int print_insn_rx		(bfd_vma, disassemble_info *);
+extern int print_insn_rl78		(bfd_vma, disassemble_info *);
 
 extern disassembler_ftype arc_get_disassembler (void *);
 extern disassembler_ftype cris_get_disassembler (bfd *);

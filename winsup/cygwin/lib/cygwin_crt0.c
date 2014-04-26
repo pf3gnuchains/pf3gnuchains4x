@@ -1,6 +1,6 @@
-/* cygwin_crt0.cc: crt0 for cygwin
+/* cygwin_crt0.c: crt0 for cygwin
 
-   Copyright 2000, 2001, 2008, 2009 Red Hat, Inc.
+   Copyright 2000, 2001, 2007, 2008, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -12,7 +12,7 @@ details. */
 #include "crt0.h"
 
 extern void __stdcall _dll_crt0 ()
-  __declspec (dllimport) __attribute ((noreturn));
+  __declspec (dllimport) __attribute__ ((noreturn));
 
 /* for main module */
 void

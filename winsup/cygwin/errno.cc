@@ -1,7 +1,7 @@
 /* errno.cc: errno-related functions
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2008, 2009 Red Hat, Inc.
+   2006, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -12,11 +12,21 @@ details. */
 #define _sys_nerr FOO_sys_nerr
 #define sys_nerr FOOsys_nerr
 #define _sys_errlist FOO_sys_errlist
+#define strerror_r FOO_strerror_r
+#define __INSIDE_CYGWIN__
+#include <errno.h>
+#include <error.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "winsup.h"
 #include "cygtls.h"
+#include "ntdll.h"
 #undef _sys_nerr
 #undef sys_nerr
 #undef _sys_errlist
+#undef strerror_r
 
 /* Table to map Windows error codes to Errno values.  */
 /* FIXME: Doing things this way is a little slow.  It's trivial to change
@@ -36,8 +46,10 @@ static NO_COPY struct
   X (ACTIVE_CONNECTIONS,	EAGAIN),
   X (ALREADY_EXISTS,		EEXIST),
   X (BAD_DEVICE,		ENODEV),
+  X (BAD_EXE_FORMAT,		ENOEXEC),
   X (BAD_NETPATH,		ENOENT),
   X (BAD_NET_NAME,		ENOENT),
+  X (BAD_NET_RESP,		ENOSYS),
   X (BAD_PATHNAME,		ENOENT),
   X (BAD_PIPE,			EINVAL),
   X (BAD_UNIT,			ENODEV),
@@ -65,6 +77,8 @@ static NO_COPY struct
   X (EA_TABLE_FULL,		ENOSPC),
   X (END_OF_MEDIA,		ENOSPC),
   X (EOM_OVERFLOW,		EIO),
+  X (EXE_MACHINE_TYPE_MISMATCH,	ENOEXEC),
+  X (EXE_MARKED_INVALID,	ENOEXEC),
   X (FILEMARK_DETECTED,		EIO),
   X (FILENAME_EXCED_RANGE,	ENAMETOOLONG),
   X (FILE_CORRUPT,		EEXIST),
@@ -79,12 +93,15 @@ static NO_COPY struct
   X (INVALID_DATA,		EINVAL),
   X (INVALID_DRIVE,		ENODEV),
   X (INVALID_EA_NAME,		EINVAL),
+  X (INVALID_EXE_SIGNATURE,	ENOEXEC),
   X (INVALID_FUNCTION,		EBADRQC),
   X (INVALID_HANDLE,		EBADF),
   X (INVALID_NAME,		ENOENT),
   X (INVALID_PARAMETER,		EINVAL),
   X (INVALID_SIGNAL_NUMBER,	EINVAL),
+  X (IOPL_NOT_ENABLED,		ENOEXEC),
   X (IO_DEVICE,			EIO),
+  X (IO_INCOMPLETE,		EAGAIN),
   X (IO_PENDING,		EAGAIN),
   X (LOCK_VIOLATION,		EACCES),
   X (MAX_THRDS_REACHED,		EAGAIN),
@@ -94,8 +111,8 @@ static NO_COPY struct
   X (NEGATIVE_SEEK,		EINVAL),
   X (NETNAME_DELETED,		ENOENT),
   X (NOACCESS,			EFAULT),
-  X (NONPAGED_SYSTEM_RESOURCES,	EAGAIN),
   X (NONE_MAPPED,		EINVAL),
+  X (NONPAGED_SYSTEM_RESOURCES,	EAGAIN),
   X (NOT_CONNECTED,		ENOLINK),
   X (NOT_ENOUGH_MEMORY,		ENOMEM),
   X (NOT_OWNER,			EPERM),
@@ -110,7 +127,7 @@ static NO_COPY struct
   X (NO_MORE_SEARCH_HANDLES,	ENFILE),
   X (NO_PROC_SLOTS,		EAGAIN),
   X (NO_SIGNAL_SENT,		EIO),
-  X (NO_SYSTEM_RESOURCES,	EAGAIN),
+  X (NO_SYSTEM_RESOURCES,	EFBIG),
   X (NO_TOKEN,			EINVAL),
   X (OPEN_FAILED,		EIO),
   X (OPEN_FILES,		EAGAIN),
@@ -126,6 +143,8 @@ static NO_COPY struct
   X (PROCESS_ABORTED,		EFAULT),
   X (PROC_NOT_FOUND,		ESRCH),
   X (REM_NOT_LIST,		ENONET),
+  X (SECTOR_NOT_FOUND,		EINVAL),
+  X (SEEK,			EINVAL),
   X (SETMARK_DETECTED,		EIO),
   X (SHARING_BUFFER_EXCEEDED,	ENOLCK),
   X (SHARING_VIOLATION,		EBUSY),
@@ -137,9 +156,7 @@ static NO_COPY struct
   X (WAIT_NO_CHILDREN,		ECHILD),
   X (WORKING_SET_QUOTA,		EAGAIN),
   X (WRITE_PROTECT,		EROFS),
-  X (SEEK,			EINVAL),
-  X (SECTOR_NOT_FOUND,		EINVAL),
-  X (IO_INCOMPLETE,		EAGAIN),
+  X (PRIVILEGE_NOT_HELD,	EPERM),
   { 0, NULL, 0}
 };
 
@@ -151,7 +168,7 @@ const char *_sys_errlist[] NO_COPY_INIT =
 /* ENOENT 2 */		  "No such file or directory",
 /* ESRCH 3 */		  "No such process",
 /* EINTR 4 */		  "Interrupted system call",
-/* EIO 5 */		  "Input/Output error",
+/* EIO 5 */		  "Input/output error",
 /* ENXIO 6 */		  "No such device or address",
 /* E2BIG 7 */		  "Argument list too long",
 /* ENOEXEC 8 */		  "Exec format error",
@@ -193,9 +210,9 @@ const char *_sys_errlist[] NO_COPY_INIT =
 /* EL2HLT 44 */		  "Level 2 halted",
 /* EDEADLK 45 */	  "Resource deadlock avoided",
 /* ENOLCK 46 */		  "No locks available",
-			  "error 47",
-			  "error 48",
-			  "error 49",
+			  NULL,
+			  NULL,
+			  NULL,
 /* EBADE 50 */		  "Invalid exchange",
 /* EBADR 51 */		  "Invalid request descriptor",
 /* EXFULL 52 */		  "Exchange full",
@@ -204,8 +221,8 @@ const char *_sys_errlist[] NO_COPY_INIT =
 /* EBADSLT 55 */	  "Invalid slot",
 /* EDEADLOCK 56 */	  "File locking deadlock error",
 /* EBFONT 57 */		  "Bad font file format",
-			  "error 58",
-			  "error 59",
+			  NULL,
+			  NULL,
 /* ENOSTR 60 */		  "Device not a stream",
 /* ENODATA 61 */	  "No data available",
 /* ETIME 62 */		  "Timer expired",
@@ -218,13 +235,13 @@ const char *_sys_errlist[] NO_COPY_INIT =
 /* ESRMNT 69 */		  "Srmount error",
 /* ECOMM 70 */		  "Communication error on send",
 /* EPROTO 71 */		  "Protocol error",
-			  "error 72",
-			  "error 73",
+			  NULL,
+			  NULL,
 /* EMULTIHOP 74 */	  "Multihop attempted",
 /* ELBIN 75 */		  "Inode is remote (not really error)",
 /* EDOTDOT 76 */	  "RFS specific error",
 /* EBADMSG 77 */	  "Bad message",
-			  "error 78",
+			  NULL,
 /* EFTYPE 79 */		  "Inappropriate file type or format",
 /* ENOTUNIQ 80 */	  "Name not unique on network",
 /* EBADFD 81 */		  "File descriptor in bad state",
@@ -239,17 +256,17 @@ const char *_sys_errlist[] NO_COPY_INIT =
 /* ENOTEMPTY 90	*/	  "Directory not empty",
 /* ENAMETOOLONG 91 */	  "File name too long",
 /* ELOOP 92 */		  "Too many levels of symbolic links",
-			  "error 93",
-			  "error 94",
+			  NULL,
+			  NULL,
 /* EOPNOTSUPP 95 */	  "Operation not supported",
 /* EPFNOSUPPORT 96 */	  "Protocol family not supported",
-			  "error 97",
-			  "error 98",
-			  "error 99",
-			  "error 100",
-			  "error 101",
-			  "error 102",
-			  "error 103",
+			  NULL,
+			  NULL,
+			  NULL,
+			  NULL,
+			  NULL,
+			  NULL,
+			  NULL,
 /* ECONNRESET 104 */	  "Connection reset by peer",
 /* ENOBUFS 105 */	  "No buffer space available",
 /* EAFNOSUPPORT 106 */	  "Address family not supported by protocol",
@@ -316,7 +333,25 @@ void __stdcall
 seterrno_from_win_error (const char *file, int line, DWORD code)
 {
   syscall_printf ("%s:%d windows error %d", file, line, code);
-  set_errno (geterrno_from_win_error (code, EACCES));
+  errno = _impure_ptr->_errno =  geterrno_from_win_error (code, EACCES);
+}
+
+int __stdcall
+geterrno_from_nt_status (NTSTATUS status, int deferrno)
+{
+  return geterrno_from_win_error (RtlNtStatusToDosError (status));
+}
+
+/* seterrno_from_nt_status: Given a NT status code, set errno
+   as appropriate. */
+void __stdcall
+seterrno_from_nt_status (const char *file, int line, NTSTATUS status)
+{
+  DWORD code = RtlNtStatusToDosError (status);
+  SetLastError (code);
+  syscall_printf ("%s:%d status %p -> windows error %d",
+		  file, line, status, code);
+  errno = _impure_ptr->_errno =  geterrno_from_win_error (code, EACCES);
 }
 
 /* seterrno: Set `errno' based on GetLastError (). */
@@ -325,8 +360,6 @@ seterrno (const char *file, int line)
 {
   seterrno_from_win_error (file, line, GetLastError ());
 }
-
-extern char *_user_strerror _PARAMS ((int));
 
 static char *
 strerror_worker (int errnum)
@@ -339,27 +372,137 @@ strerror_worker (int errnum)
   return res;
 }
 
-/* strerror: convert from errno values to error strings */
+/* Newlib requires this override for perror and friends to avoid
+   clobbering strerror() buffer, without having to differentiate
+   between strerror_r signatures.  This function is intentionally not
+   exported, so that only newlib can use it.  */
 extern "C" char *
-strerror (int errnum)
+_strerror_r (struct _reent *, int errnum, int internal, int *errptr)
 {
   char *errstr = strerror_worker (errnum);
   if (!errstr)
-    __small_sprintf (errstr = _my_tls.locals.strerror_buf, "Unknown error %u",
-		     (unsigned) errnum);
+    {
+      errstr = internal ? _my_tls.locals.strerror_r_buf
+	: _my_tls.locals.strerror_buf;
+      __small_sprintf (errstr, "Unknown error %d", errnum);
+      if (errptr)
+	*errptr = EINVAL;
+    }
   return errstr;
 }
 
-#if 0
-extern "C" int
+/* strerror: convert from errno values to error strings.  Newlib's
+   strerror_r returns "" for unknown values, so we override it to
+   provide a nicer thread-safe result string and set errno.  */
+extern "C" char *
+strerror (int errnum)
+{
+  int error = 0;
+  char *result = _strerror_r (NULL, errnum, 0, &error);
+  if (error)
+    set_errno (error);
+  return result;
+}
+
+/* Newlib's <string.h> provides declarations for two strerror_r
+   variants, according to preprocessor feature macros.  However, it
+   returns "" instead of "Unknown error ...", so we override both
+   versions.  */
+extern "C" char *
 strerror_r (int errnum, char *buf, size_t n)
 {
-  char *errstr = strerror_worker (errnum);
-  if (!errstr)
-    return EINVAL;
+  int error = 0;
+  char *errstr = _strerror_r (NULL, errnum, 1, &error);
+  if (error)
+    set_errno (error);
   if (strlen (errstr) >= n)
-    return ERANGE;
-  strcpy (buf, errstr);
-  return 0;
+    return errstr;
+  return strcpy (buf, errstr);
 }
-#endif
+
+extern "C" int
+__xpg_strerror_r (int errnum, char *buf, size_t n)
+{
+  if (!n)
+    return ERANGE;
+  int result = 0;
+  char *error = strerror_worker (errnum);
+  char tmp[sizeof "Unknown error -2147483648"];
+  if (!error)
+    {
+      __small_sprintf (error = tmp, "Unknown error %d", errnum);
+      result = EINVAL;
+    }
+  if (strlen (error) >= n)
+    {
+      memcpy (buf, error, n - 1);
+      buf[n - 1] = '\0';
+      return ERANGE;
+    }
+  strcpy (buf, error);
+  return result;
+}
+
+unsigned int error_message_count = 0;
+int error_one_per_line = 0;
+void (*error_print_progname) (void) = NULL;
+
+static void
+_verror (int status, int errnum, const char *filename, unsigned int lineno, const char *fmt, va_list ap)
+{
+  error_message_count++;
+
+  fflush (stdout);
+
+  if (error_print_progname)
+    (*error_print_progname) ();
+  else
+    fprintf (stderr, "%s:%s", program_invocation_name, filename ? "" : " ");
+
+  if (filename)
+    fprintf (stderr, "%s:%d: ", filename, lineno);
+
+  vfprintf (stderr, fmt, ap);
+
+  if (errnum != 0)
+    fprintf (stderr, ": %s", strerror (errnum));
+
+  fprintf (stderr, "\n");
+
+  if (status != 0)
+    exit (status);
+}
+
+extern "C" void
+error (int status, int errnum, const char *fmt, ...)
+{
+  va_list ap;
+  va_start (ap, fmt);
+  _verror (status, errnum, NULL, 0, fmt, ap);
+  va_end (ap);
+}
+
+extern "C" void
+error_at_line (int status, int errnum, const char *filename, unsigned int lineno, const char *fmt, ...)
+{
+  va_list ap;
+
+  if (error_one_per_line != 0)
+    {
+      static const char *last_filename;
+      static unsigned int last_lineno;
+
+      /* strcmp(3) will SEGV if filename or last_filename are NULL */
+      if (lineno == last_lineno
+	  && ((!filename && !last_filename)
+	      || (filename && last_filename && strcmp (filename, last_filename) == 0)))
+	return;
+
+      last_filename = filename;
+      last_lineno = lineno;
+    }
+
+  va_start (ap, fmt);
+  _verror (status, errnum, filename, lineno, fmt, ap);
+  va_end (ap);
+}

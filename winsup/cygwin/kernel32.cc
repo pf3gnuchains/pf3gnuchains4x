@@ -1,6 +1,6 @@
 /* kernel32.cc: Win32 replacement functions.
 
-   Copyright 2008 Red Hat, Inc.
+   Copyright 2008, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -37,7 +37,7 @@ CreateEventW (LPSECURITY_ATTRIBUTES lpEventAttributes, BOOL bManualReset,
 			      lpName ? get_shared_parent_dir () : NULL,
 			      lpEventAttributes
 			      ? lpEventAttributes->lpSecurityDescriptor : NULL);
-  status = NtCreateEvent (&evt, CYG_EVENT_ACCESS, &attr,
+  status = NtCreateEvent (&evt, EVENT_ALL_ACCESS, &attr,
 			  bManualReset ? NotificationEvent
 				       : SynchronizationEvent,
 			  bInitialState);
@@ -131,7 +131,7 @@ CreateMutexW (LPSECURITY_ATTRIBUTES lpMutexAttributes, BOOL bInitialOwner,
 			      lpName ? get_shared_parent_dir () : NULL,
 			      lpMutexAttributes
 			      ? lpMutexAttributes->lpSecurityDescriptor : NULL);
-  status = NtCreateMutant (&mtx, CYG_MUTANT_ACCESS, &attr, bInitialOwner);
+  status = NtCreateMutant (&mtx, MUTEX_ALL_ACCESS, &attr, bInitialOwner);
   if (!NT_SUCCESS (status))
     {
       SetLastError (RtlNtStatusToDosError (status));
@@ -222,7 +222,7 @@ CreateSemaphoreW (LPSECURITY_ATTRIBUTES lpSemaphoreAttributes,
 			      lpSemaphoreAttributes
 			      ? lpSemaphoreAttributes->lpSecurityDescriptor
 			      : NULL);
-  status = NtCreateSemaphore (&sem, CYG_SEMAPHORE_ACCESS, &attr,
+  status = NtCreateSemaphore (&sem, SEMAPHORE_ALL_ACCESS, &attr,
 			      lInitialCount, lMaximumCount);
   if (!NT_SUCCESS (status))
     {
@@ -402,38 +402,4 @@ OpenFileMappingA (DWORD dwDesiredAccess, BOOL bInheritHandle, LPCSTR lpName)
       return NULL;
     }
   return OpenFileMappingW (dwDesiredAccess, bInheritHandle, lpName ? name : NULL);
-}
-
-/* When Terminal Services are installed, the GetWindowsDirectory function
-   does not return the system installation dir, but a user specific directory
-   instead.  That's not what we have in mind when calling GetWindowsDirectory
-   from within Cygwin.  So we're calling GetSystemWindowsDirectory from here,
-   except on NT4 where we use the method as described in KB186498. */
-
-#define SYSTEM32	(sizeof ("\\System32") - 1)
-
-UINT WINAPI
-GetWindowsDirectoryW (LPWSTR buf, UINT size)
-{
-  if (wincap.has_terminal_services ())
-    return GetSystemWindowsDirectoryW (buf, size);
-  /* NT4 */
-  WCHAR name [size + SYSTEM32];
-  UINT ret = GetSystemDirectoryW (name, size + SYSTEM32);
-  if (ret < size + SYSTEM32)
-    {
-      name[ret - SYSTEM32] = L'\0';
-      wcscpy (buf, name);
-    }
-  return ret - SYSTEM32;
-}
-
-UINT WINAPI
-GetWindowsDirectoryA (LPSTR buf, UINT size)
-{
-  WCHAR name[MAX_PATH];
-  UINT ret = GetWindowsDirectoryW (name, min (size, MAX_PATH));
-  if (ret < size)
-    sys_wcstombs (buf, size, name);
-  return ret;
 }

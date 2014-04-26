@@ -1,6 +1,6 @@
 /* This testcase is part of GDB, the GNU debugger.
 
-   Copyright 2004, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright 2004, 2007-2012 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -44,7 +44,7 @@ int main()
   
   if (!handle)
     {
-      fprintf (stderr, dlerror ());
+      fprintf (stderr, "%s\n", dlerror ());
       exit (1);
     }
 
@@ -53,9 +53,9 @@ int main()
   if (!unloadshr)
     {
 #ifdef __WIN32__
-      fprintf (stderr, "error %d occurred", GetLastError ());
+      fprintf (stderr, "error %d occurred\n", GetLastError ());
 #else
-      fprintf (stderr, "%s", dlerror ());
+      fprintf (stderr, "%s\n", dlerror ());
 #endif
       exit (1);
     }
@@ -71,7 +71,7 @@ int main()
   
   if (!handle)
     {
-      fprintf (stderr, dlerror ());
+      fprintf (stderr, "%s\n", dlerror ());
       exit (1);
     }
 
@@ -80,9 +80,9 @@ int main()
   if (!unloadshr)
     {
 #ifdef __WIN32__
-      fprintf (stderr, "error %d occurred", GetLastError ());
+      fprintf (stderr, "error %d occurred\n", GetLastError ());
 #else
-      fprintf (stderr, "%s", dlerror ());
+      fprintf (stderr, "%s\n", dlerror ());
 #endif
       exit (1);
     }

@@ -1,7 +1,7 @@
 /* miscfuncs.cc: misc funcs that don't belong anywhere else
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -15,12 +15,19 @@ details. */
 #include <assert.h>
 #include <alloca.h>
 #include <limits.h>
+#include <sys/param.h>
 #include <wchar.h>
 #include <wingdi.h>
 #include <winuser.h>
 #include <winnls.h>
 #include "cygtls.h"
 #include "ntdll.h"
+#include "path.h"
+#include "fhandler.h"
+#include "dtable.h"
+#include "cygheap.h"
+#include "pinfo.h"
+#include "exception.h"
 
 long tls_ix = -1;
 
@@ -228,43 +235,21 @@ check_iovec (const struct iovec *iov, int iovcnt, bool forwrite)
   return (ssize_t) tot;
 }
 
-extern "C" int
-low_priority_sleep (DWORD secs)
+/* Try hard to schedule another thread. */
+void
+yield ()
 {
-  HANDLE thisthread = GetCurrentThread ();
-  int curr_prio = GetThreadPriority (thisthread);
-  bool staylow;
-  if (secs != INFINITE)
-    staylow = false;
-  else
+  int prio = GetThreadPriority (GetCurrentThread ());
+  SetThreadPriority (GetCurrentThread (), THREAD_PRIORITY_IDLE);
+  for (int i = 0; i < 2; i++)
     {
-      secs = 0;
-      staylow = true;
+      /* MSDN implies that SleepEx(0,...) will force scheduling of other
+	 threads.  Unlike SwitchToThread() the documentation does not mention
+	 other cpus so, presumably (hah!), this + using a lower priority will
+	 stall this thread temporarily and cause another to run.  */
+      SleepEx (0, false);
     }
-
-  if (!secs)
-    {
-      for (int i = 0; i < 3; i++)
-	SwitchToThread ();
-    }
-  else
-    {
-      int new_prio;
-      if (GetCurrentThreadId () == cygthread::main_thread_id)
-	new_prio = THREAD_PRIORITY_LOWEST;
-      else
-	new_prio = GetThreadPriority (hMainThread);
-
-      if (curr_prio != new_prio)
-	/* Force any threads in normal priority to be scheduled */
-	SetThreadPriority (thisthread, new_prio);
-      Sleep (secs);
-
-      if (!staylow && curr_prio != new_prio)
-	SetThreadPriority (thisthread, curr_prio);
-    }
-
-  return curr_prio;
+  SetThreadPriority (GetCurrentThread (), prio);
 }
 
 /* Get a default value for the nice factor.  When changing these values,
@@ -344,25 +329,59 @@ nice_to_winprio (int &nice)
   else if (nice > NZERO - 1)
     nice = NZERO - 1;
   DWORD prio = priority[nice + NZERO];
-  if (!wincap.has_extended_priority_class ()
-      && (prio == BELOW_NORMAL_PRIORITY_CLASS
-	  || prio == ABOVE_NORMAL_PRIORITY_CLASS))
-    prio = NORMAL_PRIORITY_CLASS;
   return prio;
 }
 
-#undef CreatePipe
-bool
-create_pipe (PHANDLE hr,PHANDLE hw, LPSECURITY_ATTRIBUTES sa, DWORD n)
+/* Minimal overlapped pipe I/O implementation for signal and commune stuff. */
+
+BOOL WINAPI
+CreatePipeOverlapped (PHANDLE hr, PHANDLE hw, LPSECURITY_ATTRIBUTES sa)
 {
-  for (int i = 0; i < 10; i++)
-    if (CreatePipe (hr, hw, sa, n))
-      return true;
-    else if (GetLastError () == ERROR_PIPE_BUSY && i < 9)
-      Sleep (10);
-    else
-      break;
-  return false;
+  int ret = fhandler_pipe::create (sa, hr, hw, 0, NULL,
+				   FILE_FLAG_OVERLAPPED);
+  if (ret)
+    SetLastError (ret);
+  return ret == 0;
+}
+
+BOOL WINAPI
+ReadPipeOverlapped (HANDLE h, PVOID buf, DWORD len, LPDWORD ret_len,
+		    DWORD timeout)
+{
+  OVERLAPPED ov;
+  BOOL ret;
+
+  memset (&ov, 0, sizeof ov);
+  ov.hEvent = CreateEvent (NULL, TRUE, FALSE, NULL);
+  ret = ReadFile (h, buf, len, NULL, &ov);
+  if (ret || GetLastError () == ERROR_IO_PENDING)
+    {
+      if (!ret && WaitForSingleObject (ov.hEvent, timeout) != WAIT_OBJECT_0)
+	CancelIo (h);
+      ret = GetOverlappedResult (h, &ov, ret_len, FALSE);
+    }
+  CloseHandle (ov.hEvent);
+  return ret;
+}
+
+BOOL WINAPI
+WritePipeOverlapped (HANDLE h, PCVOID buf, DWORD len, LPDWORD ret_len,
+		     DWORD timeout)
+{
+  OVERLAPPED ov;
+  BOOL ret;
+
+  memset (&ov, 0, sizeof ov);
+  ov.hEvent = CreateEvent (NULL, TRUE, FALSE, NULL);
+  ret = WriteFile (h, buf, len, NULL, &ov);
+  if (ret || GetLastError () == ERROR_IO_PENDING)
+    {
+      if (!ret && WaitForSingleObject (ov.hEvent, timeout) != WAIT_OBJECT_0)
+	CancelIo (h);
+      ret = GetOverlappedResult (h, &ov, ret_len, FALSE);
+    }
+  CloseHandle (ov.hEvent);
+  return ret;
 }
 
 /* backslashify: Convert all forward slashes in src path to back slashes
@@ -411,4 +430,225 @@ slashify (const char *src, char *dst, bool trailing_slash_p)
       && !isdirsep (src[-1]))
     *dst++ = '/';
   *dst++ = 0;
+}
+
+/* CygwinCreateThread.
+
+   Replacement function for CreateThread.  What we do here is to remove
+   parameters we don't use and instead to add parameters we need to make
+   the function pthreads compatible. */
+
+struct thread_wrapper_arg
+{
+  LPTHREAD_START_ROUTINE func;
+  PVOID arg;
+  char *stackaddr;
+  char *stackbase;
+  char *commitaddr;
+};
+
+DWORD WINAPI
+thread_wrapper (VOID *arg)
+{
+  /* Just plain paranoia. */
+  if (!arg)
+    return ERROR_INVALID_PARAMETER;
+
+  /* Fetch thread wrapper info and free from cygheap. */
+  thread_wrapper_arg wrapper_arg = *(thread_wrapper_arg *) arg;
+  cfree (arg);
+
+  /* Remove _cygtls from this stack since it won't be used anymore. */
+  _my_tls.remove (0);
+
+  /* Set stack values in TEB */
+  PTEB teb = NtCurrentTeb ();
+  teb->Tib.StackBase = wrapper_arg.stackbase;
+  teb->Tib.StackLimit = wrapper_arg.commitaddr ?: wrapper_arg.stackaddr;
+  /* Set DeallocationStack value.  If we have an application-provided stack,
+     we set DeallocationStack to NULL, so NtTerminateThread does not deallocate
+     any stack.  If we created the stack in CygwinCreateThread, we set
+     DeallocationStack to the stackaddr of our own stack, so it's automatically
+     deallocated when the thread is terminated. */
+  char *dealloc_addr = (char *) teb->DeallocationStack;
+  teb->DeallocationStack = wrapper_arg.commitaddr ? wrapper_arg.stackaddr
+						  : NULL;
+  /* Store the OS-provided DeallocationStack address in wrapper_arg.stackaddr.
+     The below assembler code will release the OS stack after switching to our
+     new stack. */
+  wrapper_arg.stackaddr = dealloc_addr;
+
+  /* Initialize new _cygtls. */
+  _my_tls.init_thread (wrapper_arg.stackbase - CYGTLS_PADSIZE,
+		       (DWORD (*)(void*, void*)) wrapper_arg.func);
+
+  /* Copy exception list over to new stack.  I'm not quite sure how the
+     exception list is extended by Windows itself.  What's clear is that it
+     always grows downwards and that it starts right at the stackbase.
+     Therefore we first count the number of exception records and place
+     the copy at the stackbase, too, so there's still a lot of room to
+     extend the list up to where our _cygtls region starts. */
+  _exception_list *old_start = (_exception_list *) teb->Tib.ExceptionList;
+  unsigned count = 0;
+  teb->Tib.ExceptionList = NULL;
+  for (_exception_list *e_ptr = old_start;
+       e_ptr && e_ptr != (_exception_list *) -1;
+       e_ptr = e_ptr->prev)
+    ++count;
+  if (count)
+    {
+      _exception_list *new_start = (_exception_list *) wrapper_arg.stackbase
+						       - count;
+      teb->Tib.ExceptionList = (struct _EXCEPTION_REGISTRATION_RECORD *)
+			       new_start;
+      while (true)
+	{
+	  new_start->handler = old_start->handler;
+	  if (old_start->prev == (_exception_list *) -1)
+	    {
+	      new_start->prev = (_exception_list *) -1;
+	      break;
+	    }
+	  new_start->prev = new_start + 1;
+	  new_start = new_start->prev;
+	  old_start = old_start->prev;
+	}
+    }
+
+  __asm__ ("\n\
+	   movl  %[WRAPPER_ARG], %%ebx # Load &wrapper_arg into ebx  \n\
+	   movl  (%%ebx), %%eax        # Load thread func into eax   \n\
+	   movl  4(%%ebx), %%ecx       # Load thread arg into ecx    \n\
+	   movl  8(%%ebx), %%edx       # Load stackaddr into edx     \n\
+	   movl  12(%%ebx), %%ebx      # Load stackbase into ebx     \n\
+	   subl  %[CYGTLS], %%ebx      # Subtract CYGTLS_PADSIZE     \n\
+	   subl  $4, %%ebx             # Subtract another 4 bytes    \n\
+	   movl  %%ebx, %%esp          # Set esp                     \n\
+	   xorl  %%ebp, %%ebp          # Set ebp to 0                \n\
+	   # Make gcc 3.x happy and align the stack so that it is    \n\
+	   # 16 byte aligned right before the final call opcode.     \n\
+	   andl  $-16, %%esp           # 16 bit align                \n\
+	   addl  $-12, %%esp           # 12 bytes + 4 byte arg = 16  \n\
+	   # Now we moved to the new stack.  Save thread func address\n\
+	   # and thread arg on new stack                             \n\
+	   pushl %%ecx                 # Push thread arg onto stack  \n\
+	   pushl %%eax                 # Push thread func onto stack \n\
+	   # Now it's safe to release the OS stack.                  \n\
+	   pushl $0x8000               # dwFreeType: MEM_RELEASE     \n\
+	   pushl $0x0                  # dwSize:     0               \n\
+	   pushl %%edx                 # lpAddress:  stackaddr       \n\
+	   call _VirtualFree@12        # Shoot                       \n\
+	   # All set.  We can pop the thread function address from   \n\
+	   # the stack and call it.  The thread arg is still on the  \n\
+	   # stack in the expected spot.                             \n\
+	   popl  %%eax                 # Pop thread_func address     \n\
+	   call  *%%eax                # Call thread func            \n"
+	   : : [WRAPPER_ARG] "r" (&wrapper_arg),
+	       [CYGTLS] "i" (CYGTLS_PADSIZE));
+  /* Never return from here. */
+  ExitThread (0);
+}
+
+/* FIXME: This should be settable via setrlimit (RLIMIT_STACK). */
+#define DEFAULT_STACKSIZE (512 * 1024)
+
+HANDLE WINAPI
+CygwinCreateThread (LPTHREAD_START_ROUTINE thread_func, PVOID thread_arg,
+		    PVOID stackaddr, ULONG stacksize, ULONG guardsize,
+		    DWORD creation_flags, LPDWORD thread_id)
+{
+  PVOID real_stackaddr = NULL;
+  ULONG real_stacksize = 0;
+  ULONG real_guardsize = 0;
+  thread_wrapper_arg *wrapper_arg;
+  HANDLE thread = NULL;
+
+  wrapper_arg = (thread_wrapper_arg *) ccalloc (HEAP_STR, 1,
+						sizeof *wrapper_arg);
+  if (!wrapper_arg)
+    {
+      SetLastError (ERROR_OUTOFMEMORY);
+      return NULL;
+    }
+  wrapper_arg->func = thread_func;
+  wrapper_arg->arg = thread_arg;
+
+  /* Set stacksize. */
+  real_stacksize = stacksize ?: DEFAULT_STACKSIZE;
+  if (real_stacksize < PTHREAD_STACK_MIN)
+    real_stacksize = PTHREAD_STACK_MIN;
+  if (stackaddr)
+    {
+      /* If the application provided the stack, just use it. */
+      wrapper_arg->stackaddr = (char *) stackaddr;
+      wrapper_arg->stackbase = (char *) stackaddr + real_stacksize;
+    }
+  else
+    {
+      /* If not, we have to create the stack here. */
+      real_stacksize = roundup2 (real_stacksize, wincap.page_size ());
+      /* If no guardsize has been specified by the application, use the
+	 system pagesize as default. */
+      real_guardsize = (guardsize != (ULONG) -1)
+		       ? guardsize : wincap.page_size ();
+      if (real_guardsize)
+	real_guardsize = roundup2 (real_guardsize, wincap.page_size ());
+      /* Add the guardsize to the stacksize, but only if the stacksize and
+	 the guardsize have been explicitely specified. */
+      if (stacksize || guardsize != (ULONG) -1)
+	real_stacksize += real_guardsize;
+      /* Now roundup the result to the next allocation boundary. */
+      real_stacksize = roundup2 (real_stacksize,
+				 wincap.allocation_granularity ());
+      /* Reserve stack.
+	 FIXME? If the TOP_DOWN method tends to collide too much with
+	 other stuff, we should provide our own mechanism to find a
+	 suitable place for the stack.  Top down from the start of
+	 the Cygwin DLL comes to mind. */
+      real_stackaddr = VirtualAlloc (NULL, real_stacksize,
+				     MEM_RESERVE | MEM_TOP_DOWN,
+				     PAGE_EXECUTE_READWRITE);
+      if (!real_stackaddr)
+	return NULL;
+      /* Set up committed region.  In contrast to the OS we commit 64K and
+	 set up just a single guard page at the end. */
+      char *commitaddr = (char *) real_stackaddr
+				  + real_stacksize
+				  - wincap.allocation_granularity ();
+      if (!VirtualAlloc (commitaddr, wincap.page_size (), MEM_COMMIT,
+			 PAGE_EXECUTE_READWRITE | PAGE_GUARD))
+	goto err;
+      commitaddr += wincap.page_size ();
+      if (!VirtualAlloc (commitaddr, wincap.allocation_granularity ()
+				     - wincap.page_size (), MEM_COMMIT,
+			 PAGE_EXECUTE_READWRITE))
+	goto err;
+      if (real_guardsize)
+	VirtualAlloc (real_stackaddr, real_guardsize, MEM_COMMIT,
+		      PAGE_NOACCESS);
+      wrapper_arg->stackaddr = (char *) real_stackaddr;
+      wrapper_arg->stackbase = (char *) real_stackaddr + real_stacksize;
+      wrapper_arg->commitaddr = commitaddr;
+    }
+  /* Use the STACK_SIZE_PARAM_IS_A_RESERVATION parameter so only the
+     minimum size for a thread stack is reserved by the OS.  This doesn't
+     work on Windows 2000, but we deallocate the OS stack in thread_wrapper
+     anyway, so this should be a problem only in a tight memory condition.
+     Note that we reserve a 256K stack, not 64K, otherwise the thread creation
+     might crash the process due to a stack overflow. */
+  thread = CreateThread (&sec_none_nih, 4 * PTHREAD_STACK_MIN,
+			 thread_wrapper, wrapper_arg,
+			 creation_flags | STACK_SIZE_PARAM_IS_A_RESERVATION,
+			 thread_id);
+
+err:
+  if (!thread && real_stackaddr)
+    {
+      /* Don't report the wrong error even though VirtualFree is very unlikely
+	 to fail. */
+      DWORD err = GetLastError ();
+      VirtualFree (real_stackaddr, 0, MEM_RELEASE);
+      SetLastError (err);
+    }
+  return thread;
 }

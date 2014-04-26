@@ -1,7 +1,7 @@
 /* fhandler_disk_file.cc
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -23,7 +23,6 @@ details. */
 #include "pinfo.h"
 #include "ntdll.h"
 #include "tls_pbuf.h"
-#include "nfs.h"
 #include "pwdgrp.h"
 #include <winioctl.h>
 
@@ -53,7 +52,7 @@ class __DIR_mounts
 	*c++ = '/';
       sys_wcstombs (c, mounts[idx].Length + 1,
 		    mounts[idx].Buffer, mounts[idx].Length / sizeof (WCHAR));
-      path_conv pc (fname, PC_SYM_NOFOLLOW | PC_POSIX);
+      path_conv pc (fname, PC_SYM_NOFOLLOW | PC_POSIX | PC_KEEP_HANDLE);
       if (!stat_worker (pc, &st))
 	ino = st.st_ino;
       return ino;
@@ -118,7 +117,7 @@ public:
 	    {
 	      found[__DIR_PROC] = true;
 	      if (retname)
-		RtlInitUnicodeString (retname, L"proc");
+		*retname = ro_u_proc;
 	      return 2;
 	    }
 	  if (!found[__DIR_CYGDRIVE])
@@ -141,17 +140,21 @@ inline bool
 path_conv::isgood_inode (__ino64_t ino) const
 {
   /* We can't trust remote inode numbers of only 32 bit.  That means,
-     all remote inode numbers when running under NT4, as well as remote NT4
-     NTFS, as well as shares of Samba version < 3.0.
+     remote NT4 NTFS, as well as shares of Samba version < 3.0.
      The known exception are SFU NFS shares, which return the valid 32 bit
      inode number from the remote file system unchanged. */
   return hasgood_inode () && (ino > UINT32_MAX || !isremote () || fs_is_nfs ());
 }
 
-static inline bool
-is_volume_mountpoint (POBJECT_ATTRIBUTES attr)
+/* Check reparse point for type.  IO_REPARSE_TAG_MOUNT_POINT types are
+   either volume mount points, which are treated as directories, or they
+   are directory mount points, which are treated as symlinks.
+   IO_REPARSE_TAG_SYMLINK types are always symlinks.  We don't know
+   anything about other reparse points, so they are treated as unknown.  */
+static inline int
+readdir_check_reparse_point (POBJECT_ATTRIBUTES attr)
 {
-  bool ret = false;
+  DWORD ret = DT_UNKNOWN;
   IO_STATUS_BLOCK io;
   HANDLE reph;
   UNICODE_STRING subst;
@@ -165,32 +168,44 @@ is_volume_mountpoint (POBJECT_ATTRIBUTES attr)
 		  alloca (MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
       if (NT_SUCCESS (NtFsControlFile (reph, NULL, NULL, NULL,
 		      &io, FSCTL_GET_REPARSE_POINT, NULL, 0,
-		      (LPVOID) rp, MAXIMUM_REPARSE_DATA_BUFFER_SIZE))
-	  && rp->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT
-	  && (RtlInitCountedUnicodeString (&subst, 
-		(WCHAR *)((char *)rp->MountPointReparseBuffer.PathBuffer
-			  + rp->MountPointReparseBuffer.SubstituteNameOffset),
-		rp->MountPointReparseBuffer.SubstituteNameLength),
-	      RtlEqualUnicodePathPrefix (&subst, &ro_u_volume, TRUE)))
-	ret = true;
-      NtClose (reph);
+		      (LPVOID) rp, MAXIMUM_REPARSE_DATA_BUFFER_SIZE)))
+	{
+	  if (rp->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT)
+	    {
+	      RtlInitCountedUnicodeString (&subst,
+		  (WCHAR *)((char *)rp->MountPointReparseBuffer.PathBuffer
+			    + rp->MountPointReparseBuffer.SubstituteNameOffset),
+		  rp->MountPointReparseBuffer.SubstituteNameLength);
+	      /* Only volume mountpoints are treated as directories. */
+	      if (RtlEqualUnicodePathPrefix (&subst, &ro_u_volume, TRUE))
+		ret = DT_DIR;
+	      else
+		ret = DT_LNK;
+	    }
+	  else if (rp->ReparseTag == IO_REPARSE_TAG_SYMLINK)
+	    ret = DT_LNK;
+	  NtClose (reph);
+	}
     }
   return ret;
 }
 
-static inline __ino64_t
-get_ino_by_handle (path_conv &pc, HANDLE hdl)
+inline __ino64_t
+path_conv::get_ino_by_handle (HANDLE hdl)
 {
   IO_STATUS_BLOCK io;
   FILE_INTERNAL_INFORMATION fai;
 
   if (NT_SUCCESS (NtQueryInformationFile (hdl, &io, &fai, sizeof fai,
 					  FileInternalInformation))
-      && pc.isgood_inode (fai.FileId.QuadPart))
+      && isgood_inode (fai.FileId.QuadPart))
     return fai.FileId.QuadPart;
   return 0;
 }
 
+#if 0
+/* This function is obsolete.  We're keeping it in so we don't forget
+   that we already did all that at one point. */
 unsigned __stdcall
 path_conv::ndisk_links (DWORD nNumberOfLinks)
 {
@@ -211,11 +226,11 @@ path_conv::ndisk_links (DWORD nNumberOfLinks)
 
   unsigned count = 0;
   bool first = true;
-  PFILE_DIRECTORY_INFORMATION fdibuf = (PFILE_DIRECTORY_INFORMATION)
+  PFILE_BOTH_DIRECTORY_INFORMATION fdibuf = (PFILE_BOTH_DIRECTORY_INFORMATION)
 				       alloca (65536);
   __DIR_mounts *dir = new __DIR_mounts (normalized_path);
   while (NT_SUCCESS (NtQueryDirectoryFile (fh, NULL, NULL, NULL, &io, fdibuf,
-					   65536, FileDirectoryInformation,
+					   65536, FileBothDirectoryInformation,
 					   FALSE, NULL, first)))
     {
       if (first)
@@ -227,9 +242,9 @@ path_conv::ndisk_links (DWORD nNumberOfLinks)
 	  if (fdibuf->FileNameLength != 2 || fdibuf->FileName[0] != L'.')
 	    count = 2;
 	}
-      for (PFILE_DIRECTORY_INFORMATION pfdi = fdibuf;
+      for (PFILE_BOTH_DIRECTORY_INFORMATION pfdi = fdibuf;
 	   pfdi;
-	   pfdi = (PFILE_DIRECTORY_INFORMATION)
+	   pfdi = (PFILE_BOTH_DIRECTORY_INFORMATION)
 		  (pfdi->NextEntryOffset ? (PBYTE) pfdi + pfdi->NextEntryOffset
 					 : NULL))
 	{
@@ -268,6 +283,7 @@ path_conv::ndisk_links (DWORD nNumberOfLinks)
   delete dir;
   return count;
 }
+#endif
 
 /* For files on NFS shares, we request an EA of type NfsV3Attributes.
    This returns the content of a struct fattr3 as defined in RFC 1813.
@@ -276,126 +292,99 @@ path_conv::ndisk_links (DWORD nNumberOfLinks)
 int __stdcall
 fhandler_base::fstat_by_nfs_ea (struct __stat64 *buf)
 {
-  NTSTATUS status;
-  IO_STATUS_BLOCK io;
-  struct {
-    FILE_FULL_EA_INFORMATION ffei;
-    char buf[sizeof (NFS_V3_ATTR) + sizeof (fattr3)];
-  } ffei_buf;
-  struct {
-     FILE_GET_EA_INFORMATION fgei;
-     char buf[sizeof (NFS_V3_ATTR)];
-   } fgei_buf;
+  fattr3 *nfs_attr = pc.nfsattr ();
 
-  fgei_buf.fgei.NextEntryOffset = 0;
-  fgei_buf.fgei.EaNameLength = sizeof (NFS_V3_ATTR) - 1;
-  stpcpy (fgei_buf.fgei.EaName, NFS_V3_ATTR);
-  status = NtQueryEaFile (get_handle (), &io,
-			  &ffei_buf.ffei, sizeof ffei_buf, TRUE,
-			  &fgei_buf.fgei, sizeof fgei_buf, NULL, TRUE);
-  if (NT_SUCCESS (status))
+  if (get_io_handle ())
     {
-      fattr3 *nfs_attr = (fattr3 *) (ffei_buf.ffei.EaName
-				     + ffei_buf.ffei.EaNameLength + 1);
-      buf->st_dev = nfs_attr->fsid;
-      buf->st_ino = nfs_attr->fileid;
-      buf->st_mode = (nfs_attr->mode & 0xfff)
-		     | nfs_type_mapping[nfs_attr->type & 7];
-      buf->st_nlink = nfs_attr->nlink;
-      /* FIXME: How to convert UNIX uid/gid to Windows SIDs? */
-#if 0
-      buf->st_uid = nfs_attr->uid;
-      buf->st_gid = nfs_attr->gid;
-#else
-      buf->st_uid = myself->uid;
-      buf->st_gid = myself->gid;
-#endif
-      buf->st_rdev = makedev (nfs_attr->rdev.specdata1,
-			      nfs_attr->rdev.specdata2);
-      buf->st_size = nfs_attr->size;
-      buf->st_blksize = PREFERRED_IO_BLKSIZE;
-      buf->st_blocks = nfs_attr->used / 512;
-      buf->st_atim = nfs_attr->atime;
-      buf->st_mtim = nfs_attr->mtime;
-      buf->st_ctim = nfs_attr->ctime;
-      return 0;
+      /* NFS stumbles over its own caching.  If you write to the file,
+	 a subsequent fstat does not return the actual size of the file,
+	 but the size at the time the handle has been opened.  Unless
+	 access through another handle invalidates the caching within the
+	 NFS client. */
+      if (get_access () & GENERIC_WRITE)
+	FlushFileBuffers (get_io_handle ());
+      nfs_fetch_fattr3 (get_io_handle (), nfs_attr);
     }
-  debug_printf ("%p = NtQueryEaFile(%S)", status, pc.get_nt_native_path ());
-  return -1;
+  buf->st_dev = nfs_attr->fsid;
+  buf->st_ino = nfs_attr->fileid;
+  buf->st_mode = (nfs_attr->mode & 0xfff)
+		 | nfs_type_mapping[nfs_attr->type & 7];
+  buf->st_nlink = nfs_attr->nlink;
+  /* FIXME: How to convert UNIX uid/gid to Windows SIDs? */
+#if 0
+  buf->st_uid = nfs_attr->uid;
+  buf->st_gid = nfs_attr->gid;
+#else
+  buf->st_uid = myself->uid;
+  buf->st_gid = myself->gid;
+#endif
+  buf->st_rdev = makedev (nfs_attr->rdev.specdata1,
+			  nfs_attr->rdev.specdata2);
+  buf->st_size = nfs_attr->size;
+  buf->st_blksize = PREFERRED_IO_BLKSIZE;
+  buf->st_blocks = (nfs_attr->used + S_BLKSIZE - 1) / S_BLKSIZE;
+  buf->st_atim = nfs_attr->atime;
+  buf->st_mtim = nfs_attr->mtime;
+  buf->st_ctim = nfs_attr->ctime;
+  return 0;
 }
 
 int __stdcall
 fhandler_base::fstat_by_handle (struct __stat64 *buf)
 {
-  NTSTATUS status;
-  IO_STATUS_BLOCK io;
-
-  if (pc.fs_is_nfs ())
-    return fstat_by_nfs_ea (buf);
-
   /* Don't use FileAllInformation info class.  It returns a pathname rather
      than a filename, so it needs a really big buffer for no good reason
      since we don't need the name anyway.  So we just call the three info
      classes necessary to get all information required by stat(2). */
-
-  union {
-    FILE_BASIC_INFORMATION fbi;
-    FILE_NETWORK_OPEN_INFORMATION fnoi;
-  } fi;
   FILE_STANDARD_INFORMATION fsi;
   FILE_INTERNAL_INFORMATION fii;
 
-  if (pc.has_buggy_basic_info ())
+  HANDLE h = get_stat_handle ();
+  NTSTATUS status = 0;
+  IO_STATUS_BLOCK io;
+
+  /* If the file has been opened for other purposes than stat, we can't rely
+     on the information stored in pc.fnoi.  So we overwrite them here. */
+  if (get_io_handle ())
     {
-      status = NtQueryInformationFile (get_handle (), &io, &fi, sizeof fi,
-				       FileNetworkOpenInformation);
-      /* The timestamps are in the same relative memory location, only
-	 the DOS attributes have to be moved. */
-      fi.fbi.FileAttributes = fi.fnoi.FileAttributes;
+      status = file_get_fnoi (h, pc.fs_is_netapp (), pc.fnoi ());
+      if (!NT_SUCCESS (status))
+       {
+	 debug_printf ("%p = NtQueryInformationFile(%S, "
+		       "FileNetworkOpenInformation)",
+		       status, pc.get_nt_native_path ());
+	 return -1;
+       }
     }
+  if (!pc.hasgood_inode ())
+    fsi.NumberOfLinks = 1;
   else
-    status = NtQueryInformationFile (get_handle (), &io, &fi.fbi, sizeof fi.fbi,
-				     FileBasicInformation);
-  if (!NT_SUCCESS (status))
     {
-      debug_printf ("%p = NtQueryInformationFile(%S, FileBasicInformation)",
-		    status, pc.get_nt_native_path ());
-      return -1;
+      status = NtQueryInformationFile (h, &io, &fsi, sizeof fsi,
+				       FileStandardInformation);
+      if (!NT_SUCCESS (status))
+	{
+	  debug_printf ("%p = NtQueryInformationFile(%S, "
+			"FileStandardInformation)",
+			status, pc.get_nt_native_path ());
+	  return -1;
+	}
+      if (!ino)
+	{
+	  status = NtQueryInformationFile (h, &io, &fii, sizeof fii,
+					   FileInternalInformation);
+	  if (!NT_SUCCESS (status))
+	    {
+	      debug_printf ("%p = NtQueryInformationFile(%S, "
+			    "FileInternalInformation)",
+			    status, pc.get_nt_native_path ());
+	      return -1;
+	    }
+	  else if (pc.isgood_inode (fii.FileId.QuadPart))
+	    ino = fii.FileId.QuadPart;
+	}
     }
-  status = NtQueryInformationFile (get_handle (), &io, &fsi, sizeof fsi,
-				   FileStandardInformation);
-  if (!NT_SUCCESS (status))
-    {
-      debug_printf ("%p = NtQueryInformationFile(%S, FileStandardInformation)",
-		    status, pc.get_nt_native_path ());
-      return -1;
-    }
-  status = NtQueryInformationFile (get_handle (), &io, &fii, sizeof fii,
-				   FileInternalInformation);
-  if (!NT_SUCCESS (status))
-    {
-      debug_printf ("%p = NtQueryInformationFile(%S, FileInternalInformation)",
-		    status, pc.get_nt_native_path ());
-      return -1;
-    }
-  /* If the change time is 0, it's a file system which doesn't
-     support a change timestamp.  In that case use the LastWriteTime
-     entry, as in other calls to fstat_helper. */
-  if (pc.is_rep_symlink ())
-    fi.fbi.FileAttributes &= ~FILE_ATTRIBUTE_DIRECTORY;
-  pc.file_attributes (fi.fbi.FileAttributes);
-  return fstat_helper (buf,
-		       fi.fbi.ChangeTime.QuadPart ? &fi.fbi.ChangeTime
-						  : &fi.fbi.LastWriteTime,
-		       &fi.fbi.LastAccessTime,
-		       &fi.fbi.LastWriteTime,
-		       &fi.fbi.CreationTime,
-		       get_dev (),
-		       fsi.EndOfFile.QuadPart,
-		       fsi.AllocationSize.QuadPart,
-		       fii.FileId.QuadPart,
-		       fsi.NumberOfLinks,
-		       fi.fbi.FileAttributes);
+  return fstat_helper (buf, fsi.NumberOfLinks);
 }
 
 int __stdcall
@@ -411,74 +400,35 @@ fhandler_base::fstat_by_name (struct __stat64 *buf)
     FILE_ID_BOTH_DIR_INFORMATION fdi;
     WCHAR buf[NAME_MAX + 1];
   } fdi_buf;
-  LARGE_INTEGER FileId;
 
-  RtlSplitUnicodePath (pc.get_nt_native_path (), &dirname, &basename);
-  InitializeObjectAttributes (&attr, &dirname, pc.objcaseinsensitive (),
-			      NULL, NULL);
-  if (!NT_SUCCESS (status = NtOpenFile (&dir, SYNCHRONIZE | FILE_LIST_DIRECTORY,
-				       &attr, &io, FILE_SHARE_VALID_FLAGS,
-				       FILE_SYNCHRONOUS_IO_NONALERT
-				       | FILE_OPEN_FOR_BACKUP_INTENT
-				       | FILE_DIRECTORY_FILE)))
+  if (!ino && pc.hasgood_inode () && !pc.has_buggy_fileid_dirinfo ())
     {
-      debug_printf ("%p = NtOpenFile(%S)", status, pc.get_nt_native_path ());
-      goto too_bad;
+      RtlSplitUnicodePath (pc.get_nt_native_path (), &dirname, &basename);
+      InitializeObjectAttributes (&attr, &dirname, pc.objcaseinsensitive (),
+				  NULL, NULL);
+      status = NtOpenFile (&dir, SYNCHRONIZE | FILE_LIST_DIRECTORY,
+			   &attr, &io, FILE_SHARE_VALID_FLAGS,
+			   FILE_SYNCHRONOUS_IO_NONALERT
+			   | FILE_OPEN_FOR_BACKUP_INTENT
+			   | FILE_DIRECTORY_FILE);
+      if (!NT_SUCCESS (status))
+	debug_printf ("%p = NtOpenFile(%S)", status,
+		      pc.get_nt_native_path ());
+      else
+	{
+	  status = NtQueryDirectoryFile (dir, NULL, NULL, NULL, &io,
+					 &fdi_buf.fdi, sizeof fdi_buf,
+					 FileIdBothDirectoryInformation,
+					 TRUE, &basename, TRUE);
+	  NtClose (dir);
+	  if (!NT_SUCCESS (status))
+	    debug_printf ("%p = NtQueryDirectoryFile(%S)", status,
+			  pc.get_nt_native_path ());
+	  else
+	    ino = fdi_buf.fdi.FileId.QuadPart;
+	}
     }
-  if (wincap.has_fileid_dirinfo () && !pc.has_buggy_fileid_dirinfo ()
-      && NT_SUCCESS (status = NtQueryDirectoryFile (dir, NULL, NULL, NULL, &io,
-						 &fdi_buf.fdi, sizeof fdi_buf,
-						 FileIdBothDirectoryInformation,
-						 TRUE, &basename, TRUE)))
-    FileId = fdi_buf.fdi.FileId;
-  else if (NT_SUCCESS (status = NtQueryDirectoryFile (dir, NULL, NULL, NULL,
-						 &io, &fdi_buf.fdi,
-						 sizeof fdi_buf,
-						 FileDirectoryInformation,
-						 TRUE, &basename, TRUE)))
-    FileId.QuadPart = 0; /* get_ino is called in fstat_helper. */
-  if (!NT_SUCCESS (status))
-    {
-      debug_printf ("%p = NtQueryDirectoryFile(%S)", status,
-		    pc.get_nt_native_path ());
-      NtClose (dir);
-      goto too_bad;
-    }
-  NtClose (dir);
-  /* If the change time is 0, it's a file system which doesn't
-     support a change timestamp.  In that case use the LastWriteTime
-     entry, as in other calls to fstat_helper. */
-  if (pc.is_rep_symlink ())
-    fdi_buf.fdi.FileAttributes &= ~FILE_ATTRIBUTE_DIRECTORY;
-  pc.file_attributes (fdi_buf.fdi.FileAttributes);
-  return fstat_helper (buf,
-		       fdi_buf.fdi.ChangeTime.QuadPart
-		       ? &fdi_buf.fdi.ChangeTime : &fdi_buf.fdi.LastWriteTime,
-		       &fdi_buf.fdi.LastAccessTime,
-		       &fdi_buf.fdi.LastWriteTime,
-		       &fdi_buf.fdi.CreationTime,
-		       pc.fs_serial_number (),
-		       fdi_buf.fdi.EndOfFile.QuadPart,
-		       fdi_buf.fdi.AllocationSize.QuadPart,
-		       FileId.QuadPart,
-		       1,
-		       fdi_buf.fdi.FileAttributes);
-
-too_bad:
-  LARGE_INTEGER ft;
-  /* Arbitrary value: 2006-12-01 */
-  RtlSecondsSince1970ToTime (1164931200L, &ft);
-  return fstat_helper (buf,
-		       &ft,
-		       &ft,
-		       &ft,
-		       &ft,
-		       0,
-		       0ULL,
-		       -1LL,
-		       0ULL,
-		       1,
-		       pc.file_attributes ());
+  return fstat_helper (buf, 1);
 }
 
 int __stdcall
@@ -488,23 +438,31 @@ fhandler_base::fstat_fs (struct __stat64 *buf)
   int oret;
   int open_flags = O_RDONLY | O_BINARY;
 
-  if (get_handle ())
+  if (get_stat_handle ())
     {
       if (!nohandle () && !is_fs_special ())
-	res = fstat_by_handle (buf);
+	res = pc.fs_is_nfs () ? fstat_by_nfs_ea (buf) : fstat_by_handle (buf);
       if (res)
 	res = fstat_by_name (buf);
       return res;
     }
-  query_open (query_read_attributes);
+  /* First try to open with generic read access.  This allows to read the file
+     in fstat_helper (when checking for executability) without having to
+     re-open it.  Opening a file can take a lot of time on network drives
+     so we try to avoid that. */
   oret = open_fs (open_flags, 0);
+  if (!oret)
+    {
+      query_open (query_read_attributes);
+      oret = open_fs (open_flags, 0);
+    }
   if (oret)
     {
       /* We now have a valid handle, regardless of the "nohandle" state.
 	 Since fhandler_base::open only calls CloseHandle if !nohandle,
 	 we have to set it to false before calling close and restore
 	 the state afterwards. */
-      res = fstat_by_handle (buf);
+      res = pc.fs_is_nfs () ? fstat_by_nfs_ea (buf) : fstat_by_handle (buf);
       bool no_handle = nohandle ();
       nohandle (false);
       close_fs ();
@@ -517,44 +475,36 @@ fhandler_base::fstat_fs (struct __stat64 *buf)
   return res;
 }
 
-/* The ChangeTime is taken from the NTFS ChangeTime entry, if reading
-   the file information using NtQueryInformationFile succeeded.  If not,
-   it's faked using the LastWriteTime entry from GetFileInformationByHandle
-   or FindFirstFile.  We're deliberatly not using the creation time anymore
-   to simplify interaction with native Windows applications which choke on
-   creation times >= access or write times.
-
-   Note that the dwFileAttributes member of the file information evaluated
-   in the calling function is used here, not the pc.fileattr member, since
-   the latter might be old and not reflect the actual state of the file. */
 int __stdcall
 fhandler_base::fstat_helper (struct __stat64 *buf,
-			     PLARGE_INTEGER ChangeTime,
-			     PLARGE_INTEGER LastAccessTime,
-			     PLARGE_INTEGER LastWriteTime,
-			     PLARGE_INTEGER CreationTime,
-			     DWORD dwVolumeSerialNumber,
-			     ULONGLONG nFileSize,
-			     LONGLONG nAllocSize,
-			     ULONGLONG nFileIndex,
-			     DWORD nNumberOfLinks,
-			     DWORD dwFileAttributes)
+			     DWORD nNumberOfLinks)
 {
   IO_STATUS_BLOCK st;
   FILE_COMPRESSION_INFORMATION fci;
+  HANDLE h = get_stat_handle ();
+  PFILE_NETWORK_OPEN_INFORMATION pfnoi = pc.fnoi ();
+  ULONG attributes = pc.file_attributes ();
 
-  to_timestruc_t ((PFILETIME) LastAccessTime, &buf->st_atim);
-  to_timestruc_t ((PFILETIME) LastWriteTime, &buf->st_mtim);
-  to_timestruc_t ((PFILETIME) ChangeTime, &buf->st_ctim);
-  to_timestruc_t ((PFILETIME) CreationTime, &buf->st_birthtim);
-  buf->st_dev = dwVolumeSerialNumber;
-  buf->st_size = (_off64_t) nFileSize;
-  /* The number of links to a directory includes the
-     number of subdirectories in the directory, since all
-     those subdirectories point to it.
-     This is too slow on remote drives, so we do without it.
-     Setting the count to 2 confuses `find (1)' command. So
-     let's try it with `1' as link count. */
+  to_timestruc_t ((PFILETIME) &pfnoi->LastAccessTime, &buf->st_atim);
+  to_timestruc_t ((PFILETIME) &pfnoi->LastWriteTime, &buf->st_mtim);
+  /* If the ChangeTime is 0, the underlying FS doesn't support this timestamp
+     (FAT for instance).  If so, it's faked using LastWriteTime. */
+  to_timestruc_t (pfnoi->ChangeTime.QuadPart ? (PFILETIME) &pfnoi->ChangeTime
+					    : (PFILETIME) &pfnoi->LastWriteTime,
+		  &buf->st_ctim);
+  to_timestruc_t ((PFILETIME) &pfnoi->CreationTime, &buf->st_birthtim);
+  buf->st_rdev = buf->st_dev = get_dev ();
+  /* CV 2011-01-13: Observations on the Cygwin mailing list point to an
+     interesting behaviour in some Windows versions.  Apparently the size of
+     a directory is computed at the time the directory is first scanned.  This
+     can result in two subsequent NtQueryInformationFile calls to return size
+     0 in the first call and size > 0 in the second call.  This in turn can
+     affect applications like newer tar.
+     FIXME: Is the allocation size affected as well? */
+  buf->st_size = pc.isdir () ? 0 : (_off64_t) pfnoi->EndOfFile.QuadPart;
+  /* The number of links to a directory includes the number of subdirectories
+     in the directory, since all those subdirectories point to it.  However,
+     this is painfully slow, so we do without it. */
 #if 0
   buf->st_nlink = pc.ndisk_links (nNumberOfLinks);
 #else
@@ -562,29 +512,30 @@ fhandler_base::fstat_helper (struct __stat64 *buf,
 #endif
 
   /* Enforce namehash as inode number on untrusted file systems. */
-  if (pc.isgood_inode (nFileIndex))
-    buf->st_ino = (__ino64_t) nFileIndex;
+  if (ino && pc.isgood_inode (ino))
+    buf->st_ino = (__ino64_t) ino;
   else
     buf->st_ino = get_ino ();
 
   buf->st_blksize = PREFERRED_IO_BLKSIZE;
 
-  if (nAllocSize >= 0LL)
+  if (pfnoi->AllocationSize.QuadPart >= 0LL)
     /* A successful NtQueryInformationFile returns the allocation size
        correctly for compressed and sparse files as well. */
-    buf->st_blocks = (nAllocSize + S_BLKSIZE - 1) / S_BLKSIZE;
-  else if (::has_attribute (dwFileAttributes, FILE_ATTRIBUTE_COMPRESSED
-					      | FILE_ATTRIBUTE_SPARSE_FILE)
-	   && get_handle () && !is_fs_special ()
-	   && !NtQueryInformationFile (get_handle (), &st, (PVOID) &fci,
-				      sizeof fci, FileCompressionInformation))
+    buf->st_blocks = (pfnoi->AllocationSize.QuadPart + S_BLKSIZE - 1)
+		     / S_BLKSIZE;
+  else if (::has_attribute (attributes, FILE_ATTRIBUTE_COMPRESSED
+					| FILE_ATTRIBUTE_SPARSE_FILE)
+	   && h && !is_fs_special ()
+	   && !NtQueryInformationFile (h, &st, (PVOID) &fci, sizeof fci,
+				       FileCompressionInformation))
     /* Otherwise we request the actual amount of bytes allocated for
        compressed and sparsed files. */
     buf->st_blocks = (fci.CompressedFileSize.QuadPart + S_BLKSIZE - 1)
 		     / S_BLKSIZE;
   else
     /* Otherwise compute no. of blocks from file size. */
-    buf->st_blocks  = (buf->st_size + S_BLKSIZE - 1) / S_BLKSIZE;
+    buf->st_blocks = (buf->st_size + S_BLKSIZE - 1) / S_BLKSIZE;
 
   buf->st_mode = 0;
   /* Using a side effect: get_file_attributes checks for directory.
@@ -596,19 +547,18 @@ fhandler_base::fstat_helper (struct __stat64 *buf,
       buf->st_size = pc.get_symlink_length ();
       /* symlinks are everything for everyone! */
       buf->st_mode = S_IFLNK | S_IRWXU | S_IRWXG | S_IRWXO;
-      get_file_attribute (get_handle (), pc, NULL,
+      get_file_attribute (h, pc, NULL,
 			  &buf->st_uid, &buf->st_gid);
       goto done;
     }
   else if (pc.issocket ())
     buf->st_mode = S_IFSOCK;
 
-  if (!get_file_attribute (is_fs_special () && !pc.issocket ()
-			   ? NULL : get_handle (), pc,
+  if (!get_file_attribute (is_fs_special () && !pc.issocket () ? NULL : h, pc,
 			   &buf->st_mode, &buf->st_uid, &buf->st_gid))
     {
       /* If read-only attribute is set, modify ntsec return value */
-      if (::has_attribute (dwFileAttributes, FILE_ATTRIBUTE_READONLY)
+      if (::has_attribute (attributes, FILE_ATTRIBUTE_READONLY)
 	  && !pc.isdir () && !pc.issymlink ())
 	buf->st_mode &= ~(S_IWUSR | S_IWGRP | S_IWOTH);
 
@@ -618,7 +568,7 @@ fhandler_base::fstat_helper (struct __stat64 *buf,
 	buf->st_mode |= S_IFREG;
       else
 	{
-	  buf->st_dev = dev ();
+	  buf->st_dev = buf->st_rdev = dev ();
 	  buf->st_mode = dev ().mode;
 	  buf->st_size = 0;
 	}
@@ -627,7 +577,7 @@ fhandler_base::fstat_helper (struct __stat64 *buf,
     {
       buf->st_mode |= STD_RBITS;
 
-      if (!::has_attribute (dwFileAttributes, FILE_ATTRIBUTE_READONLY))
+      if (!::has_attribute (attributes, FILE_ATTRIBUTE_READONLY))
 	buf->st_mode |= STD_WBITS;
       /* | S_IWGRP | S_IWOTH; we don't give write to group etc */
 
@@ -637,7 +587,7 @@ fhandler_base::fstat_helper (struct __stat64 *buf,
 	/* nothing */;
       else if (is_fs_special ())
 	{
-	  buf->st_dev = dev ();
+	  buf->st_dev = buf->st_rdev = dev ();
 	  buf->st_mode = dev ().mode;
 	  buf->st_size = 0;
 	}
@@ -645,7 +595,7 @@ fhandler_base::fstat_helper (struct __stat64 *buf,
 	{
 	  buf->st_mode |= S_IFREG;
 	  /* Check suffix for executable file. */
-	  if (pc.exec_state () == dont_know_if_executable)
+	  if (pc.exec_state () != is_executable)
 	    {
 	      PUNICODE_STRING path = pc.get_nt_native_path ();
 
@@ -659,22 +609,33 @@ fhandler_base::fstat_helper (struct __stat64 *buf,
 	  if (pc.exec_state () == dont_know_if_executable)
 	    {
 	      OBJECT_ATTRIBUTES attr;
-	      HANDLE h;
+	      NTSTATUS status = 0;
 	      IO_STATUS_BLOCK io;
 
-	      InitializeObjectAttributes (&attr, &ro_u_empty, 0, get_handle (),
-					  NULL);
-	      if (NT_SUCCESS (NtOpenFile (&h, SYNCHRONIZE | FILE_READ_DATA,
-					  &attr, &io, FILE_SHARE_VALID_FLAGS,
-					  FILE_SYNCHRONOUS_IO_NONALERT)))
+	      /* We have to re-open the file.  Either the file is not opened
+		 for reading, or the read will change the file position of the
+		 original handle. */
+	      pc.init_reopen_attr (&attr, h);
+	      status = NtOpenFile (&h, SYNCHRONIZE | FILE_READ_DATA,
+				   &attr, &io, FILE_SHARE_VALID_FLAGS,
+				   FILE_OPEN_FOR_BACKUP_INTENT
+				   | FILE_SYNCHRONOUS_IO_NONALERT);
+	      if (!NT_SUCCESS (status))
+		debug_printf ("%p = NtOpenFile(%S)", status,
+			      pc.get_nt_native_path ());
+	      else
 		{
 		  LARGE_INTEGER off = { QuadPart:0LL };
 		  char magic[3];
 
-		  if (NT_SUCCESS (NtReadFile (h, NULL, NULL, NULL, &io, magic,
-					      3, &off, NULL))
-		      && has_exec_chars (magic, io.Information))
+		  status = NtReadFile (h, NULL, NULL, NULL,
+				       &io, magic, 3, &off, NULL);
+		  if (!NT_SUCCESS (status))
+		    debug_printf ("%p = NtReadFile(%S)", status,
+				  pc.get_nt_native_path ());
+		  else if (has_exec_chars (magic, io.Information))
 		    {
+		      /* Heureka, it's an executable */
 		      pc.set_exec ();
 		      buf->st_mode |= STD_XBITS;
 		    }
@@ -696,9 +657,15 @@ fhandler_base::fstat_helper (struct __stat64 *buf,
     }
 
  done:
-  syscall_printf ("0 = fstat (, %p) st_atime=%x st_size=%D, st_mode=%p, st_ino=%D, sizeof=%d",
-		  buf, buf->st_atime, buf->st_size, buf->st_mode,
-		  buf->st_ino, sizeof (*buf));
+  syscall_printf ("0 = fstat (%S, %p) st_size=%D, st_mode=%p, st_ino=%D"
+		  "st_atim=%x.%x st_ctim=%x.%x "
+		  "st_mtim=%x.%x st_birthtim=%x.%x",
+		  pc.get_nt_native_path (), buf,
+		  buf->st_size, buf->st_mode, buf->st_ino,
+		  buf->st_atim.tv_sec, buf->st_atim.tv_nsec,
+		  buf->st_ctim.tv_sec, buf->st_ctim.tv_nsec,
+		  buf->st_mtim.tv_sec, buf->st_mtim.tv_nsec,
+		  buf->st_birthtim.tv_sec, buf->st_birthtim.tv_nsec);
   return 0;
 }
 
@@ -716,15 +683,19 @@ fhandler_disk_file::fstatvfs (struct statvfs *sfs)
   IO_STATUS_BLOCK io;
   FILE_FS_FULL_SIZE_INFORMATION full_fsi;
   FILE_FS_SIZE_INFORMATION fsi;
+  /* We must not use the stat handle here, even if it exists.  The handle
+     has been opened with FILE_OPEN_REPARSE_POINT, thus, in case of a volume
+     mount point, it points to the FS of the mount point, rather than to the
+     mounted FS. */
   HANDLE fh = get_handle ();
 
   if (!fh)
     {
       OBJECT_ATTRIBUTES attr;
       opened = NT_SUCCESS (NtOpenFile (&fh, READ_CONTROL,
-				     pc.get_object_attr (attr, sec_none_nih),
-				     &io, FILE_SHARE_VALID_FLAGS,
-				     FILE_OPEN_FOR_BACKUP_INTENT));
+				       pc.get_object_attr (attr, sec_none_nih),
+				       &io, FILE_SHARE_VALID_FLAGS,
+				       FILE_OPEN_FOR_BACKUP_INTENT));
       if (!opened)
 	{
 	  /* Can't open file.  Try again with parent dir. */
@@ -732,8 +703,8 @@ fhandler_disk_file::fstatvfs (struct statvfs *sfs)
 	  RtlSplitUnicodePath (pc.get_nt_native_path (), &dirname, NULL);
 	  attr.ObjectName = &dirname;
 	  opened = NT_SUCCESS (NtOpenFile (&fh, READ_CONTROL, &attr, &io,
-					 FILE_SHARE_VALID_FLAGS,
-					 FILE_OPEN_FOR_BACKUP_INTENT));
+					   FILE_SHARE_VALID_FLAGS,
+					   FILE_OPEN_FOR_BACKUP_INTENT));
 	  if (!opened)
 	    goto out;
 	}
@@ -792,7 +763,7 @@ fhandler_disk_file::fstatvfs (struct statvfs *sfs)
 out:
   if (opened)
     NtClose (fh);
-  syscall_printf ("%d = fstatvfs (%s, %p)", ret, get_name (), sfs);
+  syscall_printf ("%d = fstatvfs(%s, %p)", ret, get_name (), sfs);
   return ret;
 }
 
@@ -810,7 +781,7 @@ fhandler_disk_file::fchmod (mode_t mode)
 
   if (!get_handle ())
     {
-      query_open (query_write_control);
+      query_open (query_write_dac);
       if (!(oret = open (O_BINARY, 0)))
 	{
 	  /* Need WRITE_DAC|WRITE_OWNER to write ACLs. */
@@ -879,7 +850,7 @@ fhandler_disk_file::fchmod (mode_t mode)
       OBJECT_ATTRIBUTES attr;
       HANDLE fh;
 
-      InitializeObjectAttributes (&attr, &ro_u_empty, 0, get_handle (), NULL);
+      pc.init_reopen_attr (&attr, get_handle ());
       if (NT_SUCCESS (NtOpenFile (&fh, FILE_WRITE_ATTRIBUTES, &attr, &io,
 				  FILE_SHARE_VALID_FLAGS,
 				  FILE_OPEN_FOR_BACKUP_INTENT)))
@@ -942,7 +913,7 @@ fhandler_disk_file::fchown (__uid32_t uid, __gid32_t gid)
 	attrib = S_IFLNK | STD_RBITS | STD_WBITS;
       res = set_file_attribute (get_handle (), pc, uid, gid, attrib);
       /* If you're running a Samba server which has no winbidd running, the
-         uid<->SID mapping is disfunctional.  Even trying to chown to your
+	 uid<->SID mapping is disfunctional.  Even trying to chown to your
 	 own account fails since the account used on the server is the UNIX
 	 account which gets used for the standard user mapping.  This is a
 	 default mechanism which doesn't know your real Windows SID.
@@ -958,7 +929,8 @@ fhandler_disk_file::fchown (__uid32_t uid, __gid32_t gid)
 
 	  if (old_uid == ILLEGAL_UID
 	      || (sid.getfrompw (internal_getpwuid (old_uid))
-		  && EqualPrefixSid (sid, well_known_samba_unix_user_fake_sid)))
+		  && RtlEqualPrefixSid (sid,
+					well_known_samba_unix_user_fake_sid)))
 	    {
 	      debug_printf ("Faking chown worked on standalone Samba");
 	      res = 0;
@@ -998,13 +970,7 @@ cant_access_acl:
 	      set_errno (ENOSPC);
 	    else
 	      {
-		if (!get_handle ())
-		  {
-		    query_open (query_read_attributes);
-		    oret = open (O_BINARY, 0);
-		  }
-		if ((oret && !fstat_by_handle (&st))
-		    || !fstat_by_name (&st))
+		if (!fstat (&st))
 		  {
 		    aclbufp[0].a_type = USER_OBJ;
 		    aclbufp[0].a_id = st.st_uid;
@@ -1032,7 +998,8 @@ cant_access_acl:
     }
   else
     {
-      if (!get_handle ())
+      if ((cmd == SETACL && !get_handle ())
+	  || (cmd != SETACL && !get_stat_handle ()))
 	{
 	  query_open (cmd == SETACL ? query_write_control : query_read_control);
 	  if (!(oret = open (O_BINARY, 0)))
@@ -1069,10 +1036,16 @@ cant_access_acl:
 	    if (!aclbufp)
 	      set_errno(EFAULT);
 	    else
-	      res = getacl (get_handle (), pc, nentries, aclbufp);
+	      res = getacl (get_stat_handle (), pc, nentries, aclbufp);
+	      /* For this ENOSYS case, see security.cc:get_file_attribute(). */
+	      if (res == -1 && get_errno () == ENOSYS)
+		goto cant_access_acl;
 	    break;
 	  case GETACLCNT:
-	    res = getacl (get_handle (), pc, 0, NULL);
+	    res = getacl (get_stat_handle (), pc, 0, NULL);
+	    /* Ditto. */
+	    if (res == -1 && get_errno () == ENOSYS)
+	      goto cant_access_acl;
 	    break;
 	  default:
 	    set_errno (EINVAL);
@@ -1259,17 +1232,13 @@ fhandler_disk_file::link (const char *newpath)
 	}
     }
 
-  HANDLE fh;
-  NTSTATUS status;
-  OBJECT_ATTRIBUTES attr;
-  IO_STATUS_BLOCK io;
-  status = NtOpenFile (&fh, READ_CONTROL,
-		       pc.get_object_attr (attr, sec_none_nih), &io,
-		       FILE_SHARE_VALID_FLAGS,
-		       FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT);
-  if (!NT_SUCCESS (status))
+  /* We only need READ_CONTROL access so the handle returned in pc is
+     sufficient.  And if the file couldn't be opened with READ_CONTROL
+     access in path_conv, we won't be able to do it here anyway. */
+  HANDLE fh = get_stat_handle ();
+  if (!fh)
     {
-      __seterrno_from_nt_status (status);
+      set_errno (EACCES);
       return -1;
     }
   PUNICODE_STRING tgt = newpc.get_nt_native_path ();
@@ -1278,8 +1247,10 @@ fhandler_disk_file::link (const char *newpath)
   pfli->ReplaceIfExists = FALSE;
   pfli->RootDirectory = NULL;
   memcpy (pfli->FileName, tgt->Buffer, pfli->FileNameLength = tgt->Length);
+
+  NTSTATUS status;
+  IO_STATUS_BLOCK io;
   status = NtSetInformationFile (fh, &io, pfli, size, FileLinkInformation);
-  NtClose (fh);
   if (!NT_SUCCESS (status))
     {
       if (status == STATUS_INVALID_DEVICE_REQUEST)
@@ -1365,7 +1336,7 @@ fhandler_base::utimens_fs (const struct timespec *tvp)
       OBJECT_ATTRIBUTES attr;
       HANDLE fh;
 
-      InitializeObjectAttributes (&attr, &ro_u_empty, 0, get_handle (), NULL);
+      pc.init_reopen_attr (&attr, get_handle ());
       if (NT_SUCCESS (NtOpenFile (&fh, FILE_WRITE_ATTRIBUTES, &attr, &io,
 				  FILE_SHARE_VALID_FLAGS,
 				  FILE_OPEN_FOR_BACKUP_INTENT)))
@@ -1388,12 +1359,12 @@ fhandler_base::utimens_fs (const struct timespec *tvp)
 }
 
 fhandler_disk_file::fhandler_disk_file () :
-  fhandler_base ()
+  fhandler_base (), prw_handle (NULL)
 {
 }
 
 fhandler_disk_file::fhandler_disk_file (path_conv &pc) :
-  fhandler_base ()
+  fhandler_base (), prw_handle (NULL)
 {
   set_name (pc);
 }
@@ -1402,6 +1373,39 @@ int
 fhandler_disk_file::open (int flags, mode_t mode)
 {
   return open_fs (flags, mode);
+}
+
+int
+fhandler_disk_file::close ()
+{
+  /* Close extra pread/pwrite handle, if it exists. */
+  if (prw_handle)
+    NtClose (prw_handle);
+  /* Delete all POSIX locks on the file.  Delete all flock locks on the
+     file if this is the last reference to this file. */
+  del_my_locks (on_close);
+  return fhandler_base::close ();
+}
+
+int
+fhandler_disk_file::dup (fhandler_base *child, int flags)
+{
+  fhandler_disk_file *fhc = (fhandler_disk_file *) child;
+
+  int ret = fhandler_base::dup (child, flags);
+  if (!ret && prw_handle
+      && !DuplicateHandle (GetCurrentProcess (), prw_handle,
+			   GetCurrentProcess (), &fhc->prw_handle,
+			   0, TRUE, DUPLICATE_SAME_ACCESS))
+    prw_handle = NULL;
+  return ret;
+}
+
+void
+fhandler_disk_file::fixup_after_fork (HANDLE parent)
+{
+  prw_handle = NULL;
+  fhandler_base::fixup_after_fork (parent);
 }
 
 int
@@ -1433,20 +1437,137 @@ fhandler_base::open_fs (int flags, mode_t mode)
       return 0;
     }
 
-    ino = get_ino_by_handle (pc, get_handle ());
+    ino = pc.get_ino_by_handle (get_handle ());
     /* A unique ID is necessary to recognize fhandler entries which are
        duplicated by dup(2) or fork(2). */
-    AllocateLocallyUniqueId ((PLUID) &unique_id);
+    NtAllocateLocallyUniqueId ((PLUID) &unique_id);
 
 out:
-  syscall_printf ("%d = fhandler_disk_file::open (%S, %p)", res,
+  syscall_printf ("%d = fhandler_disk_file::open(%S, %p)", res,
 		  pc.get_nt_native_path (), flags);
   return res;
+}
+
+/* POSIX demands that pread/pwrite don't change the current file position.
+   While NtReadFile/NtWriteFile support atomic seek-and-io, both change the
+   file pointer if the file handle has been opened for synchonous I/O.
+   Using this handle for pread/pwrite would break atomicity, because the
+   read/write operation would have to be followed by a seek back to the old
+   file position.  What we do is to open another handle to the file on the
+   first call to either pread or pwrite.  This is used for any subsequent
+   pread/pwrite.  Thus the current file position of the "normal" file
+   handle is not touched.
+
+   FIXME:
+
+   Note that this is just a hack.  The problem with this approach is that
+   a change to the file permissions might disallow to open the file with
+   the required permissions to read or write.  This appears to be a border case,
+   but that's exactly what git does.  It creates the file for reading and
+   writing and after writing it, it chmods the file to read-only.  Then it
+   calls pread on the file to examine the content.  This works, but if git
+   would use the original handle to pwrite to the file, it would be broken
+   with our approach.
+
+   One way to implement this is to open the pread/pwrite handle right at
+   file open time.  We would simply maintain two handles, which wouldn't
+   be much of a problem given how we do that for other fhandler types as
+   well.
+
+   However, ultimately fhandler_disk_file should become a derived class of
+   fhandler_base_overlapped.  Each raw_read or raw_write would fetch the
+   actual file position, read/write from there, and then set the file
+   position again.  Fortunately, while the file position is not maintained
+   by the I/O manager, it can be fetched and set to a new value by all
+   processes holding a handle to that file object.  Pread and pwrite differ
+   from raw_read and raw_write just by not touching the current file pos.
+   Actually they could be merged with raw_read/raw_write if we add a position
+   parameter to the latter. */
+
+int
+fhandler_disk_file::prw_open (bool write)
+{
+  NTSTATUS status;
+  IO_STATUS_BLOCK io;
+  OBJECT_ATTRIBUTES attr;
+
+  /* First try to open with the original access mask */
+  ACCESS_MASK access = get_access ();
+  pc.init_reopen_attr (&attr, get_handle ());
+  status = NtOpenFile (&prw_handle, access, &attr, &io,
+		       FILE_SHARE_VALID_FLAGS, get_options ());
+  if (status == STATUS_ACCESS_DENIED)
+    {
+      /* If we get an access denied, chmod has been called.  Try again
+	 with just the required rights to perform the called function. */
+      access &= write ? ~GENERIC_READ : ~GENERIC_WRITE;
+      status = NtOpenFile (&prw_handle, access, &attr, &io,
+			   FILE_SHARE_VALID_FLAGS, get_options ());
+    }
+  debug_printf ("%x = NtOpenFile (%p, %x, %S, io, %x, %x)",
+		status, prw_handle, access, pc.get_nt_native_path (),
+		FILE_SHARE_VALID_FLAGS, get_options ());
+  if (!NT_SUCCESS (status))
+    {
+      __seterrno_from_nt_status (status);
+      return -1;
+    }
+  return 0;
 }
 
 ssize_t __stdcall
 fhandler_disk_file::pread (void *buf, size_t count, _off64_t offset)
 {
+  if ((get_flags () & O_ACCMODE) == O_WRONLY)
+    {
+      set_errno (EBADF);
+      return -1;
+    }
+
+  /* In binary mode, we can use an atomic NtReadFile call. */
+  if (rbinary ())
+    {
+      extern int __stdcall is_at_eof (HANDLE h);
+      NTSTATUS status;
+      IO_STATUS_BLOCK io;
+      LARGE_INTEGER off = { QuadPart:offset };
+
+      if (!prw_handle && prw_open (false))
+	goto non_atomic;
+      status = NtReadFile (prw_handle, NULL, NULL, NULL, &io, buf, count,
+			   &off, NULL);
+      if (!NT_SUCCESS (status))
+	{
+	  if (pc.isdir ())
+	    {
+	      set_errno (EISDIR);
+	      return -1;
+	    }
+	  if (status == (NTSTATUS) STATUS_ACCESS_VIOLATION)
+	    {
+	      if (is_at_eof (prw_handle))
+		return 0;
+	      switch (mmap_is_attached_or_noreserve (buf, count))
+		{
+		case MMAP_NORESERVE_COMMITED:
+		  status = NtReadFile (prw_handle, NULL, NULL, NULL, &io,
+				       buf, count, &off, NULL);
+		  if (NT_SUCCESS (status))
+		    return io.Information;
+		  break;
+		case MMAP_RAISE_SIGBUS:
+		  raise (SIGBUS);
+		default:
+		  break;
+		}
+	    }
+	  __seterrno_from_nt_status (status);
+	  return -1;
+	}
+    }
+
+non_atomic:
+  /* Text mode stays slow and non-atomic. */
   ssize_t res;
   _off64_t curpos = lseek (0, SEEK_CUR);
   if (curpos < 0 || lseek (offset, SEEK_SET) < 0)
@@ -1460,13 +1581,40 @@ fhandler_disk_file::pread (void *buf, size_t count, _off64_t offset)
       else
 	res = -1;
     }
-  debug_printf ("%d = pread (%p, %d, %d)\n", res, buf, count, offset);
+  debug_printf ("%d = pread(%p, %d, %d)\n", res, buf, count, offset);
   return res;
 }
 
 ssize_t __stdcall
 fhandler_disk_file::pwrite (void *buf, size_t count, _off64_t offset)
 {
+  if ((get_flags () & O_ACCMODE) == O_RDONLY)
+    {
+      set_errno (EBADF);
+      return -1;
+    }
+
+  /* In binary mode, we can use an atomic NtWriteFile call. */
+  if (wbinary ())
+    {
+      NTSTATUS status;
+      IO_STATUS_BLOCK io;
+      LARGE_INTEGER off = { QuadPart:offset };
+
+      if (!prw_handle && prw_open (true))
+	goto non_atomic;
+      status = NtWriteFile (prw_handle, NULL, NULL, NULL, &io, buf, count,
+			    &off, NULL);
+      if (!NT_SUCCESS (status))
+	{
+	  __seterrno_from_nt_status (status);
+	  return -1;
+	}
+      return io.Information;
+    }
+
+non_atomic:
+  /* Text mode stays slow and non-atomic. */
   int res;
   _off64_t curpos = lseek (0, SEEK_CUR);
   if (curpos < 0 || lseek (offset, SEEK_SET) < 0)
@@ -1477,7 +1625,7 @@ fhandler_disk_file::pwrite (void *buf, size_t count, _off64_t offset)
       if (lseek (curpos, SEEK_SET) < 0)
 	res = -1;
     }
-  debug_printf ("%d = pwrite (%p, %d, %d)\n", res, buf, count, offset);
+  debug_printf ("%d = pwrite(%p, %d, %d)\n", res, buf, count, offset);
   return res;
 }
 
@@ -1492,6 +1640,7 @@ fhandler_disk_file::mkdir (mode_t mode)
   IO_STATUS_BLOCK io;
   PFILE_FULL_EA_INFORMATION p = NULL;
   ULONG plen = 0;
+  ULONG access = FILE_LIST_DIRECTORY | SYNCHRONIZE;
 
   if (pc.fs_is_nfs ())
     {
@@ -1511,8 +1660,17 @@ fhandler_disk_file::mkdir (mode_t mode)
       nfs_attr->type = NF3DIR;
       nfs_attr->mode = (mode & 07777) & ~cygheap->umask;
     }
-  status = NtCreateFile (&dir, FILE_LIST_DIRECTORY | SYNCHRONIZE,
-			 pc.get_object_attr (attr, sa), &io, NULL,
+  else if (has_acls () && !isremote ())
+    /* If the filesystem supports ACLs, we will overwrite the DACL after the
+       call to NtCreateFile.  This requires a handle with READ_CONTROL and
+       WRITE_DAC access, otherwise get_file_sd and set_file_sd both have to
+       open the file again.
+       FIXME: On remote NTFS shares open sometimes fails because even the
+       creator of the file doesn't have the right to change the DACL.
+       I don't know what setting that is or how to recognize such a share,
+       so for now we don't request WRITE_DAC on remote drives. */
+    access |= READ_CONTROL | WRITE_DAC;
+  status = NtCreateFile (&dir, access, pc.get_object_attr (attr, sa), &io, NULL,
 			 FILE_ATTRIBUTE_DIRECTORY, FILE_SHARE_VALID_FLAGS,
 			 FILE_CREATE,
 			 FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT
@@ -1554,18 +1712,22 @@ fhandler_disk_file::rmdir ()
   /* Check for existence of remote dirs after trying to delete them.
      Two reasons:
      - Sometimes SMB indicates failure when it really succeeds.
-     - Removeing a directory on a samba drive doesn't return an error if the
-       directory can't be removed because it's not empty.  */
+     - Removing a directory on a Samba drive using an old Samba version
+       sometimes doesn't return an error, if the directory can't be removed
+       because it's not empty. */
   if (isremote ())
     {
       OBJECT_ATTRIBUTES attr;
       FILE_BASIC_INFORMATION fbi;
+      NTSTATUS q_status;
 
-      if (NT_SUCCESS (NtQueryAttributesFile
-			    (pc.get_object_attr (attr, sec_none_nih), &fbi)))
-	status = STATUS_DIRECTORY_NOT_EMPTY;
-      else
+      q_status = NtQueryAttributesFile (pc.get_object_attr (attr, sec_none_nih),
+					&fbi);
+      if (!NT_SUCCESS (status) && q_status == STATUS_OBJECT_NAME_NOT_FOUND)
 	status = STATUS_SUCCESS;
+      else if (pc.fs_is_samba ()
+	       && NT_SUCCESS (status) && NT_SUCCESS (q_status))
+	status = STATUS_DIRECTORY_NOT_EMPTY;
     }
   if (!NT_SUCCESS (status))
     {
@@ -1643,19 +1805,41 @@ fhandler_disk_file::opendir (int fd)
 	      OBJECT_ATTRIBUTES attr;
 	      NTSTATUS status;
 	      IO_STATUS_BLOCK io;
+	      /* Tools like ls(1) call dirfd() to fetch the directory
+		 descriptor for calls to facl or fstat.  The tight access mask
+		 used so far is not sufficient to reuse the handle for these
+		 calls, instead the facl/fstat calls find the handle to be
+		 unusable and have to re-open the file for reading attributes
+		 and control data.  So, what we do here is to try to open the
+		 directory with more relaxed access mask which enables to use
+		 the handle for the aforementioned purpose.  This should work
+		 in almost all cases.  Only if it doesn't work due to
+		 permission problems, we drop the additional access bits and
+		 try again. */
+	      ACCESS_MASK fstat_mask = READ_CONTROL | FILE_READ_ATTRIBUTES;
 
-	      status = NtOpenFile (&get_handle (),
-				   SYNCHRONIZE | FILE_LIST_DIRECTORY,
-				   pc.get_object_attr (attr, sec_none_nih),
-				   &io, FILE_SHARE_VALID_FLAGS,
-				   FILE_SYNCHRONOUS_IO_NONALERT
-				   | FILE_OPEN_FOR_BACKUP_INTENT
-				   | FILE_DIRECTORY_FILE);
-	      if (!NT_SUCCESS (status))
+	      do
 		{
-		  __seterrno_from_nt_status (status);
-		  goto free_mounts;
+		  status = NtOpenFile (&get_handle (),
+				       SYNCHRONIZE | FILE_LIST_DIRECTORY
+				       | fstat_mask,
+				       pc.get_object_attr (attr, sec_none_nih),
+				       &io, FILE_SHARE_VALID_FLAGS,
+				       FILE_SYNCHRONOUS_IO_NONALERT
+				       | FILE_OPEN_FOR_BACKUP_INTENT
+				       | FILE_DIRECTORY_FILE);
+		  if (!NT_SUCCESS (status))
+		    {
+		      if (status == STATUS_ACCESS_DENIED && fstat_mask)
+			fstat_mask = 0;
+		      else
+			{
+			  __seterrno_from_nt_status (status);
+			  goto free_mounts;
+			}
+		    }
 		}
+	      while (!NT_SUCCESS (status));
 	    }
 
 	  /* FileIdBothDirectoryInformation is apparently unsupported on
@@ -1665,7 +1849,7 @@ fhandler_disk_file::opendir (int fd)
 	     OS/FS combinations (say, Win2K/CDFS or so).  Instead of
 	     testing in readdir for yet another error code, let's use
 	     FileIdBothDirectoryInformation only on filesystems supporting
-	     persistent ACLs, FileDirectoryInformation otherwise.
+	     persistent ACLs, FileBothDirectoryInformation otherwise.
 
 	     NFS clients hide dangling symlinks from directory queries,
 	     unless you use the FileNamesInformation info class.
@@ -1680,8 +1864,7 @@ fhandler_disk_file::opendir (int fd)
 	      dir->__flags |= dirent_set_d_ino;
 	      if (pc.fs_is_nfs ())
 		dir->__flags |= dirent_nfs_d_ino;
-	      else if (wincap.has_fileid_dirinfo ()
-		       && !pc.has_buggy_fileid_dirinfo ())
+	      else if (!pc.has_buggy_fileid_dirinfo ())
 		dir->__flags |= dirent_get_d_ino;
 	    }
 	}
@@ -1737,7 +1920,7 @@ readdir_get_ino (const char *path, bool dot_dot)
       strcpy (c, "..");
       path = fname;
     }
-  path_conv pc (path, PC_SYM_NOFOLLOW | PC_POSIX | PC_NOWARN);
+  path_conv pc (path, PC_SYM_NOFOLLOW | PC_POSIX | PC_NOWARN | PC_KEEP_HANDLE);
   if (pc.isspecial ())
     {
       if (!stat_worker (pc, &st))
@@ -1745,17 +1928,18 @@ readdir_get_ino (const char *path, bool dot_dot)
     }
   else if (!pc.hasgood_inode ())
     ino = hash_path_name (0, pc.get_nt_native_path ());
-  else if (NT_SUCCESS (NtOpenFile (&hdl, READ_CONTROL,
-				   pc.get_object_attr (attr, sec_none_nih),
-				   &io, FILE_SHARE_VALID_FLAGS,
-				   FILE_OPEN_FOR_BACKUP_INTENT
-				   | (pc.is_rep_symlink ()
-				      ? FILE_OPEN_REPARSE_POINT : 0))))
+  else if ((hdl = pc.handle ()) != NULL
+	   || NT_SUCCESS (NtOpenFile (&hdl, READ_CONTROL,
+				      pc.get_object_attr (attr, sec_none_nih),
+				      &io, FILE_SHARE_VALID_FLAGS,
+				      FILE_OPEN_FOR_BACKUP_INTENT
+				      | (pc.is_rep_symlink ()
+				      ? FILE_OPEN_REPARSE_POINT : 0)))
+	  )
     {
-      ino = get_ino_by_handle (pc, hdl);
+      ino = pc.get_ino_by_handle (hdl);
       if (!ino)
 	ino = hash_path_name (0, pc.get_nt_native_path ());
-      NtClose (hdl);
     }
   return ino;
 }
@@ -1770,23 +1954,25 @@ fhandler_disk_file::readdir_helper (DIR *dir, dirent *de, DWORD w32_err,
       if ((de->d_ino = d_mounts (dir)->check_missing_mount (fname)))
 	added = true;
       if (!added)
-	return geterrno_from_win_error (w32_err);
+	{
+	  fname->Length = 0;
+	  return geterrno_from_win_error (w32_err);
+	}
 
       attr = 0;
       dir->__flags &= ~dirent_set_d_ino;
     }
 
-  /* Set d_type if type can be determined from file attributes.
-     FILE_ATTRIBUTE_SYSTEM ommitted to leave DT_UNKNOWN for old symlinks.
-     For new symlinks, d_type will be reset to DT_UNKNOWN below.  */
+  /* Set d_type if type can be determined from file attributes.  For .lnk
+     symlinks, d_type will be reset below.  Reparse points can be NTFS
+     symlinks, even if they have the FILE_ATTRIBUTE_DIRECTORY flag set. */
   if (attr &&
-      !(attr & (  ~FILE_ATTRIBUTE_VALID_FLAGS
-		| FILE_ATTRIBUTE_SYSTEM
-		| FILE_ATTRIBUTE_REPARSE_POINT)))
+      !(attr & (~FILE_ATTRIBUTE_VALID_FLAGS | FILE_ATTRIBUTE_REPARSE_POINT)))
     {
       if (attr & FILE_ATTRIBUTE_DIRECTORY)
 	de->d_type = DT_DIR;
-      else
+      /* FILE_ATTRIBUTE_SYSTEM might denote system-bit type symlinks. */
+      else if (!(attr & FILE_ATTRIBUTE_SYSTEM))
 	de->d_type = DT_REG;
     }
 
@@ -1801,19 +1987,29 @@ fhandler_disk_file::readdir_helper (DIR *dir, dirent *de, DWORD w32_err,
 
       InitializeObjectAttributes (&attr, fname, pc.objcaseinsensitive (),
 				  get_handle (), NULL);
-      if (is_volume_mountpoint (&attr)
-	  && (NT_SUCCESS (NtOpenFile (&reph, READ_CONTROL, &attr, &io,
-				      FILE_SHARE_VALID_FLAGS,
-				      FILE_OPEN_FOR_BACKUP_INTENT))))
+      de->d_type = readdir_check_reparse_point (&attr);
+      if (de->d_type == DT_DIR)
 	{
-	  de->d_ino = get_ino_by_handle (pc, reph);
-	  NtClose (reph);
+	  /* Volume mountpoints are treated as directories.  We have to fix
+	     the inode number, otherwise we have the inode number of the
+	     mount point, rather than the inode number of the toplevel
+	     directory of the mounted drive. */
+	  if (NT_SUCCESS (NtOpenFile (&reph, READ_CONTROL, &attr, &io,
+				      FILE_SHARE_VALID_FLAGS,
+				      FILE_OPEN_FOR_BACKUP_INTENT)))
+	    {
+	      de->d_ino = pc.get_ino_by_handle (reph);
+	      NtClose (reph);
+	    }
 	}
     }
 
-  /* Check for Windows shortcut. If it's a Cygwin or U/WIN
-     symlink, drop the .lnk suffix. */
-  if ((attr & FILE_ATTRIBUTE_READONLY) && fname->Length > 4 * sizeof (WCHAR))
+  /* Check for Windows shortcut. If it's a Cygwin or U/WIN symlink, drop the
+     .lnk suffix and set d_type accordingly. */
+  if ((attr & (FILE_ATTRIBUTE_DIRECTORY
+	       | FILE_ATTRIBUTE_REPARSE_POINT
+	       | FILE_ATTRIBUTE_READONLY)) == FILE_ATTRIBUTE_READONLY
+      && fname->Length > 4 * sizeof (WCHAR))
     {
       UNICODE_STRING uname;
 
@@ -1824,24 +2020,27 @@ fhandler_disk_file::readdir_helper (DIR *dir, dirent *de, DWORD w32_err,
       if (RtlEqualUnicodeString (&uname, &ro_u_lnk, TRUE))
 	{
 	  tmp_pathbuf tp;
-	  UNICODE_STRING fbuf;
-
-	  tp.u_get (&fbuf);
-	  RtlCopyUnicodeString (&fbuf, pc.get_nt_native_path ());
-	  RtlAppendUnicodeToString (&fbuf, L"\\");
-	  RtlAppendUnicodeStringToString (&fbuf, fname);
-	  fbuf.Buffer += 4; /* Skip leading \??\ */
-	  fbuf.Length -= 4 * sizeof (WCHAR);
-	  if (fbuf.Buffer[1] != L':') /* UNC path */
-	    {
-	      *(fbuf.Buffer += 2) = L'\\';
-	      fbuf.Length -= 2 * sizeof (WCHAR);
-	    }
-	  path_conv fpath (&fbuf, PC_SYM_NOFOLLOW);
-	  if (fpath.issymlink () || fpath.is_fs_special ())
+	  char *file = tp.c_get ();
+	  char *p = stpcpy (file, pc.normalized_path);
+	  if (p[-1] != '/')
+	    *p++ = '/';
+	  sys_wcstombs (p, NT_MAX_PATH - (p - file),
+			fname->Buffer, fname->Length / sizeof (WCHAR));
+	  path_conv fpath (file, PC_SYM_NOFOLLOW);
+	  if (fpath.issymlink ())
 	    {
 	      fname->Length -= 4 * sizeof (WCHAR);
-	      de->d_type = DT_UNKNOWN;
+	      de->d_type = DT_LNK;
+	    }
+	  else if (fpath.isfifo ())
+	    {
+	      fname->Length -= 4 * sizeof (WCHAR);
+	      de->d_type = DT_FIFO;
+	    }
+	  else if (fpath.is_fs_special ())
+	    {
+	      fname->Length -= 4 * sizeof (WCHAR);
+	      de->d_type = S_ISCHR (fpath.dev.mode) ? DT_CHR : DT_BLK;
 	    }
 	}
     }
@@ -1891,30 +2090,32 @@ fhandler_disk_file::readdir (DIR *dir, dirent *de)
 	     which return STATUS_NOT_SUPPORTED rather than handling this info
 	     class.  We just fall back to using a standard directory query in
 	     this case and note this case using the dirent_get_d_ino flag. */
-	  if (status == STATUS_INVALID_LEVEL
-	      || status == STATUS_NOT_SUPPORTED
-	      || status == STATUS_INVALID_PARAMETER
-	      || status == STATUS_INVALID_INFO_CLASS)
+	  if (!NT_SUCCESS (status) && status != STATUS_NO_MORE_FILES
+	      && (status == STATUS_INVALID_LEVEL
+		  || status == STATUS_NOT_SUPPORTED
+		  || status == STATUS_INVALID_PARAMETER
+		  || status == STATUS_INVALID_NETWORK_RESPONSE
+		  || status == STATUS_INVALID_INFO_CLASS))
 	    dir->__flags &= ~dirent_get_d_ino;
 	  /* Something weird happens on Samba up to version 3.0.21c, which is
 	     fixed in 3.0.22.  FileIdBothDirectoryInformation seems to work
 	     nicely, but only up to the 128th entry in the directory.  After
 	     reaching this entry, the next call to NtQueryDirectoryFile
 	     (FileIdBothDirectoryInformation) returns STATUS_INVALID_LEVEL.
-	     Why should we care, we can just switch to FileDirectoryInformation,
-	     isn't it?  Nope!  The next call to
-	       NtQueryDirectoryFile(FileDirectoryInformation)
-	     actually returns STATUS_NO_MORE_FILES, regardless how many files
-	     are left unread in the directory.  This does not happen when using
-	     FileDirectoryInformation right from the start, but since
+	     Why should we care, we can just switch to
+	     FileBothDirectoryInformation, isn't it?  Nope!  The next call to
+	     NtQueryDirectoryFile(FileBothDirectoryInformation) actually
+	     returns STATUS_NO_MORE_FILES, regardless how many files are left
+	     unread in the directory.  This does not happen when using
+	     FileBothDirectoryInformation right from the start, but since
 	     we can't decide whether the server we're talking with has this
 	     bug or not, we end up serving Samba shares always in the slow
-	     mode using FileDirectoryInformation.  So, what we do here is
+	     mode using FileBothDirectoryInformation.  So, what we do here is
 	     to implement the solution suggested by Andrew Tridgell,  we just
 	     reread all entries up to dir->d_position using
-	     FileDirectoryInformation.
+	     FileBothDirectoryInformation.
 	     However, We do *not* mark this server as broken and fall back to
-	     using FileDirectoryInformation further on.  This would slow
+	     using FileBothDirectoryInformation further on.  This would slow
 	     down every access to such a server, even for directories under
 	     128 entries.  Also, bigger dirs only suffer from one additional
 	     call per full directory scan, which shouldn't be too big a hit.
@@ -1929,7 +2130,7 @@ fhandler_disk_file::readdir (DIR *dir, dirent *de)
 		      status = NtQueryDirectoryFile (get_handle (), NULL, NULL,
 					   NULL, &io, d_cache (dir),
 					   DIR_BUF_SIZE,
-					   FileDirectoryInformation,
+					   FileBothDirectoryInformation,
 					   FALSE, NULL, cnt == 0);
 		      if (!NT_SUCCESS (status))
 			goto go_ahead;
@@ -1949,7 +2150,7 @@ fhandler_disk_file::readdir (DIR *dir, dirent *de)
 				       d_cache (dir), DIR_BUF_SIZE,
 				       (dir->__flags & dirent_nfs_d_ino)
 				       ? FileNamesInformation
-				       : FileDirectoryInformation,
+				       : FileBothDirectoryInformation,
 				       FALSE, NULL, dir->__d_position == 0);
     }
 
@@ -1982,9 +2183,11 @@ go_ahead:
 	}
       else
 	{
-	  FileName = ((PFILE_DIRECTORY_INFORMATION) buf)->FileName;
-	  FileNameLength = ((PFILE_DIRECTORY_INFORMATION) buf)->FileNameLength;
-	  FileAttributes = ((PFILE_DIRECTORY_INFORMATION) buf)->FileAttributes;
+	  FileName = ((PFILE_BOTH_DIRECTORY_INFORMATION) buf)->FileName;
+	  FileNameLength =
+		((PFILE_BOTH_DIRECTORY_INFORMATION) buf)->FileNameLength;
+	  FileAttributes =
+		((PFILE_BOTH_DIRECTORY_INFORMATION) buf)->FileAttributes;
 	}
       RtlInitCountedUnicodeString (&fname, FileName, FileNameLength);
       de->d_ino = d_mounts (dir)->check_mount (&fname, de->d_ino);
@@ -1994,14 +2197,14 @@ go_ahead:
 	     filesystems it's no safe bet that "." and ".." entries always
 	     come first. */
 	  if (FileNameLength == sizeof (WCHAR) && FileName[0] == '.')
-	    de->d_ino = get_ino_by_handle (pc, get_handle ());
+	    de->d_ino = pc.get_ino_by_handle (get_handle ());
 	  else if (FileNameLength == 2 * sizeof (WCHAR)
 		   && FileName[0] == L'.' && FileName[1] == L'.')
 	    {
 	      if (!(dir->__flags & dirent_isroot))
 		de->d_ino = readdir_get_ino (get_name (), true);
 	      else
-		de->d_ino = get_ino_by_handle (pc, get_handle ());
+		de->d_ino = pc.get_ino_by_handle (get_handle ());
 	    }
 	  else
 	    {
@@ -2013,9 +2216,9 @@ go_ahead:
 					  pc.objcaseinsensitive (),
 					  get_handle (), NULL);
 	      /* FILE_OPEN_REPARSE_POINT on NFS is a no-op, so the normal
-	         NtOpenFile here returns the inode number of the symlink target,
+		 NtOpenFile here returns the inode number of the symlink target,
 		 rather than the inode number of the symlink itself.
-		 
+
 		 Worse, trying to open a symlink without setting the special
 		 "ActOnSymlink" EA triggers a bug in Windows 7 which results
 		 in a timeout of up to 20 seconds, followed by two exceptions
@@ -2036,23 +2239,35 @@ go_ahead:
 				       | FILE_OPEN_REPARSE_POINT);
 	      if (NT_SUCCESS (f_status))
 		{
-		  de->d_ino = get_ino_by_handle (pc, hdl);
+		  /* We call NtQueryInformationFile here, rather than
+		     pc.get_ino_by_handle(), otherwise we can't short-circuit
+		     dirent_set_d_ino correctly. */
+		  FILE_INTERNAL_INFORMATION fai;
+		  f_status = NtQueryInformationFile (hdl, &io, &fai, sizeof fai,
+						     FileInternalInformation);
 		  NtClose (hdl);
+		  if (NT_SUCCESS (f_status))
+		    {
+		      if (pc.isgood_inode (fai.FileId.QuadPart))
+			de->d_ino = fai.FileId.QuadPart;
+		      else
+			/* Untrusted file system.  Don't try to fetch inode
+			   number again. */
+			dir->__flags &= ~dirent_set_d_ino;
+		    }
 		}
 	    }
-	  /* Untrusted file system.  Don't try to fetch inode number again. */
-	  if (de->d_ino == 0)
-	    dir->__flags &= ~dirent_set_d_ino;
 	}
     }
 
   if (!(res = readdir_helper (dir, de, RtlNtStatusToDosError (status),
-			      buf ? FileAttributes : 0, &fname)))
+			      FileAttributes, &fname)))
     dir->__d_position++;
   else if (!(dir->__flags & dirent_saw_dot))
     {
       strcpy (de->d_name , ".");
-      de->d_ino = get_ino_by_handle (pc, get_handle ());
+      de->d_ino = pc.get_ino_by_handle (get_handle ());
+      de->d_type = DT_DIR;
       dir->__d_position++;
       dir->__flags |= dirent_saw_dot;
       res = 0;
@@ -2063,25 +2278,27 @@ go_ahead:
       if (!(dir->__flags & dirent_isroot))
 	de->d_ino = readdir_get_ino (get_name (), true);
       else
-	de->d_ino = get_ino_by_handle (pc, get_handle ());
+	de->d_ino = pc.get_ino_by_handle (get_handle ());
+      de->d_type = DT_DIR;
       dir->__d_position++;
       dir->__flags |= dirent_saw_dot_dot;
       res = 0;
     }
 
-  syscall_printf ("%d = readdir (%p, %p) (L\"%lS\" > \"%ls\")", res, dir, &de,
-		  res ? NULL : &fname, res ? "***" : de->d_name);
+  syscall_printf ("%d = readdir(%p, %p) (L\"%lS\" > \"%ls\") (attr %p > type %d)",
+		  res, dir, &de, res ? NULL : &fname, res ? "***" : de->d_name,
+		  FileAttributes, de->d_type);
   return res;
 }
 
-_off64_t
+long
 fhandler_disk_file::telldir (DIR *dir)
 {
   return dir->__d_position;
 }
 
 void
-fhandler_disk_file::seekdir (DIR *dir, _off64_t loc)
+fhandler_disk_file::seekdir (DIR *dir, long loc)
 {
   rewinddir (dir);
   while (loc > dir->__d_position)
@@ -2104,8 +2321,7 @@ fhandler_disk_file::rewinddir (DIR *dir)
       IO_STATUS_BLOCK io;
       HANDLE new_dir;
 
-      InitializeObjectAttributes (&attr, &ro_u_empty, pc.objcaseinsensitive (),
-				  get_handle (), NULL);
+      pc.init_reopen_attr (&attr, get_handle ());
       status = NtOpenFile (&new_dir, SYNCHRONIZE | FILE_LIST_DIRECTORY,
 			   &attr, &io, FILE_SHARE_VALID_FLAGS,
 			   FILE_SYNCHRONOUS_IO_NONALERT
@@ -2143,7 +2359,7 @@ fhandler_disk_file::closedir (DIR *dir)
       __seterrno_from_nt_status (status);
       res = -1;
     }
-  syscall_printf ("%d = closedir (%p, %s)", res, dir, get_name ());
+  syscall_printf ("%d = closedir(%p, %s)", res, dir, get_name ());
   return res;
 }
 
@@ -2189,7 +2405,7 @@ fhandler_cygdrive::fstat (struct __stat64 *buf)
 {
   fhandler_base::fstat (buf);
   buf->st_ino = 2;
-  buf->st_mode = S_IFDIR | S_IXUSR | S_IXGRP | S_IXOTH;
+  buf->st_mode = S_IFDIR | STD_RBITS | STD_XBITS;
   if (!ndrives)
     set_drives ();
   char flptst[] = "X:";

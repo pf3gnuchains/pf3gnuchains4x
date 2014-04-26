@@ -2,7 +2,7 @@
    classes.
 
    Copyright 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
-   2008, 2010 Red Hat, Inc.
+   2008, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -23,6 +23,7 @@ details. */
 #include "cygheap.h"
 #include "shared_info.h"
 #include "sigproc.h"
+#include "child_info.h"
 
 /* Media changes and bus resets are sometimes reported and the function
    hasn't been executed.  We repeat all functions which return with one
@@ -1136,19 +1137,38 @@ mtinfo::initialize ()
 
 #define mt	(cygwin_shared->mt)
 
-#define lock(err_ret_val) if (!_lock ()) return err_ret_val;
+#define lock(err_ret_val) if (!_lock (false)) return (err_ret_val);
 
 inline bool
-fhandler_dev_tape::_lock ()
+fhandler_dev_tape::_lock (bool cancelable)
 {
-  HANDLE obj[2] = { mt_mtx, signal_arrived };
-  BOOL ret = WaitForMultipleObjects (2, obj, FALSE, INFINITE) == WAIT_OBJECT_0;
-  if (!ret)
+  HANDLE w4[3] = { mt_mtx, signal_arrived, NULL };
+  DWORD cnt = 2;
+  if (cancelable && (w4[2] = pthread::get_cancel_event ()) != NULL)
+    cnt = 3;
+  /* O_NONBLOCK is only valid in a read or write call.  Only those are
+     cancelable. */
+  DWORD timeout = cancelable && is_nonblocking () ? 0 : INFINITE;
+restart:
+  switch (WaitForMultipleObjects (cnt, w4, FALSE, timeout))
     {
-      debug_printf ("signal_arrived"); \
+    case WAIT_OBJECT_0:
+      return true;
+    case WAIT_OBJECT_0 + 1:
+      if (_my_tls.call_signal_handler ())
+	goto restart;
       set_errno (EINTR);
+      return false;
+    case WAIT_OBJECT_0 + 2:
+      pthread::static_cancel_self ();
+      /*NOTREACHED*/
+    case WAIT_TIMEOUT:
+      set_errno (EAGAIN);
+      return false;
+    default:
+      __seterrno ();
+      return false;
     }
-  return ret;
 }
 
 inline int
@@ -1161,7 +1181,7 @@ fhandler_dev_tape::unlock (int ret)
 fhandler_dev_tape::fhandler_dev_tape ()
   : fhandler_dev_raw ()
 {
-  debug_printf ("unit: %d", dev ().minor);
+  debug_printf ("unit: %d", dev ().get_minor ());
 }
 
 int
@@ -1217,7 +1237,7 @@ fhandler_dev_tape::close ()
   int ret = 0;
   int cret = 0;
 
-  if (!hExeced)
+  if (!have_execed)
     {
       lock (-1);
       ret = mt.drive (driveno ())->close (get_handle (), is_rewind_device ());
@@ -1248,7 +1268,7 @@ fhandler_dev_tape::raw_read (void *ptr, size_t &ulen)
       ulen = 0;
       return;
     }
-  if (!_lock ())
+  if (!_lock (true))
     {
       ulen = (size_t) -1;
       return;
@@ -1336,7 +1356,8 @@ fhandler_dev_tape::raw_read (void *ptr, size_t &ulen)
 ssize_t __stdcall
 fhandler_dev_tape::raw_write (const void *ptr, size_t len)
 {
-  lock (-1);
+  if (!_lock (true))
+    return -1;
   if (!mt_evt && !(mt_evt = CreateEvent (&sec_none, TRUE, FALSE, NULL)))
     debug_printf ("Creating event failed, %E");
   int ret = mt.drive (driveno ())->write (get_handle (), mt_evt, ptr, len);
@@ -1424,12 +1445,12 @@ fhandler_dev_tape::fstat (struct __stat64 *buf)
 }
 
 int
-fhandler_dev_tape::dup (fhandler_base *child)
+fhandler_dev_tape::dup (fhandler_base *child, int flags)
 {
   lock (-1);
   fhandler_dev_tape *fh = (fhandler_dev_tape *) child;
   if (!DuplicateHandle (GetCurrentProcess (), mt_mtx,
-  			GetCurrentProcess (), &fh->mt_mtx,
+			GetCurrentProcess (), &fh->mt_mtx,
 			0, TRUE, DUPLICATE_SAME_ACCESS))
     {
       debug_printf ("dup(%s) failed, mutex handle %x, %E",
@@ -1448,7 +1469,7 @@ fhandler_dev_tape::dup (fhandler_base *child)
       __seterrno ();
       return unlock (-1);
     }
-  return unlock (fhandler_dev_raw::dup (child));
+  return unlock (fhandler_dev_raw::dup (child, flags));
 }
 
 void

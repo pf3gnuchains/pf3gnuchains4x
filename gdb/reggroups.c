@@ -1,7 +1,6 @@
 /* Register groupings for GDB, the GNU debugger.
 
-   Copyright (C) 2002, 2003, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2002-2003, 2007-2012 Free Software Foundation, Inc.
 
    Contributed by Red Hat.
 
@@ -41,6 +40,7 @@ struct reggroup *
 reggroup_new (const char *name, enum reggroup_type type)
 {
   struct reggroup *group = XMALLOC (struct reggroup);
+
   group->name = name;
   group->type = type;
   return group;
@@ -81,6 +81,7 @@ reggroups_init (struct gdbarch *gdbarch)
 {
   struct reggroups *groups = GDBARCH_OBSTACK_ZALLOC (gdbarch,
 						     struct reggroups);
+
   groups->last = &groups->first;
   return groups;
 }
@@ -190,6 +191,7 @@ reggroups_dump (struct gdbarch *gdbarch, struct ui_file *file)
       /* Group name.  */
       {
 	const char *name;
+
 	if (group == NULL)
 	  name = "Group";
 	else
@@ -200,6 +202,7 @@ reggroups_dump (struct gdbarch *gdbarch, struct ui_file *file)
       /* Group type.  */
       {
 	const char *type;
+
 	if (group == NULL)
 	  type = "Type";
 	else
@@ -240,6 +243,7 @@ maintenance_print_reggroups (char *args, int from_tty)
     {
       struct cleanup *cleanups;
       struct ui_file *file = gdb_fopen (args, "w");
+
       if (file == NULL)
 	perror_with_name (_("maintenance print reggroups"));
       cleanups = make_cleanup_ui_file_delete (file);

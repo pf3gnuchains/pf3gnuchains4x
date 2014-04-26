@@ -1,6 +1,6 @@
 /* sched.cc: scheduler interface for Cygwin
 
-   Copyright 2001, 2002, 2006, 2007 Red Hat, Inc.
+   Copyright 2001, 2003, 2006, 2008, 2011 Red Hat, Inc.
 
    Written by Robert Collins <rbtcollins@hotmail.com>
 
@@ -262,7 +262,7 @@ sched_rr_get_interval (pid_t pid, struct timespec *interval)
 
   HWND forwin;
   DWORD forprocid;
-  int vfindex, slindex, qindex, prisep;
+  DWORD vfindex, slindex, qindex, prisep;
   long nsec;
 
   forwin = GetForegroundWindow ();
@@ -271,14 +271,14 @@ sched_rr_get_interval (pid_t pid, struct timespec *interval)
   else
     forprocid = 0;
 
-  reg_key reg (HKEY_LOCAL_MACHINE, KEY_READ, "SYSTEM", "CurrentControlSet",
-	       "Control", "PriorityControl", NULL);
+  reg_key reg (HKEY_LOCAL_MACHINE, KEY_READ, L"SYSTEM", L"CurrentControlSet",
+	       L"Control", L"PriorityControl", NULL);
   if (reg.error ())
     {
       set_errno (ESRCH);
       return -1;
     }
-  prisep = reg.get_int ("Win32PrioritySeparation", 2);
+  prisep = reg.get_dword (L"Win32PrioritySeparation", 2);
   pinfo pi (pid ? pid : myself->pid);
   if (!pi)
     {
@@ -483,7 +483,7 @@ sched_setscheduler (pid_t pid, int policy,
 int
 sched_yield ()
 {
-  low_priority_sleep (0);
+  SwitchToThread ();
   return 0;
 }
 }

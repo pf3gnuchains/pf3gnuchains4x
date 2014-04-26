@@ -40,6 +40,19 @@ struct foo struct1, struct2, *ptr1, *ptr2;
 int doread = 0;
 
 char *global_ptr;
+char **global_ptr_ptr;
+
+struct foo2
+{
+  int val[2];
+};
+struct foo2 foo2;
+
+struct foo4
+{
+  int val[4];
+};
+struct foo4 foo4;
 
 void marker1 ()
 {
@@ -67,7 +80,7 @@ void recurser (int  x)
 void recurser (x) int  x;
 #endif
 {
-  int  local_x;
+  int  local_x = 0;
 
   if (x > 0)
     recurser (x-1);
@@ -119,14 +132,41 @@ func4 ()
   buf[0] = 3;
   global_ptr = buf;
   buf[0] = 7;
+  buf[1] = 5;
+  global_ptr_ptr = &global_ptr;
+  buf[0] = 9;
+  global_ptr++;
+}
+
+void
+func5 ()
+{
+  int val = 0, val2 = 23;
+  int *x = &val;
+
+  /* func5 breakpoint here */
+  x = &val2;
+  val = 27;
+}
+
+void
+func6 (void)
+{
+  /* func6 breakpoint here */
+  foo2.val[1] = 0;
+  foo2.val[1] = 11;
+}
+
+void
+func7 (void)
+{
+  /* func7 breakpoint here */
+  foo4.val[3] = 0;
+  foo4.val[3] = 33;
 }
 
 int main ()
 {
-#ifdef usestubs
-  set_debug_traps();
-  breakpoint();
-#endif
   struct1.val = 1;
   struct2.val = 2;
   ptr1 = &struct1;
@@ -192,11 +232,23 @@ int main ()
   marker6 ();
   recurser (2);
 
+  /* This invocation is used for watches of a local variable with explicitly
+     specified scope when recursion happens.
+     */
+  marker6 ();
+  recurser (2);
+
   marker6 ();
 
   func3 ();
 
   func4 ();
+
+  func5 ();
+
+  func6 ();
+
+  func7 ();
 
   return 0;
 }

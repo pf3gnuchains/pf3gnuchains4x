@@ -1,7 +1,7 @@
 /* globals.cc - Define global variables here.
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
+   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -22,37 +22,38 @@ HANDLE NO_COPY hMainThread;
 HANDLE NO_COPY hProcToken;
 HANDLE NO_COPY hProcImpToken;
 HMODULE NO_COPY cygwin_hmodule;
-HANDLE hExeced;
 int NO_COPY sigExeced;
+WCHAR windows_system_directory[MAX_PATH];
+UINT windows_system_directory_length;
+WCHAR system_wow64_directory[MAX_PATH];
+UINT system_wow64_directory_length;
 
 /* program exit the program */
 
 enum exit_states
   {
     ES_NOT_EXITING = 0,
+    ES_EXIT_STARTING,
     ES_PROCESS_LOCKED,
     ES_EVENTS_TERMINATE,
-    ES_THREADTERM,
     ES_SIGNAL,
     ES_CLOSEALL,
+    ES_THREADTERM,
     ES_HUP_PGRP,
     ES_HUP_SID,
     ES_EXEC_EXIT,
-    ES_TITLE,
     ES_TTY_TERMINATE,
     ES_FINAL
   };
 
 exit_states NO_COPY exit_state;
 
-SYSTEM_INFO system_info;
-
 /* Set in init.cc.  Used to check if Cygwin DLL is dynamically loaded. */
 int NO_COPY dynamically_loaded;
 
-bool display_title;
-bool strip_title_path;
+/* Some CYGWIN environment variable variables. */
 bool allow_glob = true;
+
 bool NO_COPY in_forkee;
 
 int __argc_safe;
@@ -70,11 +71,6 @@ bool NO_COPY _cygwin_testing;
 
 char NO_COPY almost_null[1];
 
-char *old_title;
-
-/* Define globally used, but readonly variables using the _RDATA attribute. */
-#define _RDATA __attribute__ ((section(".rdata")))
-
 /* Heavily-used const UNICODE_STRINGs are defined here once.  The idea is a
    speed improvement by not having to initialize a UNICODE_STRING every time
    we make a string comparison.  The strings are not defined as const,
@@ -83,9 +79,9 @@ char *old_title;
    Rather, the strings are placed in the R/O section .rdata, so we get
    a SEGV if some code erroneously tries to overwrite these strings. */
 #define _ROU(_s) \
-        { Length: sizeof (_s) - sizeof (WCHAR), \
-          MaximumLength: sizeof (_s), \
-          Buffer: (PWSTR) (_s) }
+	{ Length: sizeof (_s) - sizeof (WCHAR), \
+	  MaximumLength: sizeof (_s), \
+	  Buffer: (PWSTR) (_s) }
 UNICODE_STRING _RDATA ro_u_empty = _ROU (L"");
 UNICODE_STRING _RDATA ro_u_lnk = _ROU (L".lnk");
 UNICODE_STRING _RDATA ro_u_exe = _ROU (L".exe");
@@ -94,7 +90,7 @@ UNICODE_STRING _RDATA ro_u_com = _ROU (L".com");
 UNICODE_STRING _RDATA ro_u_scr = _ROU (L".scr");
 UNICODE_STRING _RDATA ro_u_sys = _ROU (L".sys");
 UNICODE_STRING _RDATA ro_u_proc = _ROU (L"proc");
-UNICODE_STRING _RDATA ro_u_pmem = _ROU (L"\\device\\physicalmemory");
+UNICODE_STRING _RDATA ro_u_pmem = _ROU (L"\\Device\\PhysicalMemory");
 UNICODE_STRING _RDATA ro_u_natp = _ROU (L"\\??\\");
 UNICODE_STRING _RDATA ro_u_uncp = _ROU (L"\\??\\UNC\\");
 UNICODE_STRING _RDATA ro_u_mtx = _ROU (L"mtx");
@@ -107,7 +103,10 @@ UNICODE_STRING _RDATA ro_u_sunwnfs = _ROU (L"SUNWNFS");
 UNICODE_STRING _RDATA ro_u_udf = _ROU (L"UDF");
 UNICODE_STRING _RDATA ro_u_unixfs = _ROU (L"UNIXFS");
 UNICODE_STRING _RDATA ro_u_nwfs = _ROU (L"NWFS");
+UNICODE_STRING _RDATA ro_u_ncfsd = _ROU (L"NcFsd");
 UNICODE_STRING _RDATA ro_u_volume = _ROU (L"\\??\\Volume{");
+UNICODE_STRING _RDATA ro_u_pipedir = _ROU (L"\\\\?\\PIPE\\");
+UNICODE_STRING _RDATA ro_u_globalroot = _ROU (L"\\\\.\\GLOBALROOT");
 #undef _ROU
 
 /* Cygwin properties are meant to be readonly data placed in the DLL, but
@@ -122,8 +121,6 @@ cygwin_props_t _RDATA cygwin_props =
   0
 };
 
-#undef _RDATA
-
 extern "C"
 {
   /* This is an exported copy of environ which can be used by DLLs
@@ -132,6 +129,8 @@ extern "C"
   char ***main_environ = &__cygwin_environ;
   /* __progname used in getopt error message */
   char *__progname;
+  char *program_invocation_name;
+  char *program_invocation_short_name;
   static MTinterface _mtinterf;
   struct per_process __cygwin_user_data =
   {/* initial_sp */ 0, /* magic_biscuit */ 0,
@@ -146,12 +145,15 @@ extern "C"
    /* calloc */ calloc,
    /* premain */ {NULL, NULL, NULL, NULL},
    /* run_ctors_p */ 0,
-   /* unused */ {0, 0, 0, 0, 0, 0, 0},
+   /* unused */ {},
    /* cxx_malloc */ &default_cygwin_cxx_malloc,
    /* hmodule */ NULL,
-   /* api_major */ CYGWIN_VERSION_API_MAJOR,
-   /* api_minor */ CYGWIN_VERSION_API_MINOR,
-   /* unused2 */ {0, 0, 0, 0, 0, 0},
+   /* api_major */ 0,
+   /* api_minor */ 0,
+   /* unused2 */ {},
+   /* pseudo_reloc_start */ NULL,
+   /* pseudo_reloc_end */ NULL,
+   /* image_base */ NULL,
    /* threadinterface */ &_mtinterf,
    /* impure_ptr */ _GLOBAL_REENT,
   };

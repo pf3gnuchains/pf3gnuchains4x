@@ -1,7 +1,7 @@
 /* external.cc: Interface to Cygwin internals from external programs.
 
    Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009 Red Hat, Inc.
+   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
    Written by Christopher Faylor <cgf@cygnus.com>
 
@@ -76,7 +76,7 @@ fillout_pinfo (pid_t pid, int winpid)
 	}
       else if (nextpid || p->pid == pid || (winpid && thispid == (DWORD) pid))
 	{
-	  ep.ctty = p->ctty;
+	  ep.ctty = (p->ctty < 0 || iscons_dev (p->ctty)) ? p->ctty : device::minor (p->ctty);
 	  ep.pid = p->pid;
 	  ep.ppid = p->ppid;
 	  ep.dwProcessId = p->dwProcessId;
@@ -89,7 +89,7 @@ fillout_pinfo (pid_t pid, int winpid)
 	  ep.rusage_self = p->rusage_self;
 	  ep.rusage_children = p->rusage_children;
 	  ep.progname[0] = '\0';
-	  strncat (ep.progname, p->progname, MAX_PATH - 1);
+	  sys_wcstombs(ep.progname, MAX_PATH, p->progname);
 	  ep.strace_mask = 0;
 	  ep.version = EXTERNAL_PINFO_VERSION;
 
@@ -99,7 +99,7 @@ fillout_pinfo (pid_t pid, int winpid)
 	  ep.gid32 = p->gid;
 
 	  ep.progname_long = ep_progname_long_buf;
-	  strcpy (ep.progname_long, p->progname);
+	  mount_table->conv_to_posix_path (p->progname, ep.progname_long, 0);
 	  break;
 	}
     }
@@ -132,12 +132,12 @@ check_ntsec (const char *filename)
 }
 
 /* Copy cygwin environment variables to the Windows environment. */
-static void
-sync_winenv ()
+static PWCHAR
+create_winenv (const char * const *env)
 {
   int unused_envc;
   PWCHAR envblock = NULL;
-  char **envp = build_env (cur_environ (), envblock, unused_envc, false);
+  char **envp = build_env (env ?: cur_environ (), envblock, unused_envc, false);
   PWCHAR p = envblock;
 
   if (envp)
@@ -146,8 +146,12 @@ sync_winenv ()
 	cfree (*e);
       cfree (envp);
     }
+  /* If we got an env block, just return pointer to win env. */
+  if (env)
+    return envblock;
+  /* Otherwise sync win env of current process with its posix env. */
   if (!p)
-    return;
+    return NULL;
   while (*p)
     {
       PWCHAR eq = wcschr (p, L'=');
@@ -160,6 +164,7 @@ sync_winenv ()
       p = wcschr (p, L'\0') + 1;
     }
   free (envblock);
+  return NULL;
 }
 
 /*
@@ -197,7 +202,7 @@ extern "C" unsigned long
 cygwin_internal (cygwin_getinfo_types t, ...)
 {
   va_list arg;
-  unsigned long res = -1;
+  uintptr_t res = (uintptr_t) -1;
   va_start (arg, t);
 
   switch (t)
@@ -366,7 +371,7 @@ cygwin_internal (cygwin_getinfo_types t, ...)
 	break;
       case CW_GET_SHMLBA:
 	{
-	  res = getpagesize ();
+	  res = wincap.allocation_granularity ();
 	}
 	break;
       case CW_GET_UID_FROM_SID:
@@ -419,7 +424,7 @@ cygwin_internal (cygwin_getinfo_types t, ...)
 	try_to_debug ();
 	break;
       case CW_SYNC_WINENV:
-	sync_winenv ();
+	create_winenv (NULL);
 	res = 0;
 	break;
       case CW_CYGTLS_PADSIZE:
@@ -435,7 +440,8 @@ cygwin_internal (cygwin_getinfo_types t, ...)
       case CW_SET_PRIV_KEY:
 	{
 	  const char *passwd = va_arg (arg, const char *);
-	  res = setlsapwd (passwd);
+	  const char *username = va_arg (arg, const char *);
+	  res = setlsapwd (passwd, username);
 	}
 	break;
       case CW_SETERRNO:
@@ -465,6 +471,84 @@ cygwin_internal (cygwin_getinfo_types t, ...)
 	  extern WCHAR installation_key_buf[18];
 	  PWCHAR dest = va_arg (arg, PWCHAR);
 	  wcscpy (dest, installation_key_buf);
+	  res = 0;
+	}
+	break;
+      case CW_INT_SETLOCALE:
+	{
+	  extern void internal_setlocale ();
+	  internal_setlocale ();
+	  res = 0;
+	}
+	break;
+      case CW_CVT_MNT_OPTS:
+	{
+	  extern bool fstab_read_flags (char **, unsigned &, bool);
+	  char **option_string = va_arg (arg, char **);
+	  if (!option_string || !*option_string)
+	    set_errno (EINVAL);
+	  else
+	    {
+	      unsigned *pflags = va_arg (arg, unsigned *);
+	      unsigned flags = pflags ? *pflags : 0;
+	      if (fstab_read_flags (option_string, flags, true))
+		{
+		  if (pflags)
+		    *pflags = flags;
+		  res = 0;
+		}
+	    }
+	}
+	break;
+      case CW_LST_MNT_OPTS:
+	{
+	  extern char *fstab_list_flags ();
+	  char **option_string = va_arg (arg, char **);
+	  if (!option_string)
+	    set_errno (EINVAL);
+	  else
+	    {
+	      *option_string = fstab_list_flags ();
+	      if (*option_string)
+		res = 0;
+	    }
+	}
+	break;
+      case CW_STRERROR:
+	{
+	  int err = va_arg (arg, int);
+	  res = (uintptr_t) strerror (err);
+	}
+	break;
+
+      case CW_CVT_ENV_TO_WINENV:
+	{
+	  char **posix_env = va_arg (arg, char **);
+	  res = (uintptr_t) create_winenv (posix_env);
+	}
+	break;
+
+      case CW_ALLOC_DRIVE_MAP:
+      	{
+	  dos_drive_mappings *ddm = new dos_drive_mappings ();
+	  res = (uintptr_t) ddm;
+	}
+	break;
+
+      case CW_MAP_DRIVE_MAP:
+	{
+	  dos_drive_mappings *ddm = va_arg (arg, dos_drive_mappings *);
+	  wchar_t *pathbuf = va_arg (arg, wchar_t *);
+	  if (ddm && pathbuf)
+	    res = (uintptr_t) ddm->fixup_if_match (pathbuf);
+	}
+	break;
+
+      case CW_FREE_DRIVE_MAP:
+	{
+	  dos_drive_mappings *ddm = va_arg (arg, dos_drive_mappings *);
+	  if (ddm)
+	    delete ddm;
 	  res = 0;
 	}
 	break;

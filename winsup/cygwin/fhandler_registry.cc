@@ -1,7 +1,7 @@
 /* fhandler_registry.cc: fhandler for /proc/registry virtual filesystem
 
    Copyright 2002, 2003, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
-   2010 Red Hat, Inc.
+   2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -19,6 +19,7 @@ details. */
 #include "fhandler.h"
 #include "dtable.h"
 #include "cygheap.h"
+#include "child_info.h"
 
 #define _COMPILING_NEWLIB
 #include <dirent.h>
@@ -230,6 +231,37 @@ key_exists (HKEY parent, const wchar_t *name, DWORD wow64)
   return (error == ERROR_SUCCESS || error == ERROR_ACCESS_DENIED);
 }
 
+static size_t
+multi_wcstombs (char *dst, size_t len, const wchar_t *src, size_t nwc)
+{
+  size_t siz, sum = 0;
+  const wchar_t *nsrc;
+
+  while (nwc)
+    {
+      siz = sys_wcstombs (dst, len, src, nwc);
+      sum += siz;
+      if (dst)
+	{
+	  dst += siz;
+	  len -= siz;
+	}
+      nsrc = wcschr (src, L'\0') + 1;
+      if ((size_t) (nsrc - src) >= nwc)
+	break;
+      nwc -= nsrc - src;
+      src = nsrc;
+      if (*src == L'\0')
+	{
+	  if (dst)
+	    *dst++ = '\0';
+	  ++sum;
+	  break;
+	}
+    }
+  return sum;
+}
+
 /* Returns 0 if path doesn't exist, >0 if path is a directory,
  * <0 if path is a file.
  *
@@ -237,10 +269,11 @@ key_exists (HKEY parent, const wchar_t *name, DWORD wow64)
  * final component is there. This gets round the problem of not having security access
  * to the final key in the path.
  */
-int
+virtual_ftype_t
 fhandler_registry::exists ()
 {
-  int file_type = 0, index = 0, pathlen;
+  virtual_ftype_t file_type = virt_none;
+  int index = 0, pathlen;
   DWORD buf_size = NAME_MAX + 1;
   LONG error;
   wchar_t buf[buf_size];
@@ -254,7 +287,7 @@ fhandler_registry::exists ()
     path++;
   else
     {
-      file_type = 2;
+      file_type = virt_rootdir;
       goto out;
     }
   pathlen = strlen (path);
@@ -271,7 +304,7 @@ fhandler_registry::exists ()
 	if (path_prefix_p (registry_listing[i], path,
 			   strlen (registry_listing[i]), true))
 	  {
-	    file_type = 1;
+	    file_type = virt_directory;
 	    break;
 	  }
     }
@@ -285,29 +318,32 @@ fhandler_registry::exists ()
 
       if (!val_only)
 	hKey = open_key (path, KEY_READ, wow64, false);
-      if (hKey != (HKEY) INVALID_HANDLE_VALUE || get_errno () == EACCES)
-	file_type = 1;
+      if (hKey != (HKEY) INVALID_HANDLE_VALUE)
+	file_type = virt_directory;
       else
 	{
+	  /* Key does not exist or open failed with EACCES,
+	     enumerate subkey and value names of parent key.  */
 	  hKey = open_key (path, KEY_READ, wow64, true);
 	  if (hKey == (HKEY) INVALID_HANDLE_VALUE)
-	    return 0;
+	    return virt_none;
 
 	  if (hKey == HKEY_PERFORMANCE_DATA)
 	    {
 	      /* RegEnumValue () returns garbage for this key.
-	         RegQueryValueEx () returns a PERF_DATA_BLOCK even
-	         if a value does not contain any counter objects.
-	         So allow access to the generic names and to
-	         (blank separated) lists of counter numbers.
-	         Never allow access to "Add", see above comment.  */
-	      for (int i = 0; i < PERF_DATA_FILE_COUNT && file_type == 0; i++)
+		 RegQueryValueEx () returns a PERF_DATA_BLOCK even
+		 if a value does not contain any counter objects.
+		 So allow access to the generic names and to
+		 (blank separated) lists of counter numbers.
+		 Never allow access to "Add", see above comment.  */
+	      for (int i = 0; i < PERF_DATA_FILE_COUNT
+			      && file_type == virt_none; i++)
 		{
 		  if (strcasematch (perf_data_files[i], file))
-		    file_type = -1;
+		    file_type = virt_file;
 		}
-	      if (file_type == 0 && !file[strspn (file, " 0123456789")])
-		file_type = -1;
+	      if (file_type == virt_none && !file[strspn (file, " 0123456789")])
+		file_type = virt_file;
 	      goto out;
 	    }
 
@@ -320,7 +356,7 @@ fhandler_registry::exists ()
 		{
 		  if (!wcscasecmp (buf, dec_file))
 		    {
-		      file_type = 1;
+		      file_type = virt_directory;
 		      goto out;
 		    }
 		    buf_size = NAME_MAX + 1;
@@ -341,7 +377,7 @@ fhandler_registry::exists ()
 	    {
 	      if (!wcscasecmp (buf, dec_file))
 		{
-		  file_type = -1;
+		  file_type = virt_file;
 		  goto out;
 		}
 	      buf_size = NAME_MAX + 1;
@@ -387,32 +423,32 @@ fhandler_registry::fstat (struct __stat64 *buf)
 {
   fhandler_base::fstat (buf);
   buf->st_mode &= ~_IFMT & NO_W;
-  int file_type = exists ();
+  virtual_ftype_t file_type = exists ();
   switch (file_type)
     {
-    case 0:
+    case virt_none:
       set_errno (ENOENT);
       return -1;
-    case 1:
+    case virt_directory:
       buf->st_mode |= S_IFDIR | S_IXUSR | S_IXGRP | S_IXOTH;
       break;
-    case 2:
+    case virt_rootdir:
       buf->st_mode |= S_IFDIR | S_IXUSR | S_IXGRP | S_IXOTH;
       buf->st_nlink = ROOT_KEY_COUNT;
       break;
     default:
-    case -1:
+    case virt_file:
       buf->st_mode |= S_IFREG;
       buf->st_mode &= NO_X;
       break;
     }
-  if (file_type != 0 && file_type != 2)
+  if (file_type != virt_none && file_type != virt_rootdir)
     {
       HKEY hKey;
       const char *path = get_name () + proc_len + prefix_len + 2;
       hKey =
 	open_key (path, STANDARD_RIGHTS_READ | KEY_QUERY_VALUE, wow64,
-		  (file_type < 0) ? true : false);
+		  (file_type < virt_none) ? true : false);
 
       if (hKey == HKEY_PERFORMANCE_DATA)
 	/* RegQueryInfoKey () always returns write time 0,
@@ -423,14 +459,13 @@ fhandler_registry::fstat (struct __stat64 *buf)
 	  FILETIME ftLastWriteTime;
 	  DWORD subkey_count;
 	  if (ERROR_SUCCESS ==
-	      RegQueryInfoKey (hKey, NULL, NULL, NULL, &subkey_count, NULL,
-			       NULL, NULL, NULL, NULL, NULL,
-			       &ftLastWriteTime))
+	      RegQueryInfoKeyW (hKey, NULL, NULL, NULL, &subkey_count, NULL,
+				NULL, NULL, NULL, NULL, NULL, &ftLastWriteTime))
 	    {
 	      to_timestruc_t (&ftLastWriteTime, &buf->st_mtim);
 	      buf->st_ctim = buf->st_birthtim = buf->st_mtim;
 	      time_as_timestruc_t (&buf->st_atim);
-	      if (file_type > 0)
+	      if (file_type > virt_none)
 		buf->st_nlink = subkey_count + 2;
 	      else
 		{
@@ -456,11 +491,16 @@ fhandler_registry::fstat (struct __stat64 *buf)
 					       NULL, NULL, tmpbuf, &dwSize)
 			     != ERROR_SUCCESS)
 			buf->st_size = dwSize / sizeof (wchar_t);
+		      else if (type == REG_MULTI_SZ)
+			buf->st_size = multi_wcstombs (NULL, 0,
+						     (wchar_t *) tmpbuf,
+						     dwSize / sizeof (wchar_t));
 		      else
 			buf->st_size = sys_wcstombs (NULL, 0,
 						     (wchar_t *) tmpbuf,
 						     dwSize / sizeof (wchar_t));
-		      free (tmpbuf);
+		      if (tmpbuf)
+			free (tmpbuf);
 		    }
 		  else
 		    buf->st_size = dwSize;
@@ -472,7 +512,7 @@ fhandler_registry::fstat (struct __stat64 *buf)
 		  buf->st_uid = uid;
 		  buf->st_gid = gid;
 		  buf->st_mode &= ~(S_IWUSR | S_IWGRP | S_IWOTH);
-		  if (file_type > 0)
+		  if (file_type > virt_none)
 		    buf->st_mode |= S_IFDIR;
 		  else
 		    buf->st_mode &= NO_X;
@@ -495,6 +535,14 @@ fhandler_registry::fstat (struct __stat64 *buf)
 	}
     }
   return 0;
+}
+
+DIR *
+fhandler_registry::opendir (int fd)
+{
+  /* Skip fhandler_proc::opendir, which allocates dir->_d_handle for its
+     own devilish purposes... */
+  return fhandler_virtual::opendir (fd);
 }
 
 int
@@ -535,7 +583,7 @@ fhandler_registry::readdir (DIR *dir, dirent *de)
   if ((HKEY) dir->__handle == HKEY_PERFORMANCE_DATA)
     {
       /* RegEnumValue () returns garbage for this key,
-         simulate only a minimal listing of the generic names.  */
+	 simulate only a minimal listing of the generic names.  */
       if (dir->__d_position >= SPECIAL_DOT_FILE_COUNT + PERF_DATA_FILE_COUNT)
 	goto out;
       strcpy (de->d_name, perf_data_files[dir->__d_position - SPECIAL_DOT_FILE_COUNT]);
@@ -603,25 +651,25 @@ retry:
 
   res = 0;
 out:
-  syscall_printf ("%d = readdir (%p, %p)", res, dir, de);
+  syscall_printf ("%d = readdir(%p, %p)", res, dir, de);
   return res;
 }
 
-_off64_t
+long
 fhandler_registry::telldir (DIR * dir)
 {
   return dir->__d_position & REG_POSITION_MASK;
 }
 
 void
-fhandler_registry::seekdir (DIR * dir, _off64_t loc)
+fhandler_registry::seekdir (DIR * dir, long loc)
 {
   /* Unfortunately cannot simply set __d_position due to transition from sub-keys to
    * values.
    */
   rewinddir (dir);
   while (loc > (dir->__d_position & REG_POSITION_MASK))
-    if (!readdir (dir, dir->__d_dirent))
+    if (readdir (dir, dir->__d_dirent))
       break;
 }
 
@@ -650,7 +698,7 @@ fhandler_registry::closedir (DIR * dir)
 	  res = -1;
 	}
     }
-  syscall_printf ("%d = closedir (%p)", res, dir);
+  syscall_printf ("%d = closedir(%p)", res, dir);
   return 0;
 }
 
@@ -760,7 +808,7 @@ fhandler_registry::open (int flags, mode_t mode)
 	handle = open_key (path, KEY_READ, wow64, false);
       if (handle == (HKEY) INVALID_HANDLE_VALUE)
 	{
-	  if (get_errno () != EACCES)
+	  if (val_only || get_errno () != EACCES)
 	    handle = open_key (path, KEY_READ, wow64, true);
 	  if (handle == (HKEY) INVALID_HANDLE_VALUE)
 	    {
@@ -793,7 +841,7 @@ success:
   set_flags ((flags & ~O_TEXT) | O_BINARY);
   set_open_status ();
 out:
-  syscall_printf ("%d = fhandler_registry::open (%p, %d)", res, flags, mode);
+  syscall_printf ("%d = fhandler_registry::open(%p, %d)", res, flags, mode);
   return res;
 }
 
@@ -812,7 +860,7 @@ fhandler_registry::close ()
 	  res = -1;
 	}
     }
-  if (!hExeced && value_name)
+  if (!have_execed && value_name)
     {
       cfree (value_name);
       value_name = NULL;
@@ -848,17 +896,21 @@ fhandler_registry::fill_filebuf ()
 	  seterrno_from_win_error (__FILE__, __LINE__, error);
 	  return true;
 	}
-      if (type == REG_SZ || type == REG_EXPAND_SZ || type == REG_MULTI_SZ
-	  || type == REG_LINK)
+      if (type == REG_SZ || type == REG_EXPAND_SZ || type == REG_LINK)
 	bufalloc = sys_wcstombs (NULL, 0, (wchar_t *) tmpbuf,
 				 size / sizeof (wchar_t));
+      else if (type == REG_MULTI_SZ)
+	bufalloc = multi_wcstombs (NULL, 0, (wchar_t *) tmpbuf,
+				   size / sizeof (wchar_t));
       else
 	bufalloc = size;
       filebuf = (char *) cmalloc_abort (HEAP_BUF, bufalloc);
-      if (type == REG_SZ || type == REG_EXPAND_SZ || type == REG_MULTI_SZ
-	  || type == REG_LINK)
+      if (type == REG_SZ || type == REG_EXPAND_SZ || type == REG_LINK)
 	sys_wcstombs (filebuf, bufalloc, (wchar_t *) tmpbuf,
 		      size / sizeof (wchar_t));
+      else if (type == REG_MULTI_SZ)
+	multi_wcstombs (filebuf, bufalloc, (wchar_t *) tmpbuf,
+			size / sizeof (wchar_t));
       else
 	memcpy (filebuf, tmpbuf, bufalloc);
       filesize = bufalloc;
@@ -983,14 +1035,19 @@ open_key (const char *name, REGSAM access, DWORD wow64, bool isValue)
 }
 
 int
-fhandler_registry::dup (fhandler_base *child)
+fhandler_registry::dup (fhandler_base *child, int flags)
 {
-  int ret = fhandler_virtual::dup (child);
+  debug_printf ("here");
+  fhandler_registry *fhs = (fhandler_registry *) child;
+
+  int ret = fhandler_virtual::dup (fhs, flags);
   /* Pseudo registry handles can't be duplicated using DuplicateHandle.
      Therefore those fhandlers are marked with the nohandle flag.  This
      allows fhandler_base::dup to succeed as usual for nohandle fhandlers.
      Here we just have to fix up by copying the pseudo handle value. */
   if ((HKEY) get_handle () >= HKEY_CLASSES_ROOT)
-    child->set_io_handle (get_handle ());
+    fhs->set_io_handle (get_handle ());
+  if (value_name)
+    fhs->value_name = cwcsdup (value_name);
   return ret;
 }

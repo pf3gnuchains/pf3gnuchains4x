@@ -1,8 +1,7 @@
 /* Parse expressions for GDB.
 
-   Copyright (C) 1986, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997,
-   1998, 1999, 2000, 2001, 2004, 2005, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 1986, 1989-2001, 2004-2005, 2007-2012 Free Software
+   Foundation, Inc.
 
    Modified from expread.y by the Department of Computer Science at the
    State University of New York at Buffalo, 1991.
@@ -23,7 +22,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 /* Parse an expression from text in a string,
-   and return the result as a  struct expression  pointer.
+   and return the result as a struct expression pointer.
    That structure contains arithmetic operations in reverse polish,
    with constants represented by operations that are followed by special data.
    See expression.h for the details of the format.
@@ -62,6 +61,7 @@ const struct exp_descriptor exp_descriptor_standard =
   {
     print_subexp_standard,
     operator_length_standard,
+    operator_check_standard,
     op_name_standard,
     dump_subexp_body_standard,
     evaluate_subexp_standard
@@ -90,16 +90,6 @@ int in_parse_field;
    '->'.  This is set when parsing and is only used when completing a
    field name.  It is -1 if no dereference operation was found.  */
 static int expout_last_struct = -1;
-
-/* A temporary buffer for identifiers, so we can null-terminate them.
-
-   We allocate this with xrealloc.  parse_exp_1 used to allocate with
-   alloca, using the size of the whole expression as a conservative
-   estimate of the space needed.  However, macro expansion can
-   introduce names longer than the original expression; there's no
-   practical way to know beforehand how large that might be.  */
-char *namecopy;
-size_t namecopy_size;
 
 static int expressiondebug = 0;
 static void
@@ -108,6 +98,18 @@ show_expressiondebug (struct ui_file *file, int from_tty,
 {
   fprintf_filtered (file, _("Expression debugging is %s.\n"), value);
 }
+
+
+/* Non-zero if an expression parser should set yydebug.  */
+int parser_debug;
+
+static void
+show_parserdebug (struct ui_file *file, int from_tty,
+		  struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("Parser debugging is %s.\n"), value);
+}
+
 
 static void free_funcalls (void *ignore);
 
@@ -155,6 +157,7 @@ end_arglist (void)
 {
   int val = arglist_len;
   struct funcall *call = funcall_chain;
+
   funcall_chain = call->next;
   arglist_len = call->arglist_len;
   xfree (call);
@@ -176,16 +179,51 @@ free_funcalls (void *ignore)
     }
 }
 
-/* This page contains the functions for adding data to the  struct expression
+/* This page contains the functions for adding data to the struct expression
    being constructed.  */
+
+/* Helper function to initialize the expout, expout_size, expout_ptr
+   trio before it is used to store expression elements created during
+   the parsing of an expression.  INITIAL_SIZE is the initial size of
+   the expout array.  LANG is the language used to parse the expression.
+   And GDBARCH is the gdbarch to use during parsing.  */
+
+static void
+initialize_expout (int initial_size, const struct language_defn *lang,
+		   struct gdbarch *gdbarch)
+{
+  expout_size = initial_size;
+  expout_ptr = 0;
+  expout = xmalloc (sizeof (struct expression)
+		    + EXP_ELEM_TO_BYTES (expout_size));
+  expout->language_defn = lang;
+  expout->gdbarch = gdbarch;
+}
+
+/* Helper function that frees any unsed space in the expout array.
+   It is generally used when the parser has just been parsed and
+   created.  */
+
+static void
+reallocate_expout (void)
+{
+  /* Record the actual number of expression elements, and then
+     reallocate the expression memory so that we free up any
+     excess elements.  */
+
+  expout->nelts = expout_ptr;
+  expout = xrealloc ((char *) expout,
+		     sizeof (struct expression)
+		     + EXP_ELEM_TO_BYTES (expout_ptr));
+}
 
 /* Add one element to the end of the expression.  */
 
 /* To avoid a bug in the Sun 4 compiler, we pass things that can fit into
-   a register through here */
+   a register through here.  */
 
-void
-write_exp_elt (union exp_element expelt)
+static void
+write_exp_elt (const union exp_element *expelt)
 {
   if (expout_ptr >= expout_size)
     {
@@ -194,69 +232,67 @@ write_exp_elt (union exp_element expelt)
 	xrealloc ((char *) expout, sizeof (struct expression)
 		  + EXP_ELEM_TO_BYTES (expout_size));
     }
-  expout->elts[expout_ptr++] = expelt;
+  expout->elts[expout_ptr++] = *expelt;
 }
 
 void
 write_exp_elt_opcode (enum exp_opcode expelt)
 {
   union exp_element tmp;
+
   memset (&tmp, 0, sizeof (union exp_element));
-
   tmp.opcode = expelt;
-
-  write_exp_elt (tmp);
+  write_exp_elt (&tmp);
 }
 
 void
 write_exp_elt_sym (struct symbol *expelt)
 {
   union exp_element tmp;
+
   memset (&tmp, 0, sizeof (union exp_element));
-
   tmp.symbol = expelt;
-
-  write_exp_elt (tmp);
+  write_exp_elt (&tmp);
 }
 
 void
 write_exp_elt_block (struct block *b)
 {
   union exp_element tmp;
+
   memset (&tmp, 0, sizeof (union exp_element));
   tmp.block = b;
-  write_exp_elt (tmp);
+  write_exp_elt (&tmp);
 }
 
 void
 write_exp_elt_objfile (struct objfile *objfile)
 {
   union exp_element tmp;
+
   memset (&tmp, 0, sizeof (union exp_element));
   tmp.objfile = objfile;
-  write_exp_elt (tmp);
+  write_exp_elt (&tmp);
 }
 
 void
 write_exp_elt_longcst (LONGEST expelt)
 {
   union exp_element tmp;
+
   memset (&tmp, 0, sizeof (union exp_element));
-
   tmp.longconst = expelt;
-
-  write_exp_elt (tmp);
+  write_exp_elt (&tmp);
 }
 
 void
 write_exp_elt_dblcst (DOUBLEST expelt)
 {
   union exp_element tmp;
+
   memset (&tmp, 0, sizeof (union exp_element));
-
   tmp.doubleconst = expelt;
-
-  write_exp_elt (tmp);
+  write_exp_elt (&tmp);
 }
 
 void
@@ -268,29 +304,27 @@ write_exp_elt_decfloatcst (gdb_byte expelt[16])
   for (index = 0; index < 16; index++)
     tmp.decfloatconst[index] = expelt[index];
 
-  write_exp_elt (tmp);
+  write_exp_elt (&tmp);
 }
 
 void
 write_exp_elt_type (struct type *expelt)
 {
   union exp_element tmp;
+
   memset (&tmp, 0, sizeof (union exp_element));
-
   tmp.type = expelt;
-
-  write_exp_elt (tmp);
+  write_exp_elt (&tmp);
 }
 
 void
 write_exp_elt_intern (struct internalvar *expelt)
 {
   union exp_element tmp;
+
   memset (&tmp, 0, sizeof (union exp_element));
-
   tmp.internalvar = expelt;
-
-  write_exp_elt (tmp);
+  write_exp_elt (&tmp);
 }
 
 /* Add a string constant to the end of the expression.
@@ -299,7 +333,7 @@ write_exp_elt_intern (struct internalvar *expelt)
    that contains the length of the string, then stuffing the string
    constant itself into however many expression elements are needed
    to hold it, and then writing another expression element that contains
-   the length of the string.  I.E. an expression element at each end of
+   the length of the string.  I.e. an expression element at each end of
    the string records the string length, so you can skip over the 
    expression elements containing the actual string bytes from either
    end of the string.  Note that this also allows gdb to handle
@@ -311,7 +345,7 @@ write_exp_elt_intern (struct internalvar *expelt)
    actual length is recorded in expression elements at each end of the
    string.  The null byte is taken into consideration when computing how
    many expression elements are required to hold the string constant, of
-   course. */
+   course.  */
 
 
 void
@@ -324,12 +358,12 @@ write_exp_string (struct stoken str)
   /* Compute the number of expression elements required to hold the string
      (including a null byte terminator), along with one expression element
      at each end to record the actual string length (not including the
-     null byte terminator). */
+     null byte terminator).  */
 
   lenelt = 2 + BYTES_TO_EXP_ELEM (len + 1);
 
   /* Ensure that we have enough available expression elements to store
-     everything. */
+     everything.  */
 
   if ((expout_ptr + lenelt) >= expout_size)
     {
@@ -342,7 +376,7 @@ write_exp_string (struct stoken str)
   /* Write the leading length expression element (which advances the current
      expression element index), then write the string constant followed by a
      terminating null byte, and then write the trailing length expression
-     element. */
+     element.  */
 
   write_exp_elt_longcst ((LONGEST) len);
   strdata = (char *) &expout->elts[expout_ptr];
@@ -417,10 +451,10 @@ write_exp_string_vector (int type, struct stoken_vector *vec)
    that contains the length of the bitstring (in bits), then stuffing the
    bitstring constant itself into however many expression elements are
    needed to hold it, and then writing another expression element that
-   contains the length of the bitstring.  I.E. an expression element at
+   contains the length of the bitstring.  I.e. an expression element at
    each end of the bitstring records the bitstring length, so you can skip
    over the expression elements containing the actual bitstring bytes from
-   either end of the bitstring. */
+   either end of the bitstring.  */
 
 void
 write_exp_bitstring (struct stoken str)
@@ -432,12 +466,12 @@ write_exp_bitstring (struct stoken str)
 
   /* Compute the number of expression elements required to hold the bitstring,
      along with one expression element at each end to record the actual
-     bitstring length in bits. */
+     bitstring length in bits.  */
 
   lenelt = 2 + BYTES_TO_EXP_ELEM (len);
 
   /* Ensure that we have enough available expression elements to store
-     everything. */
+     everything.  */
 
   if ((expout_ptr + lenelt) >= expout_size)
     {
@@ -449,7 +483,7 @@ write_exp_bitstring (struct stoken str)
 
   /* Write the leading length expression element (which advances the current
      expression element index), then write the bitstring constant, and then
-     write the trailing length expression element. */
+     write the trailing length expression element.  */
 
   write_exp_elt_longcst ((LONGEST) bits);
   strdata = (char *) &expout->elts[expout_ptr];
@@ -477,9 +511,22 @@ write_exp_msymbol (struct minimal_symbol *msymbol)
   pc = gdbarch_convert_from_func_ptr_addr (gdbarch, addr, &current_target);
   if (pc != addr)
     {
+      struct minimal_symbol *ifunc_msym = lookup_minimal_symbol_by_pc (pc);
+
       /* In this case, assume we have a code symbol instead of
 	 a data symbol.  */
-      type = mst_text;
+
+      if (ifunc_msym != NULL && MSYMBOL_TYPE (ifunc_msym) == mst_text_gnu_ifunc
+	  && SYMBOL_VALUE_ADDRESS (ifunc_msym) == pc)
+	{
+	  /* A function descriptor has been resolved but PC is still in the
+	     STT_GNU_IFUNC resolver body (such as because inferior does not
+	     run to be able to call it).  */
+
+	  type = mst_text_gnu_ifunc;
+	}
+      else
+	type = mst_text;
       section = NULL;
       addr = pc;
     }
@@ -511,11 +558,20 @@ write_exp_msymbol (struct minimal_symbol *msymbol)
       write_exp_elt_type (objfile_type (objfile)->nodebug_text_symbol);
       break;
 
+    case mst_text_gnu_ifunc:
+      write_exp_elt_type (objfile_type (objfile)
+					       ->nodebug_text_gnu_ifunc_symbol);
+      break;
+
     case mst_data:
     case mst_file_data:
     case mst_bss:
     case mst_file_bss:
       write_exp_elt_type (objfile_type (objfile)->nodebug_data_symbol);
+      break;
+
+    case mst_slot_got_plt:
+      write_exp_elt_type (objfile_type (objfile)->nodebug_got_plt_symbol);
       break;
 
     default:
@@ -547,16 +603,14 @@ mark_struct_expression (void)
    from the first value which has index 1.
 
    $$digits     Value history with index <digits> relative
-   to the last value.  I.E. $$0 is the last
+   to the last value.  I.e. $$0 is the last
    value, $$1 is the one previous to that, $$2
    is the one previous to $$1, etc.
 
    $ | $0 | $$0 The last value in the value history.
 
    $$           An abbreviation for the second to the last
-   value in the value history, I.E. $$1
-
- */
+   value in the value history, I.e. $$1  */
 
 void
 write_dollar_variable (struct stoken str)
@@ -566,7 +620,7 @@ write_dollar_variable (struct stoken str)
   struct internalvar *isym = NULL;
 
   /* Handle the tokens $digits; also $ (short for $0) and $$ (short for $$1)
-     and $$digits (equivalent to $<-digits> if you could type that). */
+     and $$digits (equivalent to $<-digits> if you could type that).  */
 
   int negate = 0;
   int i = 1;
@@ -579,7 +633,7 @@ write_dollar_variable (struct stoken str)
     }
   if (i == str.length)
     {
-      /* Just dollars (one or two) */
+      /* Just dollars (one or two).  */
       i = -negate;
       goto handle_last;
     }
@@ -614,7 +668,7 @@ write_dollar_variable (struct stoken str)
     }
 
   /* On some systems, such as HP-UX and hppa-linux, certain system routines 
-     have names beginning with $ or $$.  Check for those, first. */
+     have names beginning with $ or $$.  Check for those, first.  */
 
   sym = lookup_symbol (copy_name (str), (struct block *) NULL,
 		       VAR_DOMAIN, (int *) NULL);
@@ -673,7 +727,7 @@ find_template_name_end (char *p)
 	case '\"':
 	case '{':
 	case '}':
-	  /* In future, may want to allow these?? */
+	  /* In future, may want to allow these??  */
 	  return 0;
 	case '<':
 	  depth++;		/* start nested template */
@@ -715,13 +769,28 @@ find_template_name_end (char *p)
 }
 
 
+/* Return a null-terminated temporary copy of the name of a string token.
 
-/* Return a null-terminated temporary copy of the name
-   of a string token.  */
+   Tokens that refer to names do so with explicit pointer and length,
+   so they can share the storage that lexptr is parsing.
+   When it is necessary to pass a name to a function that expects
+   a null-terminated string, the substring is copied out
+   into a separate block of storage.
+
+   N.B. A single buffer is reused on each call.  */
 
 char *
 copy_name (struct stoken token)
 {
+  /* A temporary buffer for identifiers, so we can null-terminate them.
+     We allocate this with xrealloc.  parse_exp_1 used to allocate with
+     alloca, using the size of the whole expression as a conservative
+     estimate of the space needed.  However, macro expansion can
+     introduce names longer than the original expression; there's no
+     practical way to know beforehand how large that might be.  */
+  static char *namecopy;
+  static size_t namecopy_size;
+
   /* Make sure there's enough space for the token.  */
   if (namecopy_size < token.length + 1)
     {
@@ -763,7 +832,7 @@ prefixify_expression (struct expression *expr)
 int
 length_of_subexp (struct expression *expr, int endpos)
 {
-  int oplen, args, i;
+  int oplen, args;
 
   operator_length (expr, endpos, &oplen, &args);
 
@@ -781,7 +850,8 @@ length_of_subexp (struct expression *expr, int endpos)
    operator takes.  */
 
 void
-operator_length (struct expression *expr, int endpos, int *oplenp, int *argsp)
+operator_length (const struct expression *expr, int endpos, int *oplenp,
+		 int *argsp)
 {
   expr->language_defn->la_exp_desc->operator_length (expr, endpos,
 						     oplenp, argsp);
@@ -790,7 +860,7 @@ operator_length (struct expression *expr, int endpos, int *oplenp, int *argsp)
 /* Default value for operator_length in exp_descriptor vectors.  */
 
 void
-operator_length_standard (struct expression *expr, int endpos,
+operator_length_standard (const struct expression *expr, int endpos,
 			  int *oplenp, int *argsp)
 {
   int oplen = 1;
@@ -822,6 +892,7 @@ operator_length_standard (struct expression *expr, int endpos,
     case OP_BOOL:
     case OP_LAST:
     case OP_INTERNALVAR:
+    case OP_VAR_ENTRY_VALUE:
       oplen = 3;
       break;
 
@@ -841,7 +912,7 @@ operator_length_standard (struct expression *expr, int endpos,
       args = 1;
       break;
 
-    case OP_OBJC_MSGCALL:	/* Objective C message (method) call */
+    case OP_OBJC_MSGCALL:	/* Objective C message (method) call.  */
       oplen = 4;
       args = 1 + longest_to_int (expr->elts[endpos - 2].longconst);
       break;
@@ -877,6 +948,13 @@ operator_length_standard (struct expression *expr, int endpos,
       args = 1;
       break;
 
+    case OP_ADL_FUNC:
+      oplen = longest_to_int (expr->elts[endpos - 2].longconst);
+      oplen = 4 + BYTES_TO_EXP_ELEM (oplen + 1);
+      oplen++;
+      oplen++;
+      break;
+
     case OP_LABELED:
     case STRUCTOP_STRUCT:
     case STRUCTOP_PTR:
@@ -885,8 +963,9 @@ operator_length_standard (struct expression *expr, int endpos,
     case OP_REGISTER:
     case OP_M2_STRING:
     case OP_STRING:
-    case OP_OBJC_NSSTRING:	/* Objective C Foundation Class NSString constant */
-    case OP_OBJC_SELECTOR:	/* Objective C "@selector" pseudo-op */
+    case OP_OBJC_NSSTRING:	/* Objective C Foundation Class
+				   NSString constant.  */
+    case OP_OBJC_SELECTOR:	/* Objective C "@selector" pseudo-op.  */
     case OP_NAME:
       oplen = longest_to_int (expr->elts[endpos - 2].longconst);
       oplen = 4 + BYTES_TO_EXP_ELEM (oplen + 1);
@@ -924,7 +1003,6 @@ operator_length_standard (struct expression *expr, int endpos,
 
       /* C++ */
     case OP_THIS:
-    case OP_OBJC_SELF:
       oplen = 2;
       break;
 
@@ -971,7 +1049,6 @@ prefixify_subexp (struct expression *inexpr,
   int args;
   int i;
   int *arglens;
-  enum exp_opcode opcode;
   int result = -1;
 
   operator_length (inexpr, inend, &oplen, &args);
@@ -1004,6 +1081,7 @@ prefixify_subexp (struct expression *inexpr,
   for (i = 0; i < args; i++)
     {
       int r;
+
       oplen = arglens[i];
       inend += oplen;
       r = prefixify_subexp (inexpr, outexpr, inend, outbeg);
@@ -1020,10 +1098,8 @@ prefixify_subexp (struct expression *inexpr,
   return result;
 }
 
-/* This page contains the two entry points to this file.  */
-
 /* Read an expression from the string *STRINGPTR points to,
-   parse it, and return a pointer to a  struct expression  that we malloc.
+   parse it, and return a pointer to a struct expression that we malloc.
    Use block BLOCK as the lexical context for variable names;
    if BLOCK is zero, use the block of the selected stack frame.
    Meanwhile, advance *STRINGPTR to point after the expression,
@@ -1051,6 +1127,7 @@ parse_exp_in_context (char **stringptr, struct block *block, int comma,
 {
   volatile struct gdb_exception except;
   struct cleanup *old_chain;
+  const struct language_defn *lang = NULL;
   int subexp;
 
   lexptr = *stringptr;
@@ -1088,17 +1165,38 @@ parse_exp_in_context (char **stringptr, struct block *block, int comma,
 	expression_context_pc = BLOCK_START (expression_context_block);
     }
 
-  expout_size = 10;
-  expout_ptr = 0;
-  expout = (struct expression *)
-    xmalloc (sizeof (struct expression) + EXP_ELEM_TO_BYTES (expout_size));
-  expout->language_defn = current_language;
-  expout->gdbarch = get_current_arch ();
+  if (language_mode == language_mode_auto && block != NULL)
+    {
+      /* Find the language associated to the given context block.
+         Default to the current language if it can not be determined.
+
+         Note that using the language corresponding to the current frame
+         can sometimes give unexpected results.  For instance, this
+         routine is often called several times during the inferior
+         startup phase to re-parse breakpoint expressions after
+         a new shared library has been loaded.  The language associated
+         to the current frame at this moment is not relevant for
+         the breakpoint.  Using it would therefore be silly, so it seems
+         better to rely on the current language rather than relying on
+         the current frame language to parse the expression.  That's why
+         we do the following language detection only if the context block
+         has been specifically provided.  */
+      struct symbol *func = block_linkage_function (block);
+
+      if (func != NULL)
+        lang = language_def (SYMBOL_LANGUAGE (func));
+      if (lang == NULL || lang->la_language == language_unknown)
+        lang = current_language;
+    }
+  else
+    lang = current_language;
+
+  initialize_expout (10, lang, get_current_arch ());
 
   TRY_CATCH (except, RETURN_MASK_ALL)
     {
-      if (current_language->la_parser ())
-	current_language->la_error (NULL);
+      if (lang->la_parser ())
+        lang->la_error (NULL);
     }
   if (except.reason < 0)
     {
@@ -1111,17 +1209,10 @@ parse_exp_in_context (char **stringptr, struct block *block, int comma,
 
   discard_cleanups (old_chain);
 
-  /* Record the actual number of expression elements, and then
-     reallocate the expression memory so that we free up any
-     excess elements. */
-
-  expout->nelts = expout_ptr;
-  expout = (struct expression *)
-    xrealloc ((char *) expout,
-	      sizeof (struct expression) + EXP_ELEM_TO_BYTES (expout_ptr));;
+  reallocate_expout ();
 
   /* Convert expression from postfix form as generated by yacc
-     parser, to a prefix form. */
+     parser, to a prefix form.  */
 
   if (expressiondebug)
     dump_raw_expression (expout, gdb_stdlog,
@@ -1131,7 +1222,7 @@ parse_exp_in_context (char **stringptr, struct block *block, int comma,
   if (out_subexp)
     *out_subexp = subexp;
 
-  current_language->la_post_parser (&expout, void_context_p);
+  lang->la_post_parser (&expout, void_context_p);
 
   if (expressiondebug)
     dump_prefix_expression (expout, gdb_stdlog);
@@ -1147,6 +1238,7 @@ struct expression *
 parse_expression (char *string)
 {
   struct expression *exp;
+
   exp = parse_exp_1 (&string, 0, 0);
   if (*string)
     error (_("Junk after end of expression."));
@@ -1156,8 +1248,10 @@ parse_expression (char *string)
 /* Parse STRING as an expression.  If parsing ends in the middle of a
    field reference, return the type of the left-hand-side of the
    reference; furthermore, if the parsing ends in the field name,
-   return the field name in *NAME.  In all other cases, return NULL.
-   Returned non-NULL *NAME must be freed by the caller.  */
+   return the field name in *NAME.  If the parsing ends in the middle
+   of a field reference, but the reference is somehow invalid, throw
+   an exception.  In all other cases, return NULL.  Returned non-NULL
+   *NAME must be freed by the caller.  */
 
 struct type *
 parse_field_expression (char *string, char **name)
@@ -1167,7 +1261,7 @@ parse_field_expression (char *string, char **name)
   int subexp;
   volatile struct gdb_exception except;
 
-  TRY_CATCH (except, RETURN_MASK_ALL)
+  TRY_CATCH (except, RETURN_MASK_ERROR)
     {
       in_parse_field = 1;
       exp = parse_exp_in_context (&string, 0, 0, 0, &subexp);
@@ -1187,20 +1281,89 @@ parse_field_expression (char *string, char **name)
       xfree (exp);
       return NULL;
     }
+
+  /* This might throw an exception.  If so, we want to let it
+     propagate.  */
+  val = evaluate_subexpression_type (exp, subexp);
   /* (*NAME) is a part of the EXP memory block freed below.  */
   *name = xstrdup (*name);
-
-  val = evaluate_subexpression_type (exp, subexp);
   xfree (exp);
 
   return value_type (val);
 }
 
-/* A post-parser that does nothing */
+/* A post-parser that does nothing.  */
 
 void
 null_post_parser (struct expression **exp, int void_context_p)
 {
+}
+
+/* Parse floating point value P of length LEN.
+   Return 0 (false) if invalid, 1 (true) if valid.
+   The successfully parsed number is stored in D.
+   *SUFFIX points to the suffix of the number in P.
+
+   NOTE: This accepts the floating point syntax that sscanf accepts.  */
+
+int
+parse_float (const char *p, int len, DOUBLEST *d, const char **suffix)
+{
+  char *copy;
+  char *s;
+  int n, num;
+
+  copy = xmalloc (len + 1);
+  memcpy (copy, p, len);
+  copy[len] = 0;
+
+  num = sscanf (copy, "%" DOUBLEST_SCAN_FORMAT "%n", d, &n);
+  xfree (copy);
+
+  /* The sscanf man page suggests not making any assumptions on the effect
+     of %n on the result, so we don't.
+     That is why we simply test num == 0.  */
+  if (num == 0)
+    return 0;
+
+  *suffix = p + n;
+  return 1;
+}
+
+/* Parse floating point value P of length LEN, using the C syntax for floats.
+   Return 0 (false) if invalid, 1 (true) if valid.
+   The successfully parsed number is stored in *D.
+   Its type is taken from builtin_type (gdbarch) and is stored in *T.  */
+
+int
+parse_c_float (struct gdbarch *gdbarch, const char *p, int len,
+	       DOUBLEST *d, struct type **t)
+{
+  const char *suffix;
+  int suffix_len;
+  const struct builtin_type *builtin_types = builtin_type (gdbarch);
+
+  if (! parse_float (p, len, d, &suffix))
+    return 0;
+
+  suffix_len = p + len - suffix;
+
+  if (suffix_len == 0)
+    *t = builtin_types->builtin_double;
+  else if (suffix_len == 1)
+    {
+      /* Handle suffixes: 'f' for float, 'l' for long double.  */
+      if (tolower (*suffix) == 'f')
+	*t = builtin_types->builtin_float;
+      else if (tolower (*suffix) == 'l')
+	*t = builtin_types->builtin_long_double;
+      else
+	return 0;
+    }
+  else
+    return 0;
+
+  return 1;
 }
 
 /* Stuff for maintaining a stack of types.  Currently just used by C, but
@@ -1350,6 +1513,7 @@ void
 parser_fprintf (FILE *x, const char *y, ...)
 { 
   va_list args;
+
   va_start (args, y);
   if (x == stderr)
     vfprintf_unfiltered (gdb_stderr, y, args); 
@@ -1361,6 +1525,148 @@ parser_fprintf (FILE *x, const char *y, ...)
   va_end (args);
 }
 
+/* Implementation of the exp_descriptor method operator_check.  */
+
+int
+operator_check_standard (struct expression *exp, int pos,
+			 int (*objfile_func) (struct objfile *objfile,
+					      void *data),
+			 void *data)
+{
+  const union exp_element *const elts = exp->elts;
+  struct type *type = NULL;
+  struct objfile *objfile = NULL;
+
+  /* Extended operators should have been already handled by exp_descriptor
+     iterate method of its specific language.  */
+  gdb_assert (elts[pos].opcode < OP_EXTENDED0);
+
+  /* Track the callers of write_exp_elt_type for this table.  */
+
+  switch (elts[pos].opcode)
+    {
+    case BINOP_VAL:
+    case OP_COMPLEX:
+    case OP_DECFLOAT:
+    case OP_DOUBLE:
+    case OP_LONG:
+    case OP_SCOPE:
+    case OP_TYPE:
+    case UNOP_CAST:
+    case UNOP_DYNAMIC_CAST:
+    case UNOP_REINTERPRET_CAST:
+    case UNOP_MAX:
+    case UNOP_MEMVAL:
+    case UNOP_MIN:
+      type = elts[pos + 1].type;
+      break;
+
+    case TYPE_INSTANCE:
+      {
+	LONGEST arg, nargs = elts[pos + 1].longconst;
+
+	for (arg = 0; arg < nargs; arg++)
+	  {
+	    struct type *type = elts[pos + 2 + arg].type;
+	    struct objfile *objfile = TYPE_OBJFILE (type);
+
+	    if (objfile && (*objfile_func) (objfile, data))
+	      return 1;
+	  }
+      }
+      break;
+
+    case UNOP_MEMVAL_TLS:
+      objfile = elts[pos + 1].objfile;
+      type = elts[pos + 2].type;
+      break;
+
+    case OP_VAR_VALUE:
+      {
+	const struct block *const block = elts[pos + 1].block;
+	const struct symbol *const symbol = elts[pos + 2].symbol;
+
+	/* Check objfile where the variable itself is placed.
+	   SYMBOL_OBJ_SECTION (symbol) may be NULL.  */
+	if ((*objfile_func) (SYMBOL_SYMTAB (symbol)->objfile, data))
+	  return 1;
+
+	/* Check objfile where is placed the code touching the variable.  */
+	objfile = lookup_objfile_from_block (block);
+
+	type = SYMBOL_TYPE (symbol);
+      }
+      break;
+    }
+
+  /* Invoke callbacks for TYPE and OBJFILE if they were set as non-NULL.  */
+
+  if (type && TYPE_OBJFILE (type)
+      && (*objfile_func) (TYPE_OBJFILE (type), data))
+    return 1;
+  if (objfile && (*objfile_func) (objfile, data))
+    return 1;
+
+  return 0;
+}
+
+/* Call OBJFILE_FUNC for any TYPE and OBJFILE found being referenced by EXP.
+   The functions are never called with NULL OBJFILE.  Functions get passed an
+   arbitrary caller supplied DATA pointer.  If any of the functions returns
+   non-zero value then (any other) non-zero value is immediately returned to
+   the caller.  Otherwise zero is returned after iterating through whole EXP.
+   */
+
+static int
+exp_iterate (struct expression *exp,
+	     int (*objfile_func) (struct objfile *objfile, void *data),
+	     void *data)
+{
+  int endpos;
+
+  for (endpos = exp->nelts; endpos > 0; )
+    {
+      int pos, args, oplen = 0;
+
+      operator_length (exp, endpos, &oplen, &args);
+      gdb_assert (oplen > 0);
+
+      pos = endpos - oplen;
+      if (exp->language_defn->la_exp_desc->operator_check (exp, pos,
+							   objfile_func, data))
+	return 1;
+
+      endpos = pos;
+    }
+
+  return 0;
+}
+
+/* Helper for exp_uses_objfile.  */
+
+static int
+exp_uses_objfile_iter (struct objfile *exp_objfile, void *objfile_voidp)
+{
+  struct objfile *objfile = objfile_voidp;
+
+  if (exp_objfile->separate_debug_objfile_backlink)
+    exp_objfile = exp_objfile->separate_debug_objfile_backlink;
+
+  return exp_objfile == objfile;
+}
+
+/* Return 1 if EXP uses OBJFILE (and will become dangling when OBJFILE
+   is unloaded), otherwise return 0.  OBJFILE must not be a separate debug info
+   file.  */
+
+int
+exp_uses_objfile (struct expression *exp, struct objfile *objfile)
+{
+  gdb_assert (objfile->separate_debug_objfile_backlink == NULL);
+
+  return exp_iterate (exp, exp_uses_objfile_iter, objfile);
+}
+
 void
 _initialize_parse (void)
 {
@@ -1370,11 +1676,21 @@ _initialize_parse (void)
     xmalloc (type_stack_size * sizeof (*type_stack));
 
   add_setshow_zinteger_cmd ("expression", class_maintenance,
-			    &expressiondebug, _("\
-Set expression debugging."), _("\
-Show expression debugging."), _("\
-When non-zero, the internal representation of expressions will be printed."),
+			    &expressiondebug,
+			    _("Set expression debugging."),
+			    _("Show expression debugging."),
+			    _("When non-zero, the internal representation "
+			      "of expressions will be printed."),
 			    NULL,
 			    show_expressiondebug,
+			    &setdebuglist, &showdebuglist);
+  add_setshow_boolean_cmd ("parser", class_maintenance,
+			    &parser_debug,
+			   _("Set parser debugging."),
+			   _("Show parser debugging."),
+			   _("When non-zero, expression parser "
+			     "tracing will be enabled."),
+			    NULL,
+			    show_parserdebug,
 			    &setdebuglist, &showdebuglist);
 }

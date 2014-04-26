@@ -1,7 +1,6 @@
 /* This test script is part of GDB, the GNU debugger.
 
-   Copyright 1999, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright 1999, 2002-2012 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -311,6 +310,11 @@ public:
   int z;
 };
 
+bool operator== (const Member &m1, const Member &m2)
+{
+  return m1.z == m2.z;
+}
+
 class Container
 {
 public:
@@ -330,8 +334,12 @@ int main (void)
  A1 two(4,5);
  A1 three(0,0);
  Container c;
+ Member mem1, mem2;
  int val;
  
+ mem1.z = 5;
+ mem2.z = 7;
+
  marker1(); // marker1-returns-here
  cout << one; // marker1-returns-here
  cout << two;

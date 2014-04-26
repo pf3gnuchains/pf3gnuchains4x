@@ -1,7 +1,6 @@
 /* UI_FILE - a generic STDIO like output stream.
 
-   Copyright (C) 1999, 2000, 2001, 2002, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 1999-2002, 2007-2012 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -18,10 +17,11 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-/* Implement the ``struct ui_file'' object. */
+/* Implement the ``struct ui_file'' object.  */
 
 #include "defs.h"
 #include "ui-file.h"
+#include "gdb_obstack.h"
 #include "gdb_string.h"
 #include "gdb_select.h"
 
@@ -29,6 +29,7 @@
 
 static ui_file_isatty_ftype null_file_isatty;
 static ui_file_write_ftype null_file_write;
+static ui_file_write_ftype null_file_write_async_safe;
 static ui_file_fputs_ftype null_file_fputs;
 static ui_file_read_ftype null_file_read;
 static ui_file_flush_ftype null_file_flush;
@@ -41,6 +42,7 @@ struct ui_file
     int *magic;
     ui_file_flush_ftype *to_flush;
     ui_file_write_ftype *to_write;
+    ui_file_write_async_safe_ftype *to_write_async_safe;
     ui_file_fputs_ftype *to_fputs;
     ui_file_read_ftype *to_read;
     ui_file_delete_ftype *to_delete;
@@ -55,10 +57,12 @@ struct ui_file *
 ui_file_new (void)
 {
   struct ui_file *file = xmalloc (sizeof (struct ui_file));
+
   file->magic = &ui_file_magic;
   set_ui_file_data (file, NULL, null_file_delete);
   set_ui_file_flush (file, null_file_flush);
   set_ui_file_write (file, null_file_write);
+  set_ui_file_write_async_safe (file, null_file_write_async_safe);
   set_ui_file_fputs (file, null_file_fputs);
   set_ui_file_read (file, null_file_read);
   set_ui_file_isatty (file, null_file_isatty);
@@ -106,8 +110,8 @@ null_file_write (struct ui_file *file,
 		 long sizeof_buf)
 {
   if (file->to_fputs == null_file_fputs)
-    /* Both the write and fputs methods are null. Discard the
-       request. */
+    /* Both the write and fputs methods are null.  Discard the
+       request.  */
     return;
   else
     {
@@ -118,6 +122,7 @@ null_file_write (struct ui_file *file,
          is possible to clean up that code.  */
       int i;
       char b[2];
+
       b[1] = '\0';
       for (i = 0; i < sizeof_buf; i++)
 	{
@@ -141,14 +146,22 @@ static void
 null_file_fputs (const char *buf, struct ui_file *file)
 {
   if (file->to_write == null_file_write)
-    /* Both the write and fputs methods are null. Discard the
-       request. */
+    /* Both the write and fputs methods are null.  Discard the
+       request.  */
     return;
   else
     {
-      /* The write method was implemented, use that. */
+      /* The write method was implemented, use that.  */
       file->to_write (file, buf, strlen (buf));
     }
+}
+
+static void
+null_file_write_async_safe (struct ui_file *file,
+			    const char *buf,
+			    long sizeof_buf)
+{
+  return;
 }
 
 static void
@@ -200,6 +213,14 @@ ui_file_write (struct ui_file *file,
   file->to_write (file, buf, length_buf);
 }
 
+void
+ui_file_write_async_safe (struct ui_file *file,
+			  const char *buf,
+			  long length_buf)
+{
+  file->to_write_async_safe (file, buf, length_buf);
+}
+
 long
 ui_file_read (struct ui_file *file, char *buf, long length_buf)
 {
@@ -244,6 +265,13 @@ set_ui_file_write (struct ui_file *file,
 }
 
 void
+set_ui_file_write_async_safe (struct ui_file *file,
+			      ui_file_write_async_safe_ftype *write_async_safe)
+{
+  file->to_write_async_safe = write_async_safe;
+}
+
+void
 set_ui_file_read (struct ui_file *file, ui_file_read_ftype *read)
 {
   file->to_read = read;
@@ -264,7 +292,7 @@ set_ui_file_data (struct ui_file *file, void *data,
 }
 
 /* ui_file utility function for converting a ``struct ui_file'' into
-   a memory buffer''. */
+   a memory buffer.  */
 
 struct accumulated_ui_file
 {
@@ -276,6 +304,7 @@ static void
 do_ui_file_xstrdup (void *context, const char *buffer, long length)
 {
   struct accumulated_ui_file *acc = context;
+
   if (acc->buffer == NULL)
     acc->buffer = xmalloc (length + 1);
   else
@@ -289,6 +318,7 @@ char *
 ui_file_xstrdup (struct ui_file *file, long *length)
 {
   struct accumulated_ui_file acc;
+
   acc.buffer = NULL;
   acc.length = 0;
   ui_file_put (file, do_ui_file_xstrdup, &acc);
@@ -298,10 +328,28 @@ ui_file_xstrdup (struct ui_file *file, long *length)
     *length = acc.length;
   return acc.buffer;
 }
+
+static void
+do_ui_file_obsavestring (void *context, const char *buffer, long length)
+{
+  struct obstack *obstack = (struct obstack *) context;
+
+  obstack_grow (obstack, buffer, length);
+}
+
+char *
+ui_file_obsavestring (struct ui_file *file, struct obstack *obstack,
+		      long *length)
+{
+  ui_file_put (file, do_ui_file_obsavestring, obstack);
+  *length = obstack_object_size (obstack);
+  obstack_1grow (obstack, '\0');
+  return obstack_finish (obstack);
+}
 
 /* A pure memory based ``struct ui_file'' that can be used an output
-   buffer. The buffers accumulated contents are available via
-   ui_file_put(). */
+   buffer.  The buffers accumulated contents are available via
+   ui_file_put().  */
 
 struct mem_file
   {
@@ -323,6 +371,7 @@ mem_file_new (void)
 {
   struct mem_file *stream = XMALLOC (struct mem_file);
   struct ui_file *file = ui_file_new ();
+
   set_ui_file_data (file, stream, mem_file_delete);
   set_ui_file_rewind (file, mem_file_rewind);
   set_ui_file_put (file, mem_file_put);
@@ -338,6 +387,7 @@ static void
 mem_file_delete (struct ui_file *file)
 {
   struct mem_file *stream = ui_file_data (file);
+
   if (stream->magic != &mem_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("mem_file_delete: bad magic number"));
@@ -356,6 +406,7 @@ static void
 mem_file_rewind (struct ui_file *file)
 {
   struct mem_file *stream = ui_file_data (file);
+
   if (stream->magic != &mem_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("mem_file_rewind: bad magic number"));
@@ -368,6 +419,7 @@ mem_file_put (struct ui_file *file,
 	      void *dest)
 {
   struct mem_file *stream = ui_file_data (file);
+
   if (stream->magic != &mem_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("mem_file_put: bad magic number"));
@@ -381,6 +433,7 @@ mem_file_write (struct ui_file *file,
 		long length_buffer)
 {
   struct mem_file *stream = ui_file_data (file);
+
   if (stream->magic != &mem_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("mem_file_write: bad magic number"));
@@ -394,6 +447,7 @@ mem_file_write (struct ui_file *file,
   else
     {
       int new_length = stream->length_buffer + length_buffer;
+
       if (new_length >= stream->sizeof_buffer)
 	{
 	  stream->sizeof_buffer = new_length;
@@ -405,14 +459,15 @@ mem_file_write (struct ui_file *file,
 }
 
 /* ``struct ui_file'' implementation that maps directly onto
-   <stdio.h>'s FILE. */
+   <stdio.h>'s FILE.  */
 
 static ui_file_write_ftype stdio_file_write;
+static ui_file_write_async_safe_ftype stdio_file_write_async_safe;
 static ui_file_fputs_ftype stdio_file_fputs;
 static ui_file_read_ftype stdio_file_read;
 static ui_file_isatty_ftype stdio_file_isatty;
 static ui_file_delete_ftype stdio_file_delete;
-static struct ui_file *stdio_file_new (FILE * file, int close_p);
+static struct ui_file *stdio_file_new (FILE *file, int close_p);
 static ui_file_flush_ftype stdio_file_flush;
 
 static int stdio_file_magic;
@@ -421,6 +476,9 @@ struct stdio_file
   {
     int *magic;
     FILE *file;
+    /* The associated file descriptor is extracted ahead of time for
+       stdio_file_write_async_safe's benefit, in case fileno isn't async-safe.  */
+    int fd;
     int close_p;
   };
 
@@ -429,12 +487,15 @@ stdio_file_new (FILE *file, int close_p)
 {
   struct ui_file *ui_file = ui_file_new ();
   struct stdio_file *stdio = xmalloc (sizeof (struct stdio_file));
+
   stdio->magic = &stdio_file_magic;
   stdio->file = file;
+  stdio->fd = fileno (file);
   stdio->close_p = close_p;
   set_ui_file_data (ui_file, stdio, stdio_file_delete);
   set_ui_file_flush (ui_file, stdio_file_flush);
   set_ui_file_write (ui_file, stdio_file_write);
+  set_ui_file_write_async_safe (ui_file, stdio_file_write_async_safe);
   set_ui_file_fputs (ui_file, stdio_file_fputs);
   set_ui_file_read (ui_file, stdio_file_read);
   set_ui_file_isatty (ui_file, stdio_file_isatty);
@@ -445,6 +506,7 @@ static void
 stdio_file_delete (struct ui_file *file)
 {
   struct stdio_file *stdio = ui_file_data (file);
+
   if (stdio->magic != &stdio_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("stdio_file_delete: bad magic number"));
@@ -459,6 +521,7 @@ static void
 stdio_file_flush (struct ui_file *file)
 {
   struct stdio_file *stdio = ui_file_data (file);
+
   if (stdio->magic != &stdio_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("stdio_file_flush: bad magic number"));
@@ -469,6 +532,7 @@ static long
 stdio_file_read (struct ui_file *file, char *buf, long length_buf)
 {
   struct stdio_file *stdio = ui_file_data (file);
+
   if (stdio->magic != &stdio_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("stdio_file_read: bad magic number"));
@@ -477,21 +541,21 @@ stdio_file_read (struct ui_file *file, char *buf, long length_buf)
      the file.  Wait until at least one byte of data is available.
      Control-C can interrupt gdb_select, but not read.  */
   {
-    int fd = fileno (stdio->file);
     fd_set readfds;
     FD_ZERO (&readfds);
-    FD_SET (fd, &readfds);
-    if (gdb_select (fd + 1, &readfds, NULL, NULL, NULL) == -1)
+    FD_SET (stdio->fd, &readfds);
+    if (gdb_select (stdio->fd + 1, &readfds, NULL, NULL, NULL) == -1)
       return -1;
   }
 
-  return read (fileno (stdio->file), buf, length_buf);
+  return read (stdio->fd, buf, length_buf);
 }
 
 static void
 stdio_file_write (struct ui_file *file, const char *buf, long length_buf)
 {
   struct stdio_file *stdio = ui_file_data (file);
+
   if (stdio->magic != &stdio_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("stdio_file_write: bad magic number"));
@@ -501,9 +565,32 @@ stdio_file_write (struct ui_file *file, const char *buf, long length_buf)
 }
 
 static void
+stdio_file_write_async_safe (struct ui_file *file,
+			     const char *buf, long length_buf)
+{
+  struct stdio_file *stdio = ui_file_data (file);
+
+  if (stdio->magic != &stdio_file_magic)
+    {
+      /* gettext isn't necessarily async safe, so we can't use _("error message") here.
+	 We could extract the correct translation ahead of time, but this is an extremely
+	 rare event, and one of the other stdio_file_* routines will presumably catch
+	 the problem anyway.  For now keep it simple and ignore the error here.  */
+      return;
+    }
+
+  /* This is written the way it is to avoid a warning from gcc about not using the
+     result of write (since it can be declared with attribute warn_unused_result).
+     Alas casting to void doesn't work for this.  */
+  if (write (stdio->fd, buf, length_buf))
+    ;
+}
+
+static void
 stdio_file_fputs (const char *linebuffer, struct ui_file *file)
 {
   struct stdio_file *stdio = ui_file_data (file);
+
   if (stdio->magic != &stdio_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("stdio_file_fputs: bad magic number"));
@@ -516,13 +603,14 @@ static int
 stdio_file_isatty (struct ui_file *file)
 {
   struct stdio_file *stdio = ui_file_data (file);
+
   if (stdio->magic != &stdio_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("stdio_file_isatty: bad magic number"));
-  return (isatty (fileno (stdio->file)));
+  return (isatty (stdio->fd));
 }
 
-/* Like fdopen().  Create a ui_file from a previously opened FILE. */
+/* Like fdopen().  Create a ui_file from a previously opened FILE.  */
 
 struct ui_file *
 stdio_fileopen (FILE *file)
@@ -534,6 +622,7 @@ struct ui_file *
 gdb_fopen (char *name, char *mode)
 {
   FILE *f = fopen (name, mode);
+
   if (f == NULL)
     return NULL;
   return stdio_file_new (f, 1);
@@ -562,6 +651,7 @@ tee_file_new (struct ui_file *one, int close_one,
 {
   struct ui_file *ui_file = ui_file_new ();
   struct tee_file *tee = xmalloc (sizeof (struct tee_file));
+
   tee->magic = &tee_file_magic;
   tee->one = one;
   tee->two = two;
@@ -579,6 +669,7 @@ static void
 tee_file_delete (struct ui_file *file)
 {
   struct tee_file *tee = ui_file_data (file);
+
   if (tee->magic != &tee_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("tee_file_delete: bad magic number"));
@@ -594,6 +685,7 @@ static void
 tee_file_flush (struct ui_file *file)
 {
   struct tee_file *tee = ui_file_data (file);
+
   if (tee->magic != &tee_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("tee_file_flush: bad magic number"));
@@ -605,6 +697,7 @@ static void
 tee_file_write (struct ui_file *file, const char *buf, long length_buf)
 {
   struct tee_file *tee = ui_file_data (file);
+
   if (tee->magic != &tee_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("tee_file_write: bad magic number"));
@@ -616,6 +709,7 @@ static void
 tee_file_fputs (const char *linebuffer, struct ui_file *file)
 {
   struct tee_file *tee = ui_file_data (file);
+
   if (tee->magic != &tee_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("tee_file_fputs: bad magic number"));
@@ -627,8 +721,10 @@ static int
 tee_file_isatty (struct ui_file *file)
 {
   struct tee_file *tee = ui_file_data (file);
+
   if (tee->magic != &tee_file_magic)
     internal_error (__FILE__, __LINE__,
 		    _("tee_file_isatty: bad magic number"));
-  return (0);
+
+  return ui_file_isatty (tee->one);
 }

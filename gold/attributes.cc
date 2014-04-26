@@ -276,9 +276,9 @@ Attributes_section_data::Attributes_section_data(
     this->vendor_object_attributes_[vendor] =
       new Vendor_object_attributes(vendor);
 
-  const unsigned char *p = view;
+  const unsigned char* p = view;
   p = view;
-  if (*(p++) == 'A')
+  if (size > 0 && p != NULL && *(p++) == 'A')
     {
       size--;
       while (size > 0)
@@ -296,7 +296,7 @@ Attributes_section_data::Attributes_section_data(
 	  section_size -= section_name_size + 4;
 
 	  int vendor;
-	  const char *std_section = parameters->target().attributes_vendor();
+	  const char* std_section = parameters->target().attributes_vendor();
 	  if (std_section != NULL && strcmp(section_name, std_section) == 0)
 	    vendor = Object_attribute::OBJ_ATTR_PROC;
 	  else if (strcmp(section_name, "gnu") == 0)

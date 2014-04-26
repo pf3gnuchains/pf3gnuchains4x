@@ -1,6 +1,6 @@
 /* signal.h
 
-  Copyright 2004, 2005, 2006 Red Hat, Inc.
+  Copyright 2004, 2005, 2006, 2011 Red Hat, Inc.
 
   This file is part of Cygwin.
 
@@ -250,6 +250,7 @@ struct sigaction
 #define	SIGPROF	27	/* profiling time alarm */
 #define	SIGWINCH 28	/* window changed */
 #define	SIGLOST 29	/* resource lost (eg, record-lock lost) */
+#define	SIGPWR  SIGLOST	/* power failure */
 #define	SIGUSR1 30	/* user defined signal 1 */
 #define	SIGUSR2 31	/* user defined signal 2 */
 
@@ -260,6 +261,7 @@ struct sigaction
 
 #define SIG_HOLD ((_sig_func_ptr)2)	/* Signal in signal mask */
 
+void psiginfo (const siginfo_t *, const char *);
 int sigwait (const sigset_t *, int *);
 int sigwaitinfo (const sigset_t *, siginfo_t *);
 int sighold (int);
@@ -271,8 +273,10 @@ int sigqueue(pid_t, int, const union sigval);
 int siginterrupt (int, int);
 #ifdef __INSIDE_CYGWIN__
 extern const char *sys_sigabbrev[];
+extern const char *sys_siglist[];
 #else
 extern const char __declspec(dllimport) *sys_sigabbrev[];
+extern const char __declspec(dllimport) *sys_siglist[];
 #endif
 
 #ifdef __cplusplus

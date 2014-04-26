@@ -1,6 +1,6 @@
 /* winf.h
 
-   Copyright 2006, 2007 Red Hat, Inc.
+   Copyright 2006, 2007, 2011 Red Hat, Inc.
 
 This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
@@ -67,7 +67,7 @@ class av
     for (int i = calloced; i < argc; i++)
       argv[i] = cstrdup1 (argv[i]);
   }
-  int fixup (const char *, path_conv&, const char *);
+  int fixup (const char *, path_conv&, const char *, bool);
 };
 
 class linebuf

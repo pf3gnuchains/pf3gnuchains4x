@@ -1,7 +1,6 @@
 /* fhandler_dev_clipboard: code to access /dev/clipboard
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
-   Red Hat, Inc
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009, 2011 Red Hat, Inc
 
    Written by Charles Wilson (cwilson@ece.gatech.edu)
 
@@ -18,6 +17,10 @@ details. */
 #include "cygerrno.h"
 #include "path.h"
 #include "fhandler.h"
+#include "sync.h"
+#include "dtable.h"
+#include "cygheap.h"
+#include "child_info.h"
 
 /*
  * Robert Collins:
@@ -25,7 +28,7 @@ details. */
  * changed? How does /dev/clipboard operate under (say) linux?
  */
 
-static const NO_COPY char *CYGWIN_NATIVE = "CYGWIN_NATIVE_CLIPBOARD";
+static const NO_COPY WCHAR *CYGWIN_NATIVE = L"CYGWIN_NATIVE_CLIPBOARD";
 /* this is MT safe because windows format id's are atomic */
 static int cygnativeformat;
 
@@ -35,7 +38,7 @@ fhandler_dev_clipboard::fhandler_dev_clipboard ()
 {
   /* FIXME: check for errors and loop until we can open the clipboard */
   OpenClipboard (NULL);
-  cygnativeformat = RegisterClipboardFormat (CYGWIN_NATIVE);
+  cygnativeformat = RegisterClipboardFormatW (CYGWIN_NATIVE);
   CloseClipboard ();
 }
 
@@ -45,17 +48,12 @@ fhandler_dev_clipboard::fhandler_dev_clipboard ()
  */
 
 int
-fhandler_dev_clipboard::dup (fhandler_base * child)
+fhandler_dev_clipboard::dup (fhandler_base * child, int)
 {
   fhandler_dev_clipboard *fhc = (fhandler_dev_clipboard *) child;
 
   if (!fhc->open (get_flags (), 0))
     system_printf ("error opening clipboard, %E");
-
-  fhc->membuffer = membuffer;
-  fhc->pos = pos;
-  fhc->msize = msize;
-
   return 0;
 }
 
@@ -69,7 +67,7 @@ fhandler_dev_clipboard::open (int flags, mode_t)
     free (membuffer);
   membuffer = NULL;
   if (!cygnativeformat)
-    cygnativeformat = RegisterClipboardFormat (CYGWIN_NATIVE);
+    cygnativeformat = RegisterClipboardFormatW (CYGWIN_NATIVE);
   nohandle (true);
   set_open_status ();
   return 1;
@@ -96,11 +94,11 @@ set_clipboard (const void *buf, size_t len)
       GlobalUnlock (hmem);
       EmptyClipboard ();
       if (!cygnativeformat)
-	cygnativeformat = RegisterClipboardFormat (CYGWIN_NATIVE);
+	cygnativeformat = RegisterClipboardFormatW (CYGWIN_NATIVE);
       HANDLE ret = SetClipboardData (cygnativeformat, hmem);
       CloseClipboard ();
       /* According to MSDN, hmem must not be free'd after transferring the
-         data to the clipboard via SetClipboardData. */
+	 data to the clipboard via SetClipboardData. */
       /* GlobalFree (hmem); */
       if (!ret)
 	{
@@ -131,7 +129,7 @@ set_clipboard (const void *buf, size_t len)
       HANDLE ret = SetClipboardData (CF_UNICODETEXT, hmem);
       CloseClipboard ();
       /* According to MSDN, hmem must not be free'd after transferring the
-         data to the clipboard via SetClipboardData. */
+	 data to the clipboard via SetClipboardData. */
       /* GlobalFree (hmem); */
       if (!ret)
 	{
@@ -164,7 +162,7 @@ fhandler_dev_clipboard::write (const void *buf, size_t len)
       if (set_clipboard (membuffer, msize))
 	{
 	  /* FIXME: membuffer is now out of sync with pos, but msize
-	            is used above */
+		    is used above */
 	  return -1;
 	}
 
@@ -269,7 +267,7 @@ fhandler_dev_clipboard::lseek (_off64_t offset, int whence)
 int
 fhandler_dev_clipboard::close ()
 {
-  if (!hExeced)
+  if (!have_execed)
     {
       eof = true;
       pos = 0;

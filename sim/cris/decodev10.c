@@ -2,7 +2,7 @@
 
 THIS FILE IS MACHINE GENERATED WITH CGEN.
 
-Copyright 1996-2010 Free Software Foundation, Inc.
+Copyright 1996-2010, 2012 Free Software Foundation, Inc.
 
 This file is part of the GNU simulators.
 
@@ -252,7 +252,8 @@ static const struct insn_sem crisv10f_insn_sem[] =
   { CRIS_INSN_BIAP_PC_D_R, CRISV10F_INSN_BIAP_PC_D_R, CRISV10F_SFMT_BIAP_PC_B_R },
 };
 
-static const struct insn_sem crisv10f_insn_sem_invalid = {
+static const struct insn_sem crisv10f_insn_sem_invalid =
+{
   VIRTUAL_INSN_X_INVALID, CRISV10F_INSN_X_INVALID, CRISV10F_SFMT_EMPTY
 };
 
@@ -2387,7 +2388,7 @@ crisv10f_decode (SIM_CPU *current_cpu, IADDR pc,
  extract_sfmt_empty:
   {
     const IDESC *idesc = &crisv10f_insn_data[itype];
-#define FLD(f) abuf->fields.fmt_empty.f
+#define FLD(f) abuf->fields.sfmt_empty.f
 
 
   /* Record the fields for the semantic handler.  */
@@ -2400,7 +2401,7 @@ crisv10f_decode (SIM_CPU *current_cpu, IADDR pc,
  extract_sfmt_nop:
   {
     const IDESC *idesc = &crisv10f_insn_data[itype];
-#define FLD(f) abuf->fields.fmt_empty.f
+#define FLD(f) abuf->fields.sfmt_empty.f
 
 
   /* Record the fields for the semantic handler.  */
@@ -3451,7 +3452,7 @@ crisv10f_decode (SIM_CPU *current_cpu, IADDR pc,
  extract_sfmt_sbfs:
   {
     const IDESC *idesc = &crisv10f_insn_data[itype];
-#define FLD(f) abuf->fields.fmt_empty.f
+#define FLD(f) abuf->fields.sfmt_empty.f
 
 
   /* Record the fields for the semantic handler.  */
@@ -4006,7 +4007,7 @@ crisv10f_decode (SIM_CPU *current_cpu, IADDR pc,
  extract_sfmt_addspcpc:
   {
     const IDESC *idesc = &crisv10f_insn_data[itype];
-#define FLD(f) abuf->fields.fmt_empty.f
+#define FLD(f) abuf->fields.sfmt_empty.f
 
 
   /* Record the fields for the semantic handler.  */

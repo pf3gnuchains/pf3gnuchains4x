@@ -227,8 +227,9 @@ FLAGS_TO_PASS:=\
 CRT0S = crt1.o dllcrt1.o crt2.o dllcrt2.o CRT_noglob.o crtmt.o crtst.o \
 	CRT_fp8.o CRT_fp10.o txtmode.o binmode.o
 MINGW_OBJS = CRTglob.o CRTfmode.o CRTinit.o  dllmain.o gccmain.o \
-	     main.o crtst.o mthr_stub.o CRT_fp10.o txtmode.o \
-	     pseudo-reloc.o pseudo-reloc-list.o cpu_features.o
+	     main.o crtst.o CRT_fp10.o txtmode.o \
+	     pseudo-reloc.o pseudo-reloc-list.o cpu_features.o \
+	     tlsmcrt.o tlsmthread.o tlssup.o tlsthrd.o
 
 MOLD_OBJS = isascii.o iscsym.o iscsymf.o toascii.o \
 	strcasecmp.o strncasecmp.o wcscmpi.o
@@ -239,6 +240,7 @@ LIBS = libcrtdll.a \
        libmsvcr71.a libmsvcr71d.a \
        libmsvcr80.a libmsvcr80d.a \
        libmsvcr90.a libmsvcr90d.a \
+       libmsvcr100.a libmsvcr100d.a \
        libmingw32.a \
        libcoldname.a \
        libmoldname.a   libmoldnamed.a \
@@ -246,7 +248,9 @@ LIBS = libcrtdll.a \
        libmoldname71.a libmoldname71d.a \
        libmoldname80.a libmoldname80d.a \
        libmoldname90.a libmoldname90d.a \
+       libmoldname100.a libmoldname100d.a \
        $(LIBM_A) \
+       libmingwthrd_old.a \
        libmingwthrd.a
 
 DLLS = $(THREAD_DLL_NAME)
@@ -260,7 +264,7 @@ Makefile.in README TODO config.guess config.sub configure configure.in \
 aclocal.m4 crt1.c crtdll.def crtmt.c crtst.c  dllcrt1.c dllmain.c \
 gccmain.c init.c install-sh jamfile main.c mkinstalldirs \
 moldname.def.in msvcrt.def.in ofmt_stub.s \
-mthr.c mthr_init.c mthr_stub.c readme.txt \
+mthr.c mthr_init.c tlsmcrt.c tlsmthread.c tlssup.c tlsthrd.c readme.txt \
 isascii.c iscsym.c iscsymf.c toascii.c \
 strcasecmp.c strncasecmp.c wcscmpi.c \
 CRT_fp8.c CRT_fp10.c test_headers.c txtmode.c binmode.c pseudo-reloc.c \
@@ -290,7 +294,11 @@ libm.a: _libm_dummy.o
 	$(AR) rc $@ _libm_dummy.o
 	$(RANLIB) $@
 
-libmingwthrd.a: crtmt.o mingwthrd.def
+libmingwthrd.a: crtmt.o
+	$(AR) $(ARFLAGS) $@ crtmt.o
+	$(RANLIB) $@
+
+libmingwthrd_old.a: crtmt.o mingwthrd.def
 	$(DLLTOOL) $(DLLTOOL_FLAGS) --dllname $(THREAD_DLL_NAME) \
 	  --def mingwthrd.def --output-lib $@
 	$(AR) $(ARFLAGS) $@ crtmt.o
@@ -314,8 +322,13 @@ msvcrt.def  msvcrtd.def \
 msvcr70.def msvcr70d.def \
 msvcr71.def msvcr71d.def \
 msvcr80.def msvcr80d.def \
-msvcr90.def msvcr90d.def: msvcrt.def.in
+msvcr90.def msvcr90d.def \
+msvcr100.def msvcr100d.def: msvcrt.def.in
+	V=`echo $@ | sed -e 's|[a-z]*\([0-9]*\).*|\1|'`; \
+	test -z "$$V" && V=60; \
+	V="0x0$${V}0"; \
 	$(CC) -DRUNTIME=$(basename $(notdir $@)) \
+		-D__MSVCRT_VERSION__=$$V \
 		-D__$(basename $(notdir $@))__=1 \
 		-D__MSVCRT__ -C -E -P \
 		-xc-header $? > $@
@@ -351,7 +364,8 @@ libmoldname.a libmoldnamed.a: moldname-msvcrt.def $(MOLD_OBJS)
 libmoldname70.a libmoldname70d.a \
 libmoldname71.a libmoldname71d.a \
 libmoldname80.a libmoldname80d.a \
-libmoldname90.a libmoldname90d.a: moldname-msvcrt.def $(MOLD_OBJS)
+libmoldname90.a libmoldname90d.a \
+libmoldname100.a libmoldname100d.a: moldname-msvcrt.def $(MOLD_OBJS)
 	$(DLLTOOL) --as $(AS) -k -U	\
 		--dllname msvcr$(@:libmoldname%a=%)dll  \
 		--def moldname-msvcrt.def	\
@@ -381,6 +395,21 @@ check-headers: force
 		echo "$$lang -ansi"; \
 		$(CC) -x$$lang -ansi $(TEST_H_OPTIONS) ; \
 	done
+	@echo; echo "Testing runtime 8.0 headers..."
+	@for lang in c c++ objective-c ; do \
+		echo "$$lang ..."; \
+		$(CC) -x$$lang -Wall -D__MSVCRT_VERSION__=0x0800 $(TEST_H_OPTIONS) ; \
+		echo "$$lang -ansi"; \
+		$(CC) -x$$lang -Wall -D__MSVCRT_VERSION__=0x0800 -ansi $(TEST_H_OPTIONS) ; \
+	done
+	@echo; echo "Testing runtime 8.0(time32) headers..."
+	@for lang in c c++ objective-c ; do \
+		echo "$$lang ..."; \
+		$(CC) -x$$lang -Wall -D__MSVCRT_VERSION__=0x0800 -D_USE_32BIT_TIME_T $(TEST_H_OPTIONS) ; \
+		echo "$$lang -ansi"; \
+		$(CC) -x$$lang -Wall -D__MSVCRT_VERSION__=0x0800 -D_USE_32BIT_TIME_T -ansi $(TEST_H_OPTIONS) ; \
+	done
+	@echo; echo "Testing runtime 8.0(time32) headers..."
 # specify -std=xx only for C
 	@for std in gnu89 gnu99 c89 c99 ; do \
 		echo "std = $$std"; \

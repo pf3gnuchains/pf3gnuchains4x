@@ -1,6 +1,6 @@
 /* Simulator option handling.
-   Copyright (C) 1996, 1997, 2004, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 1996-1997, 2004, 2007-2012 Free Software Foundation,
+   Inc.
    Contributed by Cygnus Support.
 
 This file is part of GDB, the GNU debugger.
@@ -100,9 +100,7 @@ typedef enum {
   OPTION_ENVIRONMENT,
   OPTION_ALIGNMENT,
   OPTION_VERBOSE,
-#if defined (SIM_HAVE_BIENDIAN)
   OPTION_ENDIAN,
-#endif
   OPTION_DEBUG,
 #ifdef SIM_HAVE_FLATMEM
   OPTION_MEM_SIZE,
@@ -122,13 +120,11 @@ static const OPTION standard_options[] =
 {
   { {"verbose", no_argument, NULL, OPTION_VERBOSE},
       'v', NULL, "Verbose output",
-      standard_option_handler },
+      standard_option_handler, NULL },
 
-#if defined (SIM_HAVE_BIENDIAN) /* ??? && WITH_TARGET_BYTE_ORDER == 0 */
   { {"endian", required_argument, NULL, OPTION_ENDIAN},
       'E', "big|little", "Set endianness",
-      standard_option_handler },
-#endif
+      standard_option_handler, NULL },
 
 #ifdef SIM_HAVE_ENVIRONMENT
   /* This option isn't supported unless all choices are supported in keeping
@@ -209,9 +205,9 @@ static const OPTION standard_options[] =
   { {"sysroot", required_argument, NULL, OPTION_SYSROOT},
       '\0', "SYSROOT",
     "Root for system calls with absolute file-names and cwd at start",
-      standard_option_handler },
+      standard_option_handler, NULL },
 
-  { {NULL, no_argument, NULL, 0}, '\0', NULL, NULL, NULL }
+  { {NULL, no_argument, NULL, 0}, '\0', NULL, NULL, NULL, NULL }
 };
 
 static SIM_RC
@@ -226,7 +222,6 @@ standard_option_handler (SIM_DESC sd, sim_cpu *cpu, int opt,
       STATE_VERBOSE_P (sd) = 1;
       break;
 
-#ifdef SIM_HAVE_BIENDIAN
     case OPTION_ENDIAN:
       if (strcmp (arg, "big") == 0)
 	{
@@ -254,7 +249,6 @@ standard_option_handler (SIM_DESC sd, sim_cpu *cpu, int opt,
 	  return SIM_RC_FAIL;
 	}
       break;
-#endif
 
     case OPTION_ENVIRONMENT:
       if (strcmp (arg, "user") == 0)
@@ -271,7 +265,7 @@ standard_option_handler (SIM_DESC sd, sim_cpu *cpu, int opt,
       if (WITH_ENVIRONMENT != ALL_ENVIRONMENT
 	  && WITH_ENVIRONMENT != STATE_ENVIRONMENT (sd))
 	{
-	  char *type;
+	  const char *type;
 	  switch (WITH_ENVIRONMENT)
 	    {
 	    case USER_ENVIRONMENT: type = "user"; break;
@@ -425,7 +419,7 @@ standard_option_handler (SIM_DESC sd, sim_cpu *cpu, int opt,
 
     case OPTION_ARCHITECTURE_INFO:
       {
-	const char **list = bfd_arch_list();
+	const char **list = bfd_arch_list ();
 	const char **lp;
 	if (list == NULL)
 	  abort ();
@@ -464,10 +458,14 @@ standard_option_handler (SIM_DESC sd, sim_cpu *cpu, int opt,
 
     case OPTION_SYSROOT:
       /* Don't leak memory in the odd event that there's lots of
-	 --sysroot=... options.  */
-      if (simulator_sysroot[0] != '\0' && arg[0] != '\0')
+	 --sysroot=... options.  We treat "" specially since this
+	 is the statically initialized value and cannot free it.  */
+      if (simulator_sysroot[0] != '\0')
 	free (simulator_sysroot);
-      simulator_sysroot = xstrdup (arg);
+      if (arg[0] != '\0')
+	simulator_sysroot = xstrdup (arg);
+      else
+	simulator_sysroot = "";
       break;
     }
 
@@ -495,16 +493,15 @@ standard_install (SIM_DESC sd)
 #define ARG_HASH(a) ((256 * (unsigned char) a[0] + (unsigned char) a[1]) % ARG_HASH_SIZE)
 
 static int
-dup_arg_p (arg)
-     char *arg;
+dup_arg_p (const char *arg)
 {
   int hash;
-  static char **arg_table = NULL;
+  static const char **arg_table = NULL;
 
   if (arg == NULL)
     {
       if (arg_table == NULL)
-	arg_table = (char **) xmalloc (ARG_HASH_SIZE * sizeof (char *));
+	arg_table = (const char **) xmalloc (ARG_HASH_SIZE * sizeof (char *));
       memset (arg_table, 0, ARG_HASH_SIZE * sizeof (char *));
       return 0;
     }
@@ -522,13 +519,11 @@ dup_arg_p (arg)
   arg_table[hash] = arg;
   return 0;
 }
-     
+
 /* Called by sim_open to parse the arguments.  */
 
 SIM_RC
-sim_parse_args (sd, argv)
-     SIM_DESC sd;
-     char **argv;
+sim_parse_args (SIM_DESC sd, char **argv)
 {
   int c, i, argc, num_opts;
   char *p, *short_options;
@@ -630,7 +625,12 @@ sim_parse_args (sd, argv)
 		char *name;
 		*lp = opt->opt;
 		/* Prepend --<cpuname>- to the option.  */
-		asprintf (&name, "%s-%s", CPU_NAME (cpu), lp->name);
+		if (asprintf (&name, "%s-%s", CPU_NAME (cpu), lp->name) < 0)
+		  {
+		    sim_io_eprintf (sd, "internal error, out of memory");
+		    result = SIM_RC_FAIL;
+		    break;
+		  }
 		lp->name = name;
 		/* Dynamically assign `val' numbers for long options. */
 		lp->val = i++;
@@ -641,7 +641,7 @@ sim_parse_args (sd, argv)
 	      }
 	  }
     }
-	    
+
   /* Terminate the short and long option lists.  */
   *p = 0;
   lp->name = NULL;
@@ -673,11 +673,11 @@ sim_parse_args (sd, argv)
 	}
     }
 
-  zfree (long_options);
-  zfree (short_options);
-  zfree (handlers);
-  zfree (opt_cpu);
-  zfree (orig_val);
+  free (long_options);
+  free (short_options);
+  free (handlers);
+  free (opt_cpu);
+  free (orig_val);
   return result;
 }
 
@@ -738,7 +738,7 @@ print_help (SIM_DESC sd, sim_cpu *cpu, const struct option_list *ol, int is_comm
 	      }
 	    while (OPTION_VALID_P (o) && o->doc == NULL);
 	  }
-	
+
 	/* list any long options (aliases) for the current OPT */
 	o = opt;
 	do
@@ -813,9 +813,7 @@ print_help (SIM_DESC sd, sim_cpu *cpu, const struct option_list *ol, int is_comm
 /* Print help messages for the options.  */
 
 void
-sim_print_help (sd, is_command)
-     SIM_DESC sd;
-     int is_command;
+sim_print_help (SIM_DESC sd, int is_command)
 {
   if (STATE_OPEN_KIND (sd) == SIM_OPEN_STANDALONE)
     sim_io_printf (sd, "Usage: %s [options] program [program args]\n",
@@ -921,13 +919,65 @@ find_match (SIM_DESC sd, sim_cpu *cpu, char *argv[], int *pargi)
   return matching_opt;
 }
 
+static char **
+complete_option_list (char **ret, size_t *cnt, const struct option_list *ol,
+		      char *text, char *word)
+{
+  const OPTION *opt = NULL;
+  int argi;
+  size_t len = strlen (word);
+
+  for ( ; ol != NULL; ol = ol->next)
+    for (opt = ol->options; OPTION_VALID_P (opt); ++opt)
+      {
+	const char *name = opt->opt.name;
+
+	/* A long option to match against?  */
+	if (!name)
+	  continue;
+
+	/* Does this option actually match?  */
+	if (strncmp (name, word, len))
+	  continue;
+
+	ret = xrealloc (ret, ++*cnt * sizeof (ret[0]));
+	ret[*cnt - 2] = xstrdup (name);
+      }
+
+  return ret;
+}
+
+/* All leading text is stored in @text, while the current word being
+   completed is stored in @word.  Trailing text of @word is not.  */
+
+char **
+sim_complete_command (SIM_DESC sd, char *text, char *word)
+{
+  char **ret = NULL;
+  size_t cnt = 1;
+  sim_cpu *cpu;
+
+  /* Only complete first word for now.  */
+  if (text != word)
+    return ret;
+
+  cpu = STATE_CPU (sd, 0);
+  if (cpu)
+    ret = complete_option_list (ret, &cnt, CPU_OPTIONS (cpu), text, word);
+  ret = complete_option_list (ret, &cnt, STATE_OPTIONS (sd), text, word);
+
+  if (ret)
+    ret[cnt - 1] = NULL;
+  return ret;
+}
+
 SIM_RC
 sim_args_command (SIM_DESC sd, char *cmd)
 {
   /* something to do? */
   if (cmd == NULL)
     return SIM_RC_OK; /* FIXME - perhaps help would be better */
-  
+
   if (cmd [0] == '-')
     {
       /* user specified -<opt> ... form? */
@@ -1018,7 +1068,7 @@ sim_args_command (SIM_DESC sd, char *cmd)
 
       freeargv (argv);
     }
-      
+
   /* didn't find anything that remotly matched */
   return SIM_RC_FAIL;
 }

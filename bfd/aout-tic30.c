@@ -1,5 +1,6 @@
 /* BFD back-end for TMS320C30 a.out binaries.
-   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2007, 2009
+   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2007, 2009,
+   2010, 2011
    Free Software Foundation, Inc.
    Contributed by Steven Haworth (steve@pm.cse.rmit.edu.au)
 
@@ -837,6 +838,9 @@ tic30_aout_set_arch_mach (bfd *abfd,
 #ifndef MY_read_ar_hdr
 #define MY_read_ar_hdr			_bfd_generic_read_ar_hdr
 #endif
+#ifndef MY_write_ar_hdr
+#define MY_write_ar_hdr			_bfd_generic_write_ar_hdr
+#endif
 #ifndef	MY_truncate_arname
 #define	MY_truncate_arname		bfd_bsd_truncate_arname
 #endif
@@ -854,6 +858,9 @@ tic30_aout_set_arch_mach (bfd *abfd,
 #ifndef	MY_core_file_matches_executable_p
 #define	MY_core_file_matches_executable_p	\
 				_bfd_nocore_core_file_matches_executable_p
+#endif
+#ifndef	MY_core_file_pid
+#define	MY_core_file_pid  		_bfd_nocore_core_file_pid
 #endif
 #ifndef	MY_core_file_p
 #define	MY_core_file_p			_bfd_dummy_target
@@ -936,6 +943,9 @@ tic30_aout_set_arch_mach (bfd *abfd,
 #endif
 #ifndef MY_bfd_gc_sections
 #define MY_bfd_gc_sections bfd_generic_gc_sections
+#endif
+#ifndef MY_bfd_lookup_section_flags
+#define MY_bfd_lookup_section_flags bfd_generic_lookup_section_flags
 #endif
 #ifndef MY_bfd_merge_sections
 #define MY_bfd_merge_sections bfd_generic_merge_sections
@@ -1073,6 +1083,7 @@ const bfd_target tic30_aout_vec =
   MY_symbol_leading_char,
   AR_PAD_CHAR,			/* AR_pad_char.  */
   15,				/* AR_max_namelen.  */
+  0,				/* match priority.  */
   bfd_getb64, bfd_getb_signed_64, bfd_putb64,
   bfd_getb32, bfd_getb_signed_32, bfd_putb32,
   bfd_getb16, bfd_getb_signed_16, bfd_putb16,	/* Data.  */

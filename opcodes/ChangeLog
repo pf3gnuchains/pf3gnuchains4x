@@ -1,117 +1,28 @@
-2010-01-15  Sebastian Pop  <sebastian.pop@amd.com>
+2012-01-17  James Murray  <jsm@jsm-net.demon.co.uk>
 
-	* i386-opc.tbl: Support all the possible aliases for VPCOM* insns.
-	* i386-tbl.h: Regenerated.
+	PR binutils/10173
+	* cr16-dis.c (print_arg): Test symtab_size not num_symbols.
 
-2010-01-14  H.J. Lu  <hongjiu.lu@intel.com>
+2012-01-17  Andreas Schwab  <schwab@linux-m68k.org>
 
-	* i386-opc.h (VexVVVV): Replace VEX.DNS with VEX.NDS in
-	comments.
+	* m68k-opc.c (m68k_opcodes): Fix entries for pmove with BADx/BACx
+	register and move them after pmove with PSR/PCSR register.
 
-2010-01-14  H.J. Lu  <hongjiu.lu@intel.com>
+2012-01-13  H.J. Lu  <hongjiu.lu@intel.com>
 
-	* i386-dis.c (names_mm): New.
-	(intel_names_mm): Likewise.
-	(att_names_mm): Likewise.
-	(names_xmm): Likewise.
-	(intel_names_xmm): Likewise.
-	(att_names_xmm): Likewise.
-	(names_ymm): Likewise.
-	(intel_names_ymm): Likewise.
-	(att_names_ymm): Likewise.
-	(print_insn): Set names_mm, names_xmm and names_ymm.
-	(OP_MMX): Use names_mm, names_xmm and names_ymm.
-	(OP_XMM): Likewise.
-	(OP_EM): Likewise.
-	(OP_EMC): Likewise.
-	(OP_MXC): Likewise.
-	(OP_EX): Likewise.
-	(XMM_Fixup): Likewise.
-	(OP_VEX): Likewise.
-	(OP_EX_VexReg): Likewise.
-	(OP_Vex_2src): Likewise.
-	(OP_Vex_2src_1): Likewise.
-	(OP_Vex_2src_2): Likewise.
-	(OP_REG_VexI4): Likewise.
+	* i386-dis.c (mod_table): Add vmfunc.
 
-2010-01-13  H.J. Lu  <hongjiu.lu@intel.com>
+	* i386-gen.c (cpu_flag_init): Add CPU_VMFUNC_FLAGS.
+	(cpu_flags): CpuVMFUNC.
 
-	* i386-dis.c (print_insn): Update comments.
+	* i386-opc.h (CpuVMFUNC): New.
+	(i386_cpu_flags): Add cpuvmfunc.
 
-2010-01-12  H.J. Lu  <hongjiu.lu@intel.com>
-
-	* i386-dis.c (rex_original): Removed.
-	(ckprefix): Remove rex_original.
-	(print_insn): Update comments.
-
-2010-01-09  Ralf Wildenhues  <Ralf.Wildenhues@gmx.de>
-
-	* Makefile.in: Regenerate.
-	* configure: Regenerate.
-
-2010-01-07  Doug Evans  <dje@sebabeach.org>
-
-	* cgen-ibld.in (insert_normal, extract_normal): Minor cleanup.
-	* fr30-ibld.c, * frv-ibld.c, * ip2k-ibld.c, * iq2000-ibld.c,
-	* lm32-ibld.c, * m32c-ibld.c, * m32r-ibld.c, * mep-ibld.c,
-	* mt-ibld.c, * openrisc-ibld.c, * xc16x-ibld.c,
-	* xstormy16-ibld.c: Regenerate.
-
-2010-01-06  Quentin Neill  <quentin.neill@amd.com>
-
-	* i386-gen.c (cpu_flag_init): Add new CPU_AMDFAM15_FLAGS.
+	* i386-opc.tbl: Add vmfunc.
 	* i386-init.h: Regenerated.
+	* i386-tbl.h: Likewise.
 
-2010-01-06  Daniel Gutson  <dgutson@codesourcery.com>
-
-	* arm-dis.c (print_insn): Fixed search for next symbol and data
-	dumping condition, and the initial mapping symbol state.
-
-2010-01-05  Doug Evans  <dje@sebabeach.org>
-
-	* cgen-ibld.in: #include "cgen/basic-modes.h".
-	* fr30-ibld.c, * frv-ibld.c, * ip2k-ibld.c, * iq2000-ibld.c,
-	* lm32-ibld.c, * m32c-ibld.c, * m32r-ibld.c, * mep-ibld.c,
-	* mt-ibld.c, * openrisc-ibld.c, * xc16x-ibld.c,
-	* xstormy16-ibld.c: Regenerate.
-
-2010-01-04  Nick Clifton  <nickc@redhat.com>
-
-	PR 11123
-	* arm-dis.c (print_insn_coprocessor): Initialise value.
-
-2010-01-04  Edmar Wienskoski  <edmar@freescale.com>
-
-	* ppc-dis.c (ppc_opts): Add entry for "e500mc64".
-
-2010-01-02  Doug Evans  <dje@sebabeach.org>
-
-	* cgen-asm.in: Update copyright year.
-	* cgen-dis.in: Update copyright year.
-	* cgen-ibld.in: Update copyright year.
-	* fr30-asm.c, * fr30-desc.c, * fr30-desc.h, * fr30-dis.c,
-	* fr30-ibld.c, * fr30-opc.c, * fr30-opc.h, * frv-asm.c, * frv-desc.c,
-	* frv-desc.h, * frv-dis.c, * frv-ibld.c, * frv-opc.c, * frv-opc.h,
-	* ip2k-asm.c, * ip2k-desc.c, * ip2k-desc.h, * ip2k-dis.c,
-	* ip2k-ibld.c, * ip2k-opc.c, * ip2k-opc.h, * iq2000-asm.c,
-	* iq2000-desc.c, * iq2000-desc.h, * iq2000-dis.c, * iq2000-ibld.c,
-	* iq2000-opc.c, * iq2000-opc.h, * lm32-asm.c, * lm32-desc.c,
-	* lm32-desc.h, * lm32-dis.c, * lm32-ibld.c, * lm32-opc.c, * lm32-opc.h,
-	* lm32-opinst.c, * m32c-asm.c, * m32c-desc.c, * m32c-desc.h,
-	* m32c-dis.c, * m32c-ibld.c, * m32c-opc.c, * m32c-opc.h, * m32r-asm.c,
-	* m32r-desc.c, * m32r-desc.h, * m32r-dis.c, * m32r-ibld.c,
-	* m32r-opc.c, * m32r-opc.h, * m32r-opinst.c, * mep-asm.c, * mep-desc.c,
-	* mep-desc.h, * mep-dis.c, * mep-ibld.c, * mep-opc.c, * mep-opc.h,
-	* mt-asm.c, * mt-desc.c, * mt-desc.h, * mt-dis.c, * mt-ibld.c,
-	* mt-opc.c, * mt-opc.h, * openrisc-asm.c, * openrisc-desc.c,
-	* openrisc-desc.h, * openrisc-dis.c, * openrisc-ibld.c,
-	* openrisc-opc.c, * openrisc-opc.h, * xc16x-asm.c, * xc16x-desc.c,
-	* xc16x-desc.h, * xc16x-dis.c, * xc16x-ibld.c, * xc16x-opc.c,
-	* xc16x-opc.h, * xstormy16-asm.c, * xstormy16-desc.c,
-	* xstormy16-desc.h, * xstormy16-dis.c, * xstormy16-ibld.c,
-	* xstormy16-opc.c, * xstormy16-opc.h: Regenerate.
-
-For older changes see ChangeLog-2009
+For older changes see ChangeLog-2011
 
 Local Variables:
 mode: change-log

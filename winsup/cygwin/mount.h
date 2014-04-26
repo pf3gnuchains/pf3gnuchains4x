@@ -1,7 +1,7 @@
 /* mount.h: mount definitions.
 
    Copyright 1996, 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009, 2010 Red Hat, Inc.
+   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -28,13 +28,19 @@ enum fs_info_type
   mvfs,
   cifs,
   nwfs,
+  ncfsd,
   /* Always last. */
   max_fs_type
 };
 
-#define IMPLEMENT_FS_FLAG(func, flag) \
-  bool func (bool val) { if (val) status.fs_type = flag; return val; } \
-  bool func () const   { return status.fs_type == flag; }
+extern struct fs_names_t {
+    const char *name;
+    bool block_device;
+} fs_names[];
+
+#define IMPLEMENT_FS_FLAG(type) \
+  bool is_##type (bool val) { if (val) status.fs_type = type; return val; } \
+  bool is_##type () const   { return status.fs_type == type; }
 
 class fs_info
 {
@@ -49,8 +55,10 @@ class fs_info
     unsigned hasgood_inode		: 1;
     unsigned caseinsensitive		: 1;
     unsigned has_buggy_open		: 1;
+    unsigned has_buggy_reopen		: 1;
     unsigned has_buggy_fileid_dirinfo	: 1;
     unsigned has_buggy_basic_info	: 1;
+    unsigned has_dos_filenames_only	: 1;
   } status;
   ULONG sernum;			/* Volume Serial Number */
   char fsn[80];			/* Windows filesystem name */
@@ -60,7 +68,7 @@ class fs_info
   void clear ()
   {
     memset (&status, 0 , sizeof status);
-    sernum = 0UL; 
+    sernum = 0UL;
     fsn[0] = '\0';
   }
   fs_info () { clear (); }
@@ -73,21 +81,24 @@ class fs_info
   IMPLEMENT_STATUS_FLAG (bool, hasgood_inode)
   IMPLEMENT_STATUS_FLAG (bool, caseinsensitive)
   IMPLEMENT_STATUS_FLAG (bool, has_buggy_open)
+  IMPLEMENT_STATUS_FLAG (bool, has_buggy_reopen)
   IMPLEMENT_STATUS_FLAG (bool, has_buggy_fileid_dirinfo)
   IMPLEMENT_STATUS_FLAG (bool, has_buggy_basic_info)
-  IMPLEMENT_FS_FLAG (is_fat, fat)
-  IMPLEMENT_FS_FLAG (is_ntfs, ntfs)
-  IMPLEMENT_FS_FLAG (is_samba, samba)
-  IMPLEMENT_FS_FLAG (is_nfs, nfs)
-  IMPLEMENT_FS_FLAG (is_netapp, netapp)
-  IMPLEMENT_FS_FLAG (is_cdrom, cdrom)
-  IMPLEMENT_FS_FLAG (is_udf, udf)
-  IMPLEMENT_FS_FLAG (is_csc_cache, csc_cache)
-  IMPLEMENT_FS_FLAG (is_sunwnfs, sunwnfs)
-  IMPLEMENT_FS_FLAG (is_unixfs, unixfs)
-  IMPLEMENT_FS_FLAG (is_mvfs, mvfs)
-  IMPLEMENT_FS_FLAG (is_cifs, cifs)
-  IMPLEMENT_FS_FLAG (is_nwfs, nwfs)
+  IMPLEMENT_STATUS_FLAG (bool, has_dos_filenames_only)
+  IMPLEMENT_FS_FLAG (fat)
+  IMPLEMENT_FS_FLAG (ntfs)
+  IMPLEMENT_FS_FLAG (samba)
+  IMPLEMENT_FS_FLAG (nfs)
+  IMPLEMENT_FS_FLAG (netapp)
+  IMPLEMENT_FS_FLAG (cdrom)
+  IMPLEMENT_FS_FLAG (udf)
+  IMPLEMENT_FS_FLAG (csc_cache)
+  IMPLEMENT_FS_FLAG (sunwnfs)
+  IMPLEMENT_FS_FLAG (unixfs)
+  IMPLEMENT_FS_FLAG (mvfs)
+  IMPLEMENT_FS_FLAG (cifs)
+  IMPLEMENT_FS_FLAG (nwfs)
+  IMPLEMENT_FS_FLAG (ncfsd)
   fs_info_type what_fs () const { return status.fs_type; }
 
   ULONG serial_number () const { return sernum; }
@@ -95,6 +106,7 @@ class fs_info
   const char *fsname () const { return fsn[0] ? fsn : "unknown"; }
 
   bool update (PUNICODE_STRING, HANDLE) __attribute__ ((regparm (3)));
+  bool inited () const { return !!status.flags; }
 };
 
 /* Mount table entry */
@@ -125,7 +137,7 @@ class mount_item
    higher numbered registry entries.  Don't change this number willy-nilly.
    What we need is to have a more dynamic allocation scheme, but the current
    scheme should be satisfactory for a long while yet.  */
-#define MAX_MOUNTS 30
+#define MAX_MOUNTS 64
 
 class reg_key;
 struct device;
@@ -136,7 +148,6 @@ struct device;
 class mount_info
 {
  public:
-  DWORD sys_mount_table_counter;
   int nmounts;
   mount_item mount[MAX_MOUNTS];
 
@@ -185,5 +196,23 @@ class mount_info
   bool from_fstab (bool user, WCHAR [], PWCHAR);
 
   int cygdrive_win32_path (const char *src, char *dst, int& unit);
+};
+
+class dos_drive_mappings
+{
+  struct mapping
+  {
+    mapping *next;
+    size_t doslen;
+    size_t ntlen;
+    wchar_t *dospath;
+    wchar_t *ntdevpath;
+  };
+  mapping *mappings;
+
+public:
+  dos_drive_mappings ();
+  ~dos_drive_mappings ();
+  wchar_t *fixup_if_match (wchar_t *path);
 };
 #endif

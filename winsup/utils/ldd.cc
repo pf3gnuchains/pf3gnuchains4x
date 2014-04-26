@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, Chris Faylor
+/* Copyright (c) 2009, 2010, 2011  Chris Faylor
 
   All rights reserved.
 
@@ -33,6 +33,7 @@
 #include <wchar.h>
 #include <locale.h>
 #include <sys/cygwin.h>
+#include <cygwin/version.h>
 #include <unistd.h>
 #include <libgen.h>
 
@@ -45,22 +46,22 @@
 #define STATUS_DLL_NOT_FOUND (0xC0000135L)
 #endif
 
-#define VERSION "1.0"
-
 struct option longopts[] =
 {
-  {"help", no_argument, NULL, 0},
-  {"version", no_argument, NULL, 0},
+  {"help", no_argument, NULL, 'h'},
+  {"verbose", no_argument, NULL, 'v'},
+  {"version", no_argument, NULL, 'V'},
   {"data-relocs", no_argument, NULL, 'd'},
   {"function-relocs", no_argument, NULL, 'r'},
   {"unused", no_argument, NULL, 'u'},
   {0, no_argument, NULL, 0}
 };
+const char *opts = "dhruvV";
 
 static int process_file (const wchar_t *);
 
 static int
-usage (const char *fmt, ...)
+error (const char *fmt, ...)
 {
   va_list ap;
   va_start (ap, fmt);
@@ -68,6 +69,38 @@ usage (const char *fmt, ...)
   vfprintf (stderr, fmt, ap);
   fprintf (stderr, "\nTry `ldd --help' for more information.\n");
   exit (1);
+}
+
+static void
+usage ()
+{
+  printf ("Usage: %s [OPTION]... FILE...\n\
+\n\
+Print shared library dependencies\n\
+\n\
+  -h, --help              print this help and exit\n\
+  -V, --version           print version information and exit\n\
+  -r, --function-relocs   process data and function relocations\n\
+                          (currently unimplemented)\n\
+  -u, --unused            print unused direct dependencies\n\
+                          (currently unimplemented)\n\
+  -v, --verbose           print all information\n\
+                          (currently unimplemented)\n",
+	   program_invocation_short_name);
+}
+
+static void
+print_version ()
+{
+  printf ("ldd (cygwin) %d.%d.%d\n"
+	  "Print shared library dependencies\n"
+	  "Copyright (C) 2009 - %s Chris Faylor\n"
+	  "This is free software; see the source for copying conditions.  There is NO\n"
+	  "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n",
+	  CYGWIN_VERSION_DLL_MAJOR / 1000,
+	  CYGWIN_VERSION_DLL_MAJOR % 1000,
+	  CYGWIN_VERSION_DLL_MINOR,
+	  strrchr (__DATE__, ' ') + 1);
 }
 
 #define print_errno_error_and_return(__fn) \
@@ -84,6 +117,28 @@ usage (const char *fmt, ...)
 
 
 static HANDLE hProcess;
+
+static struct filelist
+{
+  struct filelist *next;
+  char *name;
+} *head;
+
+static bool
+saw_file (char *name)
+{
+  filelist *p;
+
+  for (p = head; p; p = p->next)
+    if (strcasecmp (name, p->name) == 0)
+      return true;
+
+  p = (filelist *) malloc(sizeof (struct filelist));
+  p->next = head;
+  p->name = strdup (name);
+  head = p;
+  return false;
+}
 
 static wchar_t *
 get_module_filename (HANDLE hp, HMODULE hm)
@@ -212,6 +267,7 @@ tocyg (wchar_t *win_fn)
 static int
 print_dlls (dlls *dll, const wchar_t *dllfn, const wchar_t *process_fn)
 {
+  head = NULL;			/* FIXME: memory leak */
   while ((dll = dll->next))
     {
       char *fn;
@@ -226,6 +282,7 @@ print_dlls (dlls *dll, const wchar_t *dllfn, const wchar_t *process_fn)
       else
 	{
 	  fn = tocyg (fullpath);
+	  saw_file (basename (fn));
 	  free (fullpath);
 	}
       printf ("\t%s => %s (%p)\n", basename (fn), fn, dll->lpBaseOfDll);
@@ -250,16 +307,9 @@ report (const char *in_fn, bool multiple)
     print_errno_error_and_return (fn);
 
   bool isdll;
-  wchar_t fn_win_buf[len + 1];
-  if (cygwin_conv_path (CCP_POSIX_TO_WIN_W, fn, fn_win_buf, len))
+  wchar_t fn_win[len + 1];
+  if (cygwin_conv_path (CCP_POSIX_TO_WIN_W, fn, fn_win, len))
     print_errno_error_and_return (fn);
-  wchar_t *fn_win = fn_win_buf + 4;
-
-  if (wcsncmp (fn_win_buf, L"\\\\?\\UNC\\", 8) == 0)
-    {
-      fn_win += 2;
-      *fn_win = L'\\';
-    }
 
   if (!fn || start_process (fn_win, isdll))
     print_errno_error_and_return (in_fn);
@@ -321,51 +371,37 @@ report (const char *in_fn, bool multiple)
   return 0;
 }
 
-
 int
 main (int argc, char **argv)
 {
   int optch;
-  int index;
 
   /* Use locale from environment.  If not set or set to "C", use UTF-8. */
   setlocale (LC_CTYPE, "");
   if (!strcmp (setlocale (LC_CTYPE, NULL), "C"))
     setlocale (LC_CTYPE, "en_US.UTF-8");
-  while ((optch = getopt_long (argc, argv, "dru", longopts, &index)) != -1)
+  while ((optch = getopt_long (argc, argv, opts, longopts, NULL)) != -1)
     switch (optch)
       {
       case 'd':
       case 'r':
       case 'u':
-	usage ("option not implemented `-%c'", optch);
+	error ("option not implemented `-%c'", optch);
 	exit (1);
-      case 0:
-	if (index == 1)
-	  {
-	    printf ("ldd (Cygwin) %s\nCopyright (C) 2009 Chris Faylor\n"
-		    "This is free software; see the source for copying conditions.  There is NO\n"
-		    "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n",
-		    VERSION);
-	    exit (0);
-	  }
-	else
-	  {
-	    puts ("Usage: ldd [OPTION]... FILE...\n\
-      --help              print this help and exit\n\
-      --version           print version information and exit\n\
-  -r, --function-relocs   process data and function relocations\n\
-                          (currently unimplemented)\n\
-  -u, --unused            print unused direct dependencies\n\
-                          (currently unimplemented)\n\
-  -v, --verbose           print all information\n\
-                          (currently unimplemented)");
-	    exit (0);
-	  }
+      case 'h':
+	usage ();
+	exit (0);
+      case 'V':
+	print_version ();
+	return 0;
+      default:
+	fprintf (stderr, "Try `%s --help' for more information.\n",
+		 program_invocation_short_name);
+	return 1;
       }
   argv += optind;
   if (!*argv)
-    usage("missing file arguments");
+    error ("missing file arguments");
 
   int ret = 0;
   bool multiple = !!argv[1];
@@ -376,30 +412,7 @@ main (int argc, char **argv)
   exit (ret);
 }
 
-static struct filelist
-{
-  struct filelist *next;
-  char *name;
-} *head;
-
 static bool printing = false;
-
-static bool
-saw_file (char *name)
-{
-
-  struct filelist *p;
-
-  for (p=head; p; p = p->next)
-    if (strcasecmp (name, p->name) == 0)
-      return true;
-
-  p = (filelist *) malloc(sizeof (struct filelist));
-  p->next = head;
-  p->name = strdup (name);
-  head = p;
-  return false;
-}
 
 
 /* dump of import directory
@@ -426,7 +439,7 @@ dump_import_directory (const void *const section_base,
 
       int len = mbstowcs (NULL, fn, 0);
       if (len <= 0)
-      	continue;
+	continue;
       wchar_t fnw[len + 1];
       mbstowcs (fnw, fn, len + 1);
       /* output DLL's name */
@@ -479,7 +492,7 @@ map_file (const wchar_t *filename)
       CloseHandle (hFile);
       return 0;
     }
-  
+
   CloseHandle (hMapping);
   CloseHandle (hFile);
 
@@ -552,15 +565,12 @@ process_file (const wchar_t *filename)
       DWORD signature;
       IMAGE_FILE_HEADER file_head;
       IMAGE_OPTIONAL_HEADER opt_head;
-      IMAGE_SECTION_HEADER section_header[1];  /* this is an array of unknown length
-					          actual number in file_head.NumberOfSections
-					          if your compiler objects to it length 1 should work */
+      IMAGE_SECTION_HEADER section_header[1];  /* an array of unknown length */
     } *header;
 
   /* revert to regular alignment */
   #include <poppack.h>
 
-  head = NULL;			/* FIXME: memory leak */
   printing = false;
 
   /* first, load file */
@@ -572,7 +582,7 @@ process_file (const wchar_t *filename)
       }
 
   /* get header pointer; validate a little bit */
-  header = (struct tag_header *) skip_dos_stub ((IMAGE_DOS_HEADER *) basepointer);
+  header = (tag_header *) skip_dos_stub ((IMAGE_DOS_HEADER *) basepointer);
   if (!header)
       {
 	puts ("cannot skip DOS stub");
@@ -589,7 +599,7 @@ process_file (const wchar_t *filename)
       }
 
   /* validate PE signature */
-  if (header->signature!=IMAGE_NT_SIGNATURE)
+  if (header->signature != IMAGE_NT_SIGNATURE)
       {
 	puts ("not a PE file");
 	UnmapViewOfFile (basepointer);
@@ -600,7 +610,7 @@ process_file (const wchar_t *filename)
   number_of_sections = header->file_head.NumberOfSections;
 
   /* check there are sections... */
-  if (number_of_sections<1)
+  if (number_of_sections < 1)
       {
 	UnmapViewOfFile (basepointer);
 	return 5;
@@ -629,29 +639,26 @@ process_file (const wchar_t *filename)
   import_index = get_directory_index (import_rva,import_length,number_of_sections,header->section_header);
 
   /* check directory was found */
-  if (import_index <0)
+  if (import_index < 0)
       {
 	puts ("couldn't find import directory in sections");
 	UnmapViewOfFile (basepointer);
 	return 7;
       }
 
-  /* ok, we've found the import directory... action! */
-  {
-      /* The pointer to the start of the import directory's section */
-    const void *section_address = (char*) basepointer + header->section_header[import_index].PointerToRawData;
-    if (dump_import_directory (section_address,
-			     header->section_header[import_index].VirtualAddress,
-				      /* the last parameter is the pointer to the import directory:
-				         section address + (import RVA - section RVA)
-				         The difference is the offset of the import directory in the section */
-			     (const IMAGE_IMPORT_DESCRIPTOR *) ((char *) section_address+import_rva-header->section_header[import_index].VirtualAddress)))
-      {
-	UnmapViewOfFile (basepointer);
-	return 8;
-      }
-  }
-  
+  /* The pointer to the start of the import directory's section */
+  const void *section_address = (char*) basepointer + header->section_header[import_index].PointerToRawData;
+  if (dump_import_directory (section_address,
+			   header->section_header[import_index].VirtualAddress,
+				    /* the last parameter is the pointer to the import directory:
+				       section address + (import RVA - section RVA)
+				       The difference is the offset of the import directory in the section */
+			   (const IMAGE_IMPORT_DESCRIPTOR *) ((char *) section_address+import_rva-header->section_header[import_index].VirtualAddress)))
+    {
+      UnmapViewOfFile (basepointer);
+      return 8;
+    }
+
   UnmapViewOfFile (basepointer);
   return 0;
 }

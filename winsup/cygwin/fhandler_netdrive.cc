@@ -1,6 +1,6 @@
 /* fhandler_netdrive.cc: fhandler for // and //MACHINE handling
 
-   Copyright 2005, 2006, 2007, 2008 Red Hat, Inc.
+   Copyright 2005, 2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -136,7 +136,7 @@ create_thread_and_wait (int what, PVOID in, PVOID out, DWORD outsize,
 {
   netdriveinf ndi = { what, 0, in, out, outsize,
 		      CreateSemaphore (&sec_none_nih, 0, 2, NULL) };
-  cygthread *thr = new cygthread (thread_netdrive, 0, &ndi, name);
+  cygthread *thr = new cygthread (thread_netdrive, &ndi, name);
   if (thr->detach (ndi.sem))
     ndi.ret = ERROR_OPERATION_ABORTED;
   CloseHandle (ndi.sem);
@@ -145,14 +145,14 @@ create_thread_and_wait (int what, PVOID in, PVOID out, DWORD outsize,
 
 /* Returns 0 if path doesn't exist, >0 if path is a directory,
    -1 if path is a file, -2 if it's a symlink.  */
-int
+virtual_ftype_t
 fhandler_netdrive::exists ()
 {
   char *to;
   const char *from;
   size_t len = strlen (get_name ());
   if (len == 2)
-    return 1;
+    return virt_rootdir;
   char namebuf[len + 1];
   for (to = namebuf, from = get_name (); *from; to++, from++)
     *to = (*from == '/') ? '\\' : *from;
@@ -164,15 +164,9 @@ fhandler_netdrive::exists ()
   nr.lpRemoteName = namebuf;
   DWORD ret = create_thread_and_wait (GET_RESOURCE_OPENENUM,
 				      &nr, &nh, 0, "WNetOpenEnum");
-  if (ret != NO_ERROR)
-    {
-      if (nh.dom)
-	WNetCloseEnum (nh.dom);
-      if (nh.net)
-	WNetCloseEnum (nh.net);
-      return 0;
-    }
-  return 1;
+  if (nh.dom)
+    WNetCloseEnum (nh.dom);
+  return ret != NO_ERROR ? virt_none : virt_directory;
 }
 
 fhandler_netdrive::fhandler_netdrive ():
@@ -251,27 +245,27 @@ fhandler_netdrive::readdir (DIR *dir, dirent *de)
 	{
 	  de->d_ino = readdir_get_ino (nro->lpRemoteName, false);
 	  /* We can't trust remote inode numbers of only 32 bit.  That means,
-	     all remote inode numbers when running under NT4, as well as
 	     remote NT4 NTFS, as well as shares of Samba version < 3.0. */
 	  if (de->d_ino <= UINT_MAX)
 	    de->d_ino = hash_path_name (0, nro->lpRemoteName);
 	}
+      de->d_type = DT_DIR;
 
       res = 0;
     }
 out:
-  syscall_printf ("%d = readdir (%p, %p)", res, dir, de);
+  syscall_printf ("%d = readdir(%p, %p)", res, dir, de);
   return res;
 }
 
 void
-fhandler_netdrive::seekdir (DIR *dir, _off64_t pos)
+fhandler_netdrive::seekdir (DIR *dir, long pos)
 {
   rewinddir (dir);
   if (pos < 0)
     return;
   while (dir->__d_position < pos)
-    if (!readdir (dir, dir->__d_dirent))
+    if (readdir (dir, dir->__d_dirent))
       break;
 }
 
@@ -324,7 +318,7 @@ fhandler_netdrive::open (int flags, mode_t mode)
   set_flags ((flags & ~O_TEXT) | O_BINARY | O_DIROPEN);
   set_open_status ();
 out:
-  syscall_printf ("%d = fhandler_netdrive::open (%p, %d)", res, flags, mode);
+  syscall_printf ("%d = fhandler_netdrive::open(%p, %d)", res, flags, mode);
   return res;
 }
 

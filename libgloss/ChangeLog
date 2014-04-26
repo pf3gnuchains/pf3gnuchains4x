@@ -1,3 +1,415 @@
+2012-01-17  Bin Cheng  <bin.cheng@arm.com>
+
+	* arm/linux-crt0.c: Use ldr instead of adr to get address of
+	_start_thumb.
+
+2011-12-18  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin/clear_cache_range.c: New file.
+	* bfin/Makefile.in (SIM_OBJS): Add clear_cache_range.o.
+	(BOARD_OBJS): Likewise.
+	(BOARD_BSP): Set to libbfinbsp.a.
+	(${BOARD_BSP}): New rule.
+
+2011-12-15  Konrad Eisele <konrad@gaisler.com>
+
+	* configure.in: Add SPARC LEON support.
+	* configure: Regenerated.
+	* sparc_leon/asm-leon/amba.h, sparc_leon/asm-leon/asmmacro.h,
+	sparc_leon/asm-leon/clock.h, sparc_leon/asm-leon/contextswitch.h,
+	sparc_leon/asm-leon/elfmacro.h, sparc_leon/asm-leon/head.h,
+	sparc_leon/asm-leon/irq.h, sparc_leon/asm-leon/jiffies.h,
+	sparc_leon/asm-leon/lambapp.h, sparc_leon/asm-leon/lambapp_devs.h,
+	sparc_leon/asm-leon/leon.h, sparc_leon/asm-leon/leon3.h,
+	sparc_leon/asm-leon/leonbare_debug.h, sparc_leon/asm-leon/leonbare_kernel.h,
+	sparc_leon/asm-leon/leonbare_kernel_queue.h, sparc_leon/asm-leon/leoncompat.h,
+	sparc_leon/asm-leon/leondbg.h, sparc_leon/asm-leon/leonstack.h,
+	sparc_leon/asm-leon/liblocks.h, sparc_leon/asm-leon/linkage.h,
+	sparc_leon/asm-leon/param.h, sparc_leon/asm-leon/queue.h,
+	sparc_leon/asm-leon/spinlock.h, sparc_leon/asm-leon/stack.h,
+	sparc_leon/asm-leon/time.h, sparc_leon/asm-leon/timer.h,
+	sparc_leon/asm-leon/types.h, sparc_leon/asm-leon/winmacros.h:
+	New file.
+	* sparc_leon/Makefile.in, sparc_leon/_exit.c,
+	sparc_leon/amba.c, sparc_leon/amba_dbg.c,
+	sparc_leon/amba_driver.c, sparc_leon/amba_scan.c,
+	sparc_leon/asm-leon, sparc_leon/bdinit.S,
+	sparc_leon/busscan.S, sparc_leon/cacheA.S,
+	sparc_leon/catch_interrupt.c, sparc_leon/catch_interrupt_mvt.c,
+	sparc_leon/catch_interrupt_pending.c, sparc_leon/catch_interrupt_svt.c,
+	sparc_leon/configure.in,
+	sparc_leon/console.c, sparc_leon/console_dbg.c,
+	sparc_leon/console_init.c, sparc_leon/contextswitch.c,
+	sparc_leon/contextswitch_asm.S, sparc_leon/crt0.S,
+	sparc_leon/crti.S, sparc_leon/crtn.S,
+	sparc_leon/etrap.S, sparc_leon/etrap_fast.S,
+	sparc_leon/fpu.S, sparc_leon/gettimeofday.c,
+	sparc_leon/initcalls.c, sparc_leon/io.c,
+	sparc_leon/irqinstall.S, sparc_leon/irqtrap.S,
+	sparc_leon/irqtrap_fast.S, sparc_leon/jiffies.c,
+	sparc_leon/kernel.c, sparc_leon/kernel_context.S,
+	sparc_leon/kernel_debug.c, sparc_leon/kernel_debug_var.c,
+	sparc_leon/kernel_mm.c, sparc_leon/kernel_mutex.c,
+	sparc_leon/kernel_queue.c, sparc_leon/kernel_sched.c,
+	sparc_leon/kernel_thread.c, sparc_leon/lcpuinit.S,
+	sparc_leon/locore.S, sparc_leon/locore_atexit.c,
+	sparc_leon/locore_clean.S, sparc_leon/locore_mvt.S,
+	sparc_leon/locore_mvt_reset.S, sparc_leon/locore_svt.S,
+	sparc_leon/locore_svt_reset.S, sparc_leon/locore_svtdisp.S,
+	sparc_leon/locore_var.S, sparc_leon/locore_var_svt.S,
+	sparc_leon/mmu_asm.S, sparc_leon/mutex.c,
+	sparc_leon/nocache.S, sparc_leon/pnpinit.c,
+	sparc_leon/pnpinit_malloc.c, sparc_leon/pnpinit_simple.c,
+	sparc_leon/regwin.S, sparc_leon/regwin_patch.c,
+	sparc_leon/regwin_slow.S, sparc_leon/regwinflush.S,
+	sparc_leon/rtc.c, sparc_leon/rtrap.S,
+	sparc_leon/rtrap_fast.S, sparc_leon/stop.S,
+	sparc_leon/timer.c, sparc_leon/times.c:
+	New file
+	* sparc_leon/configure: Regenerate
+
+2011-12-13  Richard Earnshaw  <rearnsha@arm.com>
+            Thomas Klein  <th.r.klein@web.de>
+
+	* arm/crt0.S: Manually set the target architecture
+	when compiling for Thumb1 on EABI targets.
+	Avoid v6-only Thumb-1 MOV instruction.
+
+2011-11-28  DJ Delorie  <dj@redhat.com>
+
+	* configure.in: Add rl78.
+	* configure: Regenerate.
+	* rl78: New directory
+
+2011-11-08  Mike Frysinger  <vapier@gentoo.org>
+
+	* libnosys/Makefile.in (install): Use INSTALL_DATA.
+
+2011-10-07  Nick Clifton  <nickc@redhat.com>
+
+	* rx/crt0.S: Initialise the PID address register.
+	(__pid_base): Define weakly.
+
+2011-09-29  Matthew Gretton-Dann  <matthew.gretton-dann@arm.com>
+
+	* arm/crt0.s: Support 0 heap base response from HeapInfo syscall.
+
+2011-09-29  Bin Cheng  <bin.cheng@arm.com>
+
+	* arm/arm.h (HAVE_CALL_INDIRECT): Define.
+        * arm/crt0.S (indirect_call): New macro.  Encodes indirect
+	function calls.  Does not use blx for pre-armv5 targets.
+
+2011-08-19  Nick Clifton  <nickc@redhat.com>
+
+	* iq2000/sim.ld (.gcc_except_table): Include .gcc_except_table.foo
+	sections as well.
+
+2011-08-08  Mike Stump <mikestump@comcast.net>
+
+	* Makefile.in: Make stmp-bsp and install consistent with
+	subdir_do target with regards to error handling.
+
+2011-07-13  Bin Cheng <bin.cheng@arm.com>
+
+	* arm/crt0.S: Support armv6-m processors in libgloss.
+	* arm/swi.h: Likewise.
+	* arm/trap.S: Likewise.
+	* arm/redboot-crt0.S: Likewise.
+	* arm/linux-crt0.c: Likewise.
+	* arm/arm.h: New.
+
+2011-07-01  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin/syscalls.c (_getpid): Call do_syscall with func argument n and
+	return the result.
+	(_fstat): Delete stub body.  Add block array and assign file/st to it.
+	Call do_syscall with result.
+	(_stat): Delete stub body.  Add block array and assign fname/st to
+	it.  Call do_syscall with result.
+	(_link): Change func arguments to accept two strings.  Add block array
+	and assign existing/new to it.  Call do_syscall with result.
+	(_unlink): Change func arguments to accept a string.  Call do_syscall
+	with new argument.
+
+2011-07-01  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin/syscalls.c (_lseek): Change 3rd arg name to whence.  Increase
+	block array to 3 elements.  Set 3rd element to whence.
+
+2011-06-29  Jeff Johnston  <jjohnstn@redhat.com>
+
+	* arm/Makefile.in: Add $CFLAGS to compile commands for specified .o targets.
+
+2011-06-22  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin/syscalls.c (do_syscall): Delete local variable definitions.
+	Declare result, result2, errcode local ints.  Delete asm inputs
+	and outputs.  Set output constraints to q0/result, q1/result2, and
+	q2/errcode.  Set input constraints to qA/reason and q0/arg.  Set
+	errno to errcode.
+
+2011-06-21  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin/syscalls.c: Trim trailing whitespace.
+	* bfin/crt0.S: Likewise.
+
+2011-06-14  Joseph Myers  <joseph@codesourcery.com>
+
+	* configure.in: Don't handle strongarm, ep9312 and xscale target
+	names.
+	* configure: Regenerate.
+	* libnosys/configure.in: Don't handle strongarm and thumb target
+	names.
+	* libnosys/configure: Regenerate.
+
+2011-05-27  Nick Clifton  <nickc@redhat.com>
+
+	* v8500/sbrk.c (_sbrk): Tidy code.
+	Base start of heap on the "heap_start" symbol.
+
+2011-03-26  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin/include/builtins.h (__builtin_raise): Change constraint to n.
+	(__builtin_excpt): Likewise.
+
+2011-03-26  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin/Makefile.in (install-sim): Exit when install fails.
+	(install-board): Likewise.
+
+2011-03-24  Nick Clifton  <nickc@redhat.com>
+
+	* xstormy16/crt0.s (_hwint): Fix .size directive.
+
+	* frv/crt0.S (__frv_fix_usrptrs): Fix .size directive.
+
+2011-03-21  Kevin Buettner  <kevinb@redhat.com>
+
+	* v850/sys/syscall.h (SYS_rename): Define.
+
+2011-01-10  Mike Frysinger  <vapier@gentoo.org>
+
+	* Makefile.in (stmp-bsp): Exit when subdirs fail.
+	(install): Likewise.
+
+2010-12-02  Jayant Sonar  jayant.sonar@kpitcummins.com
+	    Kaushik Phatak  kaushik.phatak@kpitcummins.com
+
+	* configure.in: Add CR16 support.
+	* configure: Regenerated.
+	* cr16/aclocal.m4: New.
+	* cr16/close.c: New.
+	* cr16/configure: New.
+	* cr16/configure.in: New.
+	* cr16/crt1.S: New.
+	* cr16/crti.S: New.
+	* cr16/crtn.S: New.
+	* cr16/dvz_hndl.c: New.
+	* cr16/_exit.c: New.
+	* cr16/flg_hndl.c: New.
+	* cr16/fstat.c: New.
+	* cr16/_getenv.c: New.
+	* cr16/getpid.c: New.
+	* cr16/iad_hndl.c: New.
+	* cr16/intable.c: New.
+	* cr16/isatty.c: New.
+	* cr16/kill.c: New.
+	* cr16/lseek.c: New.
+	* cr16/Makefile.in: New.
+	* cr16/open.c: New.
+	* cr16/putnum.c: New.
+	* cr16/read.c: New.
+	* cr16/_rename.c: New.
+	* cr16/sbrk.c: New.
+	* cr16/sim.ld: New.
+	* cr16/stat.c: New.
+	* cr16/svc_hndl.c: New.
+	* cr16/time.c: New.
+	* cr16/und_hndl.c: New.
+	* cr16/unlink.c: New.
+	* cr16/write.c: New.
+
+2010-11-17  Bernd Schmidt  <bernds@codesourcery.com>
+
+	* tic6x/syscalls.c (cio_getclk_to_host, cio_getclk_from_host): New
+	structs.
+	(cio_to_host, cio_from_host): Use them.
+	(clock): New function.
+
+2010-10-17  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin/include/blackfin.h, bfin/include/builtins.h,
+	bfin/include/ccblkfn.h, bfin/include/cdefBF512.h,
+	bfin/include/cdefBF514.h, bfin/include/cdefBF516.h,
+	bfin/include/cdefBF518.h, bfin/include/cdefBF51x_base.h,
+	bfin/include/cdefBF522.h, bfin/include/cdefBF523.h,
+	bfin/include/cdefBF524.h, bfin/include/cdefBF525.h,
+	bfin/include/cdefBF526.h, bfin/include/cdefBF527.h,
+	bfin/include/cdefBF52x_base.h, bfin/include/cdefBF531.h,
+	bfin/include/cdefBF532.h, bfin/include/cdefBF533.h,
+	bfin/include/cdefBF534.h, bfin/include/cdefBF535.h,
+	bfin/include/cdefBF536.h, bfin/include/cdefBF537.h,
+	bfin/include/cdefBF538.h, bfin/include/cdefBF539.h,
+	bfin/include/cdefBF53x.h, bfin/include/cdefBF542.h,
+	bfin/include/cdefBF542M.h, bfin/include/cdefBF544.h,
+	bfin/include/cdefBF544M.h, bfin/include/cdefBF547.h,
+	bfin/include/cdefBF547M.h, bfin/include/cdefBF548.h,
+	bfin/include/cdefBF548M.h, bfin/include/cdefBF549.h,
+	bfin/include/cdefBF549M.h, bfin/include/cdefBF54x_base.h,
+	bfin/include/cdefBF561.h, bfin/include/cdef_LPBlackfin.h,
+	bfin/include/cdefblackfin.h, bfin/include/cplb.h,
+	bfin/include/cplbtab.h, bfin/include/defBF512.h,
+	bfin/include/defBF514.h, bfin/include/defBF516.h,
+	bfin/include/defBF518.h, bfin/include/defBF51x_base.h,
+	bfin/include/defBF522.h, bfin/include/defBF523.h,
+	bfin/include/defBF524.h, bfin/include/defBF525.h,
+	bfin/include/defBF526.h, bfin/include/defBF527.h,
+	bfin/include/defBF52x_base.h, bfin/include/defBF531.h,
+	bfin/include/defBF532.h, bfin/include/defBF533.h,
+	bfin/include/defBF534.h, bfin/include/defBF535.h,
+	bfin/include/defBF536.h, bfin/include/defBF537.h,
+	bfin/include/defBF538.h, bfin/include/defBF539.h,
+	bfin/include/defBF542.h, bfin/include/defBF542M.h,
+	bfin/include/defBF544.h, bfin/include/defBF544M.h,
+	bfin/include/defBF547.h, bfin/include/defBF547M.h,
+	bfin/include/defBF548.h, bfin/include/defBF548M.h,
+	bfin/include/defBF549.h, bfin/include/defBF549M.h,
+	bfin/include/defBF54x_base.h, bfin/include/defBF561.h,
+	bfin/include/defblackfin.h, bfin/include/sysreg.h,
+	bfin/include/sys/anomaly_macros_rtl.h, bfin/include/sys/excause.h,
+	bfin/include/sys/exception.h, bfin/include/sys/mc_typedef.h,
+	bfin/include/sys/platform.h, bfin/include/sys/pll.h:
+	Update to Visual DSP 5.0 Update 8.
+
+2010-10-16  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin/Makefile.in (BOARD_SCRIPTS): Add bf592.ld.
+	* bfin/bf592: New linker scripts.
+	* bfin/include/cdefBF592-A.h, bfin/include/cdefBF59x_base.h,
+	bfin/include/defBF592-A.h, bfin/include/defBF59x_base.h: New files.
+	* bfin/include/sys/_adi_platform.h: Include new bf592 headers.
+
+2010-10-15  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin/Makefile.in (BOARD_SCRIPTS): Add bf504.ld and bf506.ld.
+	* bfin/bf504.ld, bfin/bf506.ld: New linker scripts.
+	* bfin/include/cdefBF504.h, bfin/include/cdefBF504F.h,
+	bfin/include/cdefBF506F.h, bfin/include/cdefBF50x_base.h,
+	bfin/include/defBF504.h, bfin/include/defBF504F.h,
+	bfin/include/defBF506F.h, bfin/include/defBF50x_base.h: New files.
+	* bfin/include/def_LPBlackfin.h: Add DMC_P for __ADSPBF50x__.
+	* bfin/include/sys/_adi_platform.h: Include new bf50x headers.
+
+2010-10-15  Stuart Henderson  <stuart.henderson@analog.com>
+
+	* bfin/bfin-common-mc.ld: Add .l1.data and .l1.text input sections.
+	* bfin/bfin-common-sc.ld: Likewise.
+
+2010-10-15  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin/include/sys/_adi_platform.h: Remove __ADSPBF541__.
+	* bfin/include/cdefBF541.h, bfin/include/defBF541.h: Punt.
+
+2010-10-08  Bernd Schmidt  <bernds@codesourcery.com>
+	Joseph Myers  <joseph@codesourcery.com>
+
+	* configure.in: Handle tic6x targets.
+	* configure: Regenerate.
+	* tic6x/Makefile.in, tic6x/configure.in, tic6x/crt0.S,
+	tic6x/getpid.c, tic6x/kill.c, tic6x/sbrk.c, tic6x/syscalls.c: New.
+	* tic6x/configure: New (generated).
+
+2010-10-02  Anthony Green  <green@moxielogic.com>
+
+	* moxie/Makefile.in (QEMU_OBJS): Add missing object files to the
+	qemu support library.
+
+2010-10-02  Anthony Green  <green@moxielogic.com>
+
+	* moxie/crt0.S (_start): Minor optimizations to __start.
+
+2010-09-23  Mike Frysinger  <vapier@gentoo.org>
+	    Corinna Vinschen  <vinschen@redhat.com>
+
+	* doc/porting.texi: Fix typos.
+
+2010-09-22  Mike Frysinger  <vapier@gentoo.org>
+
+	* README: Add bfin to the list.
+
+2010-08-27  Christophe Lyon  <christophe.lyon@st.com>
+
+	* syscalls.c (_isatty): Fix return value.
+
+2010-07-23  Naveen.H.S  <naveenh1@kpitcummins.com>
+            Gina Verlekar <gina.verlekar@kpitcummins.com>
+
+        Moving files from newlib/libc/sys/sysnecv850 to v850
+
+        * libnosys/configure: Regenerated.
+        * libnosys/configure.in: Compact v850 support to v850*-*-*.
+        * libnosys/configure: Regenerated.
+        * configure.in: Add libgloss support for v850.
+        * configure: Regenerated.
+        * v850/access.c: New file.
+        * v850/aclocal.m4: New.
+        * v850/chmod.c: New.
+        * v850/chown.c: New.
+        * v850/close.c: New.
+        * v850/configure: New.
+        * v850/configure.in: New.
+        * v850/crt0.S: New.
+        * v850/crt1.c: New.
+        * v850/execv.c: New.
+        * v850/execve.c: New.
+        * v850/_exit.c: New.
+        * v850/fork.c: New.
+        * v850/fstat.c: New.
+        * v850/getpid.c: New.
+        * v850/gettime.c: New.
+        * v850/isatty.c: New.
+        * v850/kill.c: New.
+        * v850/link.c: New.
+        * v850/lseek.c: New.
+        * v850/Makefile.in: New.
+        * v850/open.c: New.
+        * v850/pipe.c: New.
+        * v850/read.c: New.
+        * v850/sbrk.c: New.
+        * v850/sim.ld: New.
+        * v850/stat.c: New.
+        * v850/time.c: New.
+        * v850/times.c: New.
+        * v850/trap.S: New.
+        * v850/unlink.c: New.
+        * v850/utime.c: New.
+        * v850/wait.c: New.
+        * v850/write.c: New.
+
+2010-07-19  Rafael Campos  <methril@gmail.com>
+
+	* m68k/cf-crt1.c (hardware_init_hook): Accommodate new family
+	__mcf_family_51 since gcc 4.5.1.
+
+2010-06-29  Nick Clifton  <nickc@redhat.com>
+
+	* xstormy16/eva_app.ld (.gcc_except_table): Include sections with
+	the .gcc_except_table. prefix.
+	* xstormy16/eva_stub.ld: Likewise.
+	* xstormy16/sim_high.ld: Likewise.
+	* xstormy16/sim_low.ld: Likewise.
+
+2010-05-03  Michael Eager <eager@eagercon.com>
+
+	* rs6000/Makefile.in: Remove xil-exit.o.
+
+2010-02-08  Conny Marco Menebrocker <c-m-m@gmx.de>
+
+	* xc16x/xc16x.mt: New file.
+	* xc16x/configure.in: Add target_makefile_frag reference.
+	* xc16x/configure: Regenerated.
+
 2009-12-17  Jeff Johnston  <jjohnstn@redhat.com>
 
 	* mn10300/Makefile.in: Add mkdir call to make installation

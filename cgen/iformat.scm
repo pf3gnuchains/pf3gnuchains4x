@@ -1,5 +1,5 @@
 ; Instruction formats.
-; Copyright (C) 2000, 2009 Red Hat, Inc.
+; Copyright (C) 2000, 2009, 2010 Red Hat, Inc.
 ; This file is part of CGEN.
 ; See file COPYING.CGEN for details.
 
@@ -259,6 +259,8 @@
 ; fragments in pbb simulators).  Don't cause spurious differences.
 
 (define (/sfmt-search-key insn cti? sorted-used-iflds sem-in-ops sem-out-ops)
+  (assert (insn-ifmt insn))
+
   (let ((op-key (lambda (op)
 		  (string-append " ("
 				 (or (->string (obj-attr-value insn 'sanitize))
@@ -282,11 +284,11 @@
 				 ")")))
 	)
     (list
+     ;; Use the iformat key so that each sformat maps to only one iformat.
+     (if (= (length sorted-used-iflds) 0)
+	 "no-used-ifields"
+	 (ifmt-key (insn-ifmt insn)))
      cti?
-     (insn-length insn)
-     (string-map (lambda (ifld)
-		   (string-append " (" (obj:str-name ifld) " " (ifld-ilk ifld) ")"))
-		 sorted-used-iflds)
      (string-map op-key
 		 sem-in-ops)
      (string-map op-key
@@ -484,6 +486,8 @@
 ; We assume INSN's <iformat> has already been recorded.
 
 (define (/ifmt-lookup-sfmt! insn fmt-desc sfmt-list)
+  (assert (insn-ifmt insn))
+
   (let* ((search-key (/sfmt-search-key insn (-fmt-desc-cti? fmt-desc)
 				       (-fmt-desc-used-iflds fmt-desc)
 				       (-fmt-desc-in-ops fmt-desc)

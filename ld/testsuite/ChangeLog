@@ -1,64 +1,31 @@
-2010-01-14  H.J. Lu  <hongjiu.lu@intel.com>
+2012-01-17  Alan Modra  <amodra@gmail.com>
 
-	* ld-elf/orphan4.d: Support 64bit targets.
+	* config/default.exp: Provide tmpdir/ld/collect-ld.
 
-2010-01-13  DJ Delorie  <dj@redhat.com>
+2012-01-10  H.J. Lu  <hongjiu.lu@intel.com>
 
-	* ld-elf/orphan4.d: New.
-	* ld-elf/orphan4.ld: New.
-	* ld-elf/orphan4.s: New.
+	PR ld/13581
+	* ld-x86-64/ilp32-4.s: New.
+	* ld-x86-64/ilp32-10.d: Likewise.
+	* ld-x86-64/ilp32-10.s: Likewise.
 
-2010-01-13  Chao-ying Fu  <fu@mips.com>
+	* ld-x86-64/ilp32-4.d: Adjusted.
+	* ld-x86-64/ilp32-5.d: Likewise.
+	* ld-x86-64/ilp32-5.s: Likewise.
 
-	* ld-mips-elf/jr-to-b-1.d, ld-mips-elf/jr-to-b-2.d: New tests.
-	* ld-mips-elf/jr-to-b-1.s, ld-mips-elf/jr-to-b-2.s: Source.
-	* ld-mips-elf/mips-elf.exp: Run new tests.
+	* ld-x86-64/x86-64.exp: Run ilp32-10.
 
-2010-01-13  Daniel Jacobowitz  <dan@codesourcery.com>
+2012-01-05  Nick Clifton  <nickc@redhat.com>
 
-	* ld-arm/arm-elf.exp (armelftests): Assemble Cortex-A8 tests with
-	-mcpu=cortex-a8.
+	* ld-x86-64/x86-64.exp: Add test of linking mixed 32-bit and
+	64-bit objects when the 32-bit object (loaded first) contains 32+
+	local symbols, all referenced by relocs and the 64-bit object
+	contains a reloc that uses a symbol in the 32-bit object.
+	* 32bit.s: New source file.
+	* 64bit.s: New source file.
+	* incompatible.l: New expected linker output file.
 
-2010-01-13  Nick Clifton  <nickc@redhat.com>
-
-	* ld-scrips/sort.exp: Skip these tests when the target is the
-	h8300.
-
-2010-01-11  H.J. Lu  <hongjiu.lu@intel.com>
-
-	PR ld/11146
-	* ld-elf/dynsym1.d: New.
-
-2010-01-07  H.J. Lu  <hongjiu.lu@intel.com>
-
-	PR ld/11138
-	* ld-elf/pr11138-1.c: New.
-	* ld-elf/pr11138-1.map: Likewise.
-	* ld-elf/pr11138-2.c: Likewise.
-	* ld-elf/pr11138-2.map: Likewise.
-	* ld-elf/pr11138.out: Likewise.
-
-	* ld-elf/shared.exp (build_tests): Add libpr11138-1.so and
-	libpr11138-2.o.
-	(run_tests): Add 2 tests for PR ld/11138.
-
-2010-01-07  H.J. Lu  <hongjiu.lu@intel.com>
-
-	PR ld/11133
-	* ld-gc/gc.exp: Run start.
-
-	* ld-gc/start.d: New.
-	* ld-gc/start.s: Likewise.
-
-2010-01-07  H.J. Lu  <hongjiu.lu@intel.com>
-
-	PR ld/11143
-	* ld-gc/gc.exp: Run abi-note.
-
-	* ld-gc/abi-note.d: New.
-	* ld-gc/abi-note.s: Likewise.
-
-For older changes see ChangeLog-2009
+For older changes see ChangeLog-2011
 
 Local Variables:
 mode: change-log

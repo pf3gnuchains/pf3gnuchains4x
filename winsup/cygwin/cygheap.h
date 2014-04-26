@@ -1,6 +1,7 @@
 /* cygheap.h: Cygwin heap manager.
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
+   2010, 2011 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -180,7 +181,7 @@ public:
     if (curr_imp_token != NO_IMPERSONATION)
       CloseHandle (curr_imp_token);
     if (curr_primary_token != NO_IMPERSONATION
-    	&& curr_primary_token != external_token
+	&& curr_primary_token != external_token
 	&& curr_primary_token != internal_token)
       CloseHandle (curr_primary_token);
     if (external_token != NO_IMPERSONATION)
@@ -210,9 +211,16 @@ class cwdstuff
 private:
   char *posix;
   HANDLE dir;
+  DWORD drive_length;
+  int error;		/* This contains an errno number which corresponds
+			   to the problem with this path when trying to start
+			   a native Win32 application.  See cwdstuff::set for
+			   how it gets set.  See child_info_spawn::worker for how
+			   it's evaluated. */
+  void override_win32_cwd (bool, ULONG);
+
 public:
   UNICODE_STRING win32;
-  DWORD drive_length;
   static muto cwd_lock;
   const char *get_posix () const { return posix; };
   void reset_posix (wchar_t *);
@@ -225,8 +233,10 @@ public:
     cwd_lock.release ();
     return ret;
   }
+  int get_error () const { return error; }
+  const char *get_error_desc () const;
   void init ();
-  int set (PUNICODE_STRING, const char *, bool);
+  int set (path_conv *, const char *);
 };
 
 #ifdef DEBUGGING
@@ -274,6 +284,7 @@ struct init_cygheap: public mini_cygheap
   cygheap_user user;
   user_heap_info user_heap;
   mode_t umask;
+  unsigned long rlim_core;
   HANDLE console_h;
   cwdstuff cwd;
   dtable fdtab;
@@ -282,10 +293,7 @@ struct init_cygheap: public mini_cygheap
 #endif
   struct sigaction *sigs;
 
-  fhandler_tty_slave *ctty;	/* Current tty */
-#ifdef NEWVFORK
-  fhandler_tty_slave *ctty_on_hold;
-#endif
+  fhandler_termios *ctty;	/* Current tty */
   struct _cygtls **threadlist;
   size_t sthreads;
   pid_t pid;			/* my pid */
@@ -312,28 +320,24 @@ class cygheap_fdmanip
 {
  protected:
   int fd;
-  fhandler_base **fh;
   bool locked;
  public:
-  cygheap_fdmanip (): fh (NULL) {}
+  cygheap_fdmanip (): fd (-1), locked (false) {}
   virtual ~cygheap_fdmanip ()
   {
     if (locked)
       cygheap->fdtab.unlock ();
   }
-  void release ()
-  {
-    cygheap->fdtab.release (fd);
-  }
+  virtual void release () { cygheap->fdtab.release (fd); }
   operator int &() {return fd;}
-  operator fhandler_base* &() {return *fh;}
-  operator fhandler_socket* () const {return reinterpret_cast<fhandler_socket *> (*fh);}
-  operator fhandler_pipe* () const {return reinterpret_cast<fhandler_pipe *> (*fh);}
-  void operator = (fhandler_base *fh) {*this->fh = fh;}
-  fhandler_base *operator -> () const {return *fh;}
+  operator fhandler_base* &() {return cygheap->fdtab[fd];}
+  operator fhandler_socket* () const {return reinterpret_cast<fhandler_socket *> (cygheap->fdtab[fd]);}
+  operator fhandler_pipe* () const {return reinterpret_cast<fhandler_pipe *> (cygheap->fdtab[fd]);}
+  void operator = (fhandler_base *fh) {cygheap->fdtab[fd] = fh;}
+  fhandler_base *operator -> () const {return cygheap->fdtab[fd];}
   bool isopen () const
   {
-    if (*fh)
+    if (cygheap->fdtab[fd])
       return true;
     set_errno (EBADF);
     return false;
@@ -352,10 +356,7 @@ class cygheap_fdnew : public cygheap_fdmanip
     else
       fd = cygheap->fdtab.find_unused_handle (seed_fd + 1);
     if (fd >= 0)
-      {
-	locked = lockit;
-	fh = cygheap->fdtab + fd;
-      }
+      locked = lockit;
     else
       {
 	set_errno (EMFILE);
@@ -364,21 +365,28 @@ class cygheap_fdnew : public cygheap_fdmanip
 	locked = false;
       }
   }
-  void operator = (fhandler_base *fh) {*this->fh = fh;}
+  ~cygheap_fdnew ()
+  {
+    if (cygheap->fdtab[fd])
+      cygheap->fdtab[fd]->refcnt (1);
+  }
+  void operator = (fhandler_base *fh) {cygheap->fdtab[fd] = fh;}
 };
 
 class cygheap_fdget : public cygheap_fdmanip
 {
- public:
+  fhandler_base *fh;
+public:
   cygheap_fdget (int fd, bool lockit = false, bool do_set_errno = true)
   {
     if (lockit)
       cygheap->fdtab.lock ();
-    if (fd >= 0 && fd < (int) cygheap->fdtab.size
-	&& *(fh = cygheap->fdtab + fd) != NULL)
+    if (fd >= 0 && fd < (int) cygheap->fdtab.size && cygheap->fdtab[fd] != NULL)
       {
 	this->fd = fd;
 	locked = lockit;
+	fh = cygheap->fdtab[fd];
+	fh->refcnt (1);
       }
     else
       {
@@ -388,7 +396,26 @@ class cygheap_fdget : public cygheap_fdmanip
 	if (lockit)
 	  cygheap->fdtab.unlock ();
 	locked = false;
+	fh = NULL;
       }
+  }
+  ~cygheap_fdget ()
+  {
+    if (!fh)
+      /* nothing to do */;
+    else if (fh->refcnt (-1) > 0)
+      debug_only_printf ("fh %p, %s, refcnt %ld", fh, fh->get_name (), fh->refcnt ());
+    else
+      {
+	debug_only_printf ("deleting fh %p, %s, refcnt %ld", fh, fh->get_name (), fh->refcnt ());
+	delete fh;
+      }
+  }
+  void release ()
+  {
+    fh = cygheap->fdtab[fd];
+    if (cygheap->fdtab.release (fd))
+      fh = NULL;
   }
 };
 
@@ -405,7 +432,7 @@ class cygheap_fdenum : public cygheap_fdmanip
   int next ()
   {
     while (++fd < (int) cygheap->fdtab.size)
-      if (*(fh = cygheap->fdtab + fd) != NULL)
+      if (cygheap->fdtab[fd] != NULL)
 	return fd;
     return -1;
   }
