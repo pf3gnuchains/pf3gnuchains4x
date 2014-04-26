@@ -1,5 +1,5 @@
 /*
- *  $Id: param.h,v 1.4 2009/12/16 21:35:51 jjohnstn Exp $
+ *  $Id$
  */
 
 #ifndef _MACHINE_PARAM_H_
