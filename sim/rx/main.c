@@ -26,7 +26,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 #include <assert.h>
 #include <setjmp.h>
 #include <signal.h>
-#include <getopt.h>
 
 #include "bfd.h"
 

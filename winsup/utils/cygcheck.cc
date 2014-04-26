@@ -63,7 +63,7 @@ void dump_dodgy_apps (int verbose);
 /* Forward declaration */
 static void usage (FILE *, int);
 
-static const char version[] = "$Revision: 1.123 $";
+static const char version[] = "$Revision$";
 
 static const char *known_env_vars[] = {
   "c_include_path",

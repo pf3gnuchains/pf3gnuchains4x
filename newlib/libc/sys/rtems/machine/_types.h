@@ -1,5 +1,5 @@
 /*
- *  $Id: _types.h,v 1.3 2009/12/17 16:10:41 jjohnstn Exp $
+ *  $Id$
  */
 
 #ifndef _MACHINE__TYPES_H
