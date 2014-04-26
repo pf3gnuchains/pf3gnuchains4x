@@ -1,3 +1,9 @@
+2012-09-03  Nick Clifton  <nickc@redhat.com>
+
+	PR sim/14540
+	* armsupp.c (ARMul_MRC): Return 0 if access to the MRC instruction
+	is denied.
+
 2011-12-18  Eric Botcazou  <ebotcazou@adacore.com>
 
 	* configure: Regenerate.
