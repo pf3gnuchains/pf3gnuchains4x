@@ -1,7 +1,7 @@
 /* fhandler_tty.cc
 
-   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
+   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
+   2008, 2009, 2010, 2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -11,6 +11,7 @@ details. */
 
 #include "winsup.h"
 #include <stdlib.h>
+#include <sys/param.h>
 #include <cygwin/kd.h>
 #include "cygerrno.h"
 #include "security.h"
@@ -25,6 +26,7 @@ details. */
 #include "cygthread.h"
 #include "child_info.h"
 #include <asm/socket.h>
+#include "cygwait.h"
 
 #define close_maybe(h) \
   do { \
@@ -49,6 +51,32 @@ fhandler_pty_slave::get_unit ()
   return dev ().get_minor ();
 }
 
+bool
+bytes_available (DWORD& n, HANDLE h)
+{
+  DWORD navail, nleft;
+  navail = nleft = 0;
+  bool succeeded = PeekNamedPipe (h, NULL, 0, NULL, &navail, &nleft);
+  if (succeeded)
+    /* nleft should always be the right choice unless something has written 0
+       bytes to the pipe.  In that pathological case we return the actual number
+       of bytes available in the pipe. See cgf-000008 for more details.  */
+    n = nleft ?: navail;
+  else
+    {
+      termios_printf ("PeekNamedPipe(%p) failed, %E", h);
+      n = 0;
+    }
+  debug_only_printf ("n %u, nleft %u, navail %u", n, nleft, navail);
+  return succeeded;
+}
+
+bool
+fhandler_pty_common::bytes_available (DWORD &n)
+{
+  return ::bytes_available (n, get_handle ());
+}
+
 #ifdef DEBUGGING
 static class mutex_stack
 {
@@ -61,9 +89,16 @@ public:
 static int osi;
 #endif /*DEBUGGING*/
 
+void
+fhandler_pty_master::flush_to_slave ()
+{
+  if (get_readahead_valid () && !(get_ttyp ()->ti.c_lflag & ICANON))
+    accept_input ();
+}
+
 DWORD
 fhandler_pty_common::__acquire_output_mutex (const char *fn, int ln,
-					   DWORD ms)
+					     DWORD ms)
 {
   if (strace.active ())
     strace.prntf (_STRACE_TERMIOS, fn, "(%d): pty output_mutex (%p): waiting %d ms", ln, output_mutex, ms);
@@ -141,7 +176,7 @@ fhandler_pty_master::accept_input ()
       DWORD rc;
       DWORD written = 0;
 
-      termios_printf ("about to write %d chars to slave", bytes_left);
+      paranoid_printf ("about to write %d chars to slave", bytes_left);
       rc = WriteFile (get_output_handle (), p, bytes_left, &written, NULL);
       if (!rc)
 	{
@@ -193,6 +228,8 @@ fhandler_pty_master::process_slave_output (char *buf, size_t len, int pktmode_on
   int column = 0;
   int rc = 0;
 
+  flush_to_slave ();
+
   if (len == 0)
     goto out;
 
@@ -209,7 +246,6 @@ fhandler_pty_master::process_slave_output (char *buf, size_t len, int pktmode_on
       goto out;
     }
 
-
   for (;;)
     {
       /* Set RLEN to the number of bytes to read from the pipe.  */
@@ -225,50 +261,40 @@ fhandler_pty_master::process_slave_output (char *buf, size_t len, int pktmode_on
       if (rlen > sizeof outbuf)
 	rlen = sizeof outbuf;
 
-      HANDLE handle = get_io_handle ();
-
-      n = 0; // get_readahead_into_buffer (outbuf, len);
-      if (!n)
+      n = 0;
+      for (;;)
 	{
-	  /* Doing a busy wait like this is quite inefficient, but nothing
-	     else seems to work completely.  Windows should provide some sort
-	     of overlapped I/O for pipes, or something, but it doesn't.  */
-	  while (1)
-	    {
-	      if (!PeekNamedPipe (handle, NULL, 0, NULL, &n, NULL))
-		{
-		  termios_printf ("PeekNamedPipe(%p) failed, %E", handle);
-		  goto err;
-		}
-	      if (n > 0)
-		break;
-	      if (hit_eof ())
-		goto out;
-	      /* DISCARD (FLUSHO) and tcflush can finish here. */
-	      if ((get_ttyp ()->ti.c_lflag & FLUSHO || !buf))
-		goto out;
+	  if (!bytes_available (n))
+	    goto err;
+	  if (n)
+	    break;
+	  if (hit_eof ())
+	    goto out;
+	  /* DISCARD (FLUSHO) and tcflush can finish here. */
+	  if ((get_ttyp ()->ti.c_lflag & FLUSHO || !buf))
+	    goto out;
 
-	      if (is_nonblocking ())
-		{
-		  set_errno (EAGAIN);
-		  rc = -1;
-		  goto out;
-		}
-	      pthread_testcancel ();
-	      if (WaitForSingleObject (signal_arrived, 10) == WAIT_OBJECT_0
-		  && !_my_tls.call_signal_handler ())
-		{
-		  set_errno (EINTR);
-		  rc = -1;
-		  goto out;
-		}
-	    }
-
-	  if (!ReadFile (handle, outbuf, rlen, &n, NULL))
+	  if (is_nonblocking ())
 	    {
-	      termios_printf ("ReadFile failed, %E");
-	      goto err;
+	      set_errno (EAGAIN);
+	      rc = -1;
+	      goto out;
 	    }
+	  pthread_testcancel ();
+	  if (cygwait (NULL, 10, cw_sig_eintr) == WAIT_SIGNALED
+	      && !_my_tls.call_signal_handler ())
+	    {
+	      set_errno (EINTR);
+	      rc = -1;
+	      goto out;
+	    }
+	  flush_to_slave ();
+	}
+
+      if (!ReadFile (get_handle (), outbuf, rlen, &n, NULL))
+	{
+	  termios_printf ("ReadFile failed, %E");
+	  goto err;
 	}
 
       termios_printf ("bytes read %u", n);
@@ -488,7 +514,7 @@ fhandler_pty_slave::open (int flags, mode_t)
       DWORD len;
 
       __small_sprintf (buf, "\\\\.\\pipe\\cygwin-%S-pty%d-master-ctl",
-		       &installation_key, get_unit ());
+		       &cygheap->installation_key, get_unit ());
       termios_printf ("dup handles via master control pipe %s", buf);
       if (!CallNamedPipe (buf, &req, sizeof req, &repl, sizeof repl,
 			  &len, 500))
@@ -516,9 +542,8 @@ fhandler_pty_slave::open (int flags, mode_t)
   set_io_handle (from_master_local);
   set_output_handle (to_master_local);
 
+  fhandler_console::need_invisible ();
   set_open_status ();
-  if (cygheap->manage_console_count ("fhandler_pty_slave::open", 1) == 1)
-    fhandler_console::need_invisible ();
   return 1;
 
 err:
@@ -540,7 +565,6 @@ fhandler_pty_slave::open_setup (int flags)
 {
   set_flags ((flags & ~O_TEXT) | O_BINARY);
   myself->set_ctty (this, flags);
-  cygheap->manage_console_count ("fhandler_pty_slave::open_setup", 1);
   report_tty_counts (this, "opened", "");
 }
 
@@ -552,7 +576,6 @@ fhandler_pty_slave::cleanup ()
      Since close_all_files is not called until after the cygwin process has
      synced or before a non-cygwin process has exited, it should be safe to
      just close this normally.  cgf 2006-05-20 */
-  cygheap->manage_console_count ("fhandler_pty_slave::close", -1);
   report_tty_counts (this, "closed", "");
 }
 
@@ -564,6 +587,8 @@ fhandler_pty_slave::close ()
     termios_printf ("CloseHandle (inuse), %E");
   if (!ForceCloseHandle (input_available_event))
     termios_printf ("CloseHandle (input_available_event<%p>), %E", input_available_event);
+  if ((unsigned) myself->ctty == FHDEV (DEV_PTYS_MAJOR, get_unit ()))
+    fhandler_console::free_console ();	/* assumes that we are the last pty closer */
   return fhandler_pty_common::close ();
 }
 
@@ -620,14 +645,16 @@ fhandler_pty_slave::write (const void *ptr, size_t len)
 
   push_process_state process_state (PID_TTYOU);
 
-  acquire_output_mutex (INFINITE);
-
   while (len)
     {
-      n = min (OUT_BUFFER_SIZE, len);
+      n = MIN (OUT_BUFFER_SIZE, len);
       char *buf = (char *)ptr;
       ptr = (char *) ptr + n;
       len -= n;
+
+      while (tc ()->output_stopped)
+	cygwait (10);
+      acquire_output_mutex (INFINITE);
 
       /* Previous write may have set write_error to != 0.  Check it here.
 	 This is less than optimal, but the alternative slows down pty
@@ -636,10 +663,14 @@ fhandler_pty_slave::write (const void *ptr, size_t len)
 	{
 	  set_errno (get_ttyp ()->write_error);
 	  towrite = (DWORD) -1;
+	  get_ttyp ()->write_error = 0;
+	  release_output_mutex ();
 	  break;
 	}
 
-      if (WriteFile (get_output_handle (), buf, n, &n, NULL) == FALSE)
+      BOOL res = WriteFile (get_output_handle (), buf, n, &n, NULL);
+      release_output_mutex ();
+      if (!res)
 	{
 	  DWORD err = GetLastError ();
 	  termios_printf ("WriteFile failed, %E");
@@ -655,7 +686,6 @@ fhandler_pty_slave::write (const void *ptr, size_t len)
 	  break;
 	}
     }
-  release_output_mutex ();
   return towrite;
 }
 
@@ -668,7 +698,6 @@ fhandler_pty_slave::read (void *ptr, size_t& len)
   size_t readlen;
   DWORD bytes_in_pipe;
   char buf[INP_BUFFER_SIZE];
-  char peek_buf[INP_BUFFER_SIZE];
   DWORD time_to_wait;
 
   bg_check_types bg = bg_check (SIGTTIN);
@@ -714,14 +743,14 @@ fhandler_pty_slave::read (void *ptr, size_t& len)
 	      goto out;
 	    }
 	  break;
-	case WAIT_OBJECT_0 + 1:
+	case WAIT_SIGNALED:
 	  if (totalread > 0)
 	    goto out;
 	  termios_printf ("wait catched signal");
 	  set_sig_errno (EINTR);
 	  totalread = -1;
 	  goto out;
-	case WAIT_OBJECT_0 + 2:
+	case WAIT_CANCELED:
 	  process_state.pop ();
 	  pthread::static_cancel_self ();
 	  /*NOTREACHED*/
@@ -749,14 +778,14 @@ fhandler_pty_slave::read (void *ptr, size_t& len)
 	case WAIT_OBJECT_0:
 	case WAIT_ABANDONED_0:
 	  break;
-	case WAIT_OBJECT_0 + 1:
+	case WAIT_SIGNALED:
 	  if (totalread > 0)
 	    goto out;
-	  termios_printf ("wait for mutex catched signal");
+	  termios_printf ("wait for mutex caught signal");
 	  set_sig_errno (EINTR);
 	  totalread = -1;
 	  goto out;
-	case WAIT_OBJECT_0 + 2:
+	case WAIT_CANCELED:
 	  process_state.pop ();
 	  pthread::static_cancel_self ();
 	  /*NOTREACHED*/
@@ -785,12 +814,8 @@ fhandler_pty_slave::read (void *ptr, size_t& len)
 	    }
 	  goto out;
 	}
-      if (!PeekNamedPipe (get_handle (), peek_buf, sizeof (peek_buf), &bytes_in_pipe, NULL, NULL))
-	{
-	  termios_printf ("PeekNamedPipe failed, %E");
-	  raise (SIGHUP);
-	  bytes_in_pipe = 0;
-	}
+      if (!bytes_available (bytes_in_pipe))
+	raise (SIGHUP);
 
       /* On first peek determine no. of bytes to flush. */
       if (!ptr && len == UINT_MAX)
@@ -803,7 +828,7 @@ fhandler_pty_slave::read (void *ptr, size_t& len)
 	  return;
 	}
 
-      readlen = min (bytes_in_pipe, min (len, sizeof (buf)));
+      readlen = MIN (bytes_in_pipe, MIN (len, sizeof (buf)));
 
       if (ptr && vmin && readlen > (unsigned) vmin)
 	readlen = vmin;
@@ -815,7 +840,6 @@ fhandler_pty_slave::read (void *ptr, size_t& len)
 	  if (!ReadFile (get_handle (), buf, readlen, &n, NULL))
 	    {
 	      termios_printf ("read failed, %E");
-	      bytes_in_pipe = 0;
 	      raise (SIGHUP);
 	      bytes_in_pipe = 0;
 	      ptr = NULL;
@@ -826,12 +850,8 @@ fhandler_pty_slave::read (void *ptr, size_t& len)
 		 number of bytes in pipe, but for some reason this number doesn't
 		 change after successful read. So we have to peek into the pipe
 		 again to see if input is still available */
-	      if (!PeekNamedPipe (get_handle (), peek_buf, 1, &bytes_in_pipe, NULL, NULL))
-		{
-		  termios_printf ("PeekNamedPipe failed, %E");
-		  raise (SIGHUP);
-		  bytes_in_pipe = 0;
-		}
+	      if (!bytes_available (bytes_in_pipe))
+		raise (SIGHUP);
 	      if (n)
 		{
 		  len -= n;
@@ -899,8 +919,16 @@ out:
 int
 fhandler_pty_slave::dup (fhandler_base *child, int flags)
 {
-  myself->set_ctty (this, flags);
-  cygheap->manage_console_count ("fhandler_pty_slave::dup", 1);
+  /* This code was added in Oct 2001 for some undisclosed reason.
+     However, setting the controlling tty on a dup causes rxvt to
+     hang when the parent does a dup since the controlling pgid changes.
+     Specifically testing for -2 (ctty has been setsid'ed) works around
+     this problem.  However, it's difficult to see scenarios in which you
+     have a dup'able fd, no controlling tty, and not having run setsid.
+     So, we might want to consider getting rid of the set_ctty in tty-like dup
+     methods entirely at some point */
+  if (myself->ctty != -2)
+    myself->set_ctty (this, flags);
   report_tty_counts (child, "duped slave", "");
   return 0;
 }
@@ -991,15 +1019,15 @@ fhandler_pty_slave::ioctl (unsigned int cmd, void *arg)
       goto out;
     case FIONREAD:
       {
-	int n;
-	if (!PeekNamedPipe (get_handle (), NULL, 0, NULL, (DWORD *) &n, NULL))
+	DWORD n;
+	if (!bytes_available (n))
 	  {
 	    set_errno (EINVAL);
 	    retval = -1;
 	  }
 	else
 	  {
-	    *(int *) arg = n;
+	    *(int *) arg = (int) n;
 	    retval = 0;
 	  }
       }
@@ -1025,7 +1053,7 @@ fhandler_pty_slave::ioctl (unsigned int cmd, void *arg)
 	{
 	  get_ttyp ()->arg.winsize = *(struct winsize *) arg;
 	  get_ttyp ()->winsize = *(struct winsize *) arg;
-	  killsys (-get_ttyp ()->getpgid (), SIGWINCH);
+	  get_ttyp ()->kill_pgrp (SIGWINCH);
 	}
       break;
     }
@@ -1043,7 +1071,7 @@ out:
   return retval;
 }
 
-int __stdcall
+int __reg2
 fhandler_pty_slave::fstat (struct __stat64 *st)
 {
   fhandler_base::fstat (st);
@@ -1257,11 +1285,6 @@ fhandler_pty_master::cleanup ()
 int
 fhandler_pty_master::close ()
 {
-#if 0
-  while (accept_input () > 0)
-    continue;
-#endif
-
   termios_printf ("closing from_master(%p)/to_master(%p) since we own them(%d)",
 		  from_master, to_master, dwProcessId);
   if (cygwin_finished_initializing)
@@ -1274,7 +1297,7 @@ fhandler_pty_master::close ()
 	  DWORD len;
 
 	  __small_sprintf (buf, "\\\\.\\pipe\\cygwin-%S-pty%d-master-ctl",
-			   &installation_key, get_unit ());
+			   &cygheap->installation_key, get_unit ());
 	  CallNamedPipe (buf, &req, sizeof req, &repl, sizeof repl, &len, 500);
 	  CloseHandle (master_ctl);
 	  master_thread->detach ();
@@ -1402,7 +1425,7 @@ fhandler_pty_master::ioctl (unsigned int cmd, void *arg)
 	  || get_ttyp ()->winsize.ws_col != ((struct winsize *) arg)->ws_col)
 	{
 	  get_ttyp ()->winsize = *(struct winsize *) arg;
-	  killsys (-get_ttyp ()->getpgid (), SIGWINCH);
+	  get_ttyp ()->kill_pgrp (SIGWINCH);
 	}
       break;
     case TIOCGPGRP:
@@ -1412,13 +1435,13 @@ fhandler_pty_master::ioctl (unsigned int cmd, void *arg)
       return this->tcsetpgrp ((pid_t) arg);
     case FIONREAD:
       {
-	int n;
-	if (!PeekNamedPipe (to_master, NULL, 0, NULL, (DWORD *) &n, NULL))
+	DWORD n;
+	if (!::bytes_available (n, to_master))
 	  {
 	    set_errno (EINVAL);
 	    return -1;
 	  }
-	*(int *) arg = n;
+	*(int *) arg = (int) n;
       }
       break;
     default:
@@ -1463,8 +1486,6 @@ fhandler_pty_slave::fixup_after_exec ()
   if (!close_on_exec ())
     fixup_after_fork (NULL);
 }
-
-extern "C" BOOL WINAPI GetNamedPipeClientProcessId (HANDLE, PULONG);
 
 /* This thread function handles the master control pipe.  It waits for a
    client to connect.  Then it checks if the client process has permissions
@@ -1677,7 +1698,7 @@ fhandler_pty_master::setup ()
   /* Create master control pipe which allows the master to duplicate
      the pty pipe handles to processes which deserve it. */
   __small_sprintf (buf, "\\\\.\\pipe\\cygwin-%S-pty%d-master-ctl",
-		   &installation_key, unit);
+		   &cygheap->installation_key, unit);
   master_ctl = CreateNamedPipe (buf, PIPE_ACCESS_DUPLEX,
 				PIPE_WAIT | PIPE_TYPE_MESSAGE
 				| PIPE_READMODE_MESSAGE, 1, 4096, 4096,

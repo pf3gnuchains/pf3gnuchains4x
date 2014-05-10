@@ -1,7 +1,7 @@
 /* sec_auth.cc: NT authentication functions
 
-   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
+   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
+   2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -120,8 +120,8 @@ extract_nt_dom_user (const struct passwd *pw, PWCHAR domain, PWCHAR user)
   if ((d = strstr (pw->pw_gecos, "U-")) != NULL &&
       (d == pw->pw_gecos || d[-1] == ','))
     {
-      c = strechr (d + 2, ',');
-      if ((u = strechr (d + 2, '\\')) >= c)
+      c = strchrnul (d + 2, ',');
+      if ((u = strchrnul (d + 2, '\\')) >= c)
        u = d + 1;
       else if (u - d <= MAX_DOMAIN_NAME_LEN + 2)
        sys_mbstowcs (domain, MAX_DOMAIN_NAME_LEN + 1, d + 2, u - d - 1);

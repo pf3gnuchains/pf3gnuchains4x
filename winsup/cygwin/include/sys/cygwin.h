@@ -1,7 +1,7 @@
 /* sys/cygwin.h
 
-   Copyright 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
-   2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
+   Copyright 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008,
+   2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -188,6 +188,9 @@ typedef enum
 #define CW_LST_MNT_OPTS CW_LST_MNT_OPTS
 #define CW_STRERROR CW_STRERROR
 #define CW_CVT_ENV_TO_WINENV CW_CVT_ENV_TO_WINENV
+#define CW_ALLOC_DRIVE_MAP CW_ALLOC_DRIVE_MAP
+#define CW_MAP_DRIVE_MAP CW_MAP_DRIVE_MAP
+#define CW_FREE_DRIVE_MAP CW_FREE_DRIVE_MAP
 
 /* Token type for CW_SET_EXTERNAL_TOKEN */
 enum

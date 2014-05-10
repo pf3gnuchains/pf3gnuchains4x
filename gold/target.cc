@@ -203,6 +203,15 @@ Target::set_view_to_nop(unsigned char* view, section_size_type view_size,
     }
 }
 
+// Return address and size to plug into eh_frame FDEs associated with a PLT.
+void
+Target::do_plt_fde_location(const Output_data* plt, unsigned char*,
+			    uint64_t* address, off_t* len) const
+{
+  *address = plt->address();
+  *len = plt->data_size();
+}
+
 // Class Sized_target.
 
 // Set the EI_OSABI field of the ELF header if requested.
@@ -217,13 +226,13 @@ Sized_target<size, big_endian>::do_adjust_elf_header(unsigned char* view,
     {
       gold_assert(len == elfcpp::Elf_sizes<size>::ehdr_size);
 
-      elfcpp::Ehdr<size, false> ehdr(view);
+      elfcpp::Ehdr<size, big_endian> ehdr(view);
       unsigned char e_ident[elfcpp::EI_NIDENT];
       memcpy(e_ident, ehdr.get_e_ident(), elfcpp::EI_NIDENT);
 
       e_ident[elfcpp::EI_OSABI] = osabi;
 
-      elfcpp::Ehdr_write<size, false> oehdr(view);
+      elfcpp::Ehdr_write<size, big_endian> oehdr(view);
       oehdr.put_e_ident(e_ident);
     }
 }

@@ -1,7 +1,7 @@
 /* autoload.cc: all dynamic load stuff.
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008,
-   2009, 2010, 2011 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
+   2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -299,7 +299,7 @@ std_dll_init ()
 
 /* Initialization function for winsock stuff. */
 WSADATA NO_COPY wsadata;
-__attribute__ ((used, noinline, regparm(1))) static long long
+static long long __attribute__ ((used, noinline))
 wsock_init ()
 {
   static LONG NO_COPY here = -1L;
@@ -367,6 +367,8 @@ LoadDLLfunc (LsaOpenPolicy, 16, advapi32)
 LoadDLLfunc (LsaQueryInformationPolicy, 12, advapi32)
 LoadDLLfunc (LsaRetrievePrivateData, 12, advapi32)
 LoadDLLfunc (LsaStorePrivateData, 12, advapi32)
+LoadDLLfunc (RegOpenUserClassesRoot, 16, advapi32)
+LoadDLLfunc (RegOpenCurrentUser, 8, advapi32)
 LoadDLLfunc (RegCloseKey, 4, advapi32)
 LoadDLLfunc (RegCreateKeyExW, 36, advapi32)
 LoadDLLfunc (RegEnumKeyExW, 32, advapi32)
@@ -404,6 +406,7 @@ LoadDLLfunc (WNetOpenEnumA, 20, mpr)
 
 LoadDLLfunc (DsGetDcNameW, 24, netapi32)
 LoadDLLfunc (NetApiBufferFree, 4, netapi32)
+LoadDLLfunc (NetUseGetInfo, 16, netapi32)
 LoadDLLfunc (NetUserGetGroups, 28, netapi32)
 LoadDLLfunc (NetUserGetInfo, 16, netapi32)
 LoadDLLfunc (NetUserGetLocalGroups, 32, netapi32)

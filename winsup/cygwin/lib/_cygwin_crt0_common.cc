@@ -1,6 +1,6 @@
 /* _cygwin_crt0_common.cc: common crt0 function for cygwin crt0's.
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2009 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -49,7 +49,6 @@ extern "C"
 {
 char **environ;
 int _fmode;
-void _pei386_runtime_relocator (void);
 
 extern char __RUNTIME_PSEUDO_RELOC_LIST__;
 extern char __RUNTIME_PSEUDO_RELOC_LIST_END__;
@@ -155,7 +154,7 @@ _cygwin_crt0_common (MainFunc f, per_process *u)
   u->image_base = &_image_base__;
   /* This is actually a dummy call to force the linker to load this
      symbol for older apps which need it.  */
-  _pei386_runtime_relocator ();
+  _pei386_runtime_relocator (NULL);
   return 1;
 }
 } /* "C" */

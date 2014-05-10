@@ -1,6 +1,7 @@
 /* tty.h: shared tty info for cygwin
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2006, 2009, 2010, 2011 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2006, 2009, 2010, 2011, 2012, 2013
+   Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -19,12 +20,10 @@ details. */
 
 /* Input/Output/ioctl events */
 
-#define RESTART_OUTPUT_EVENT	"cygtty.output.restart"
 #define INPUT_AVAILABLE_EVENT	"cygtty.input.avail"
 #define OUTPUT_MUTEX		"cygtty.output.mutex"
 #define INPUT_MUTEX		"cygtty.input.mutex"
 #define TTY_SLAVE_ALIVE		"cygtty.slave_alive"
-#define TTY_MASTER_ALIVE	"cygtty.master_alive"
 
 #include <sys/termios.h>
 
@@ -38,15 +37,15 @@ class tty_min
   pid_t sid;	/* Session ID of tty */
   struct status_flags
   {
-    unsigned initialized : 1; /* Set if tty is initialized */
-    unsigned rstcons     : 1; /* Set if console needs to be set to "non-cooked" */
+    unsigned initialized : 1;	/* Set if tty is initialized */
+    unsigned rstcons     : 1;	/* Set if console needs to be set to "non-cooked" */
   } status;
 
 public:
   pid_t pgid;
-  int output_stopped;
+  bool output_stopped;		/* FIXME: Maybe do this with a mutex someday? */
   fh_devices ntty;
-  DWORD last_ctrl_c;	/* tick count of last ctrl-c */
+  DWORD last_ctrl_c;		/* tick count of last ctrl-c */
   bool is_console;
 
   IMPLEMENT_STATUS_FLAG (bool, initialized)
@@ -79,16 +78,15 @@ public:
   void setsid (pid_t tsid) {sid = tsid;}
   void kill_pgrp (int);
   int is_orphaned_process_group (int);
-  const char *ttyname () __attribute ((regparm (1)));
+  const __reg1 char *ttyname () __attribute (());
 };
 
 class fhandler_pty_master;
 
 class tty: public tty_min
 {
-  HANDLE get_event (const char *fmt, PSECURITY_ATTRIBUTES sa,
+  HANDLE __reg3 get_event (const char *fmt, PSECURITY_ATTRIBUTES sa,
 		    BOOL manual_reset = FALSE);
-    __attribute__ ((regparm (3)));
 public:
   pid_t master_pid;	/* PID of tty master process */
 
@@ -126,7 +124,7 @@ public:
   int connect (int);
   void init ();
   tty_min *get_cttyp ();
-  int __stdcall attach (int n) __attribute__ ((regparm (2)));
+  int __reg2 attach (int n);
   static void __stdcall init_session ();
   friend class lock_ttys;
 };

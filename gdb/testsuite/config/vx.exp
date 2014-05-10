@@ -1,5 +1,4 @@
-#   Copyright 1988, 1990-1992, 1995, 1997, 2007-2012 Free Software
-#   Foundation, Inc.
+#   Copyright 1988-2013 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -59,7 +58,7 @@ proc gdb_start { } {
     global reboot
 
     # get a connection to the board
-    for { set x 0; } { $x < 3 } { incr x } {
+    for { set x 0 } { $x < 3 } { incr x } {
 	set shell_id [remote_open target]
 	if { $shell_id > 0 } {
 	    verbose "Spawn id for remote shell is $shell_id"
@@ -69,10 +68,10 @@ proc gdb_start { } {
 
 	    set state [spawn_vxgdb];
 	    if { $state == "pass" } {
-		return 0;
+		return 0
 	    }
 	    if { $state == "fail" } {
-		return -1;
+		return -1
 	    }
 	}
 	remote_reboot target;
@@ -98,7 +97,7 @@ proc spawn_vxgdb { } {
 	-re "Done\..*$gdb_prompt $"	{
 	    verbose "Set target to [target_info hostname]" 1
 	    set timeout 10;
-	    return "pass";
+	    return "pass"
 	}
 	-re "net_connect: RPC: (Program not registered|.*Timed out).*$" {
 	    warning "Couldn't set GDB to target [target_info netport]."
@@ -107,7 +106,7 @@ proc spawn_vxgdb { } {
 	    warning "Couldn't set target for vxworks."
 	}
     }
-    return "retry";
+    return "retry"
 }
 
 proc gdb_exit { } {

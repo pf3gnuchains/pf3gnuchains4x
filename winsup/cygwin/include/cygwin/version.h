@@ -1,7 +1,7 @@
 /* version.h -- Cygwin version numbers and accompanying documentation.
 
-   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
+   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
+   2007, 2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -43,7 +43,7 @@ details. */
 	 changes to the DLL and is mainly informative in nature. */
 
 #define CYGWIN_VERSION_DLL_MAJOR 1007
-#define CYGWIN_VERSION_DLL_MINOR 10
+#define CYGWIN_VERSION_DLL_MINOR 18
 
       /* Major numbers before CYGWIN_VERSION_DLL_EPOCH are
 	 incompatible. */
@@ -428,12 +428,16 @@ details. */
       257: Export getpt.
       258: Export get_current_dir_name.
       259: Export pthread_sigqueue.
+      260: Export scandirat.
+      261: Export memrchr.
+      262: Export getmntent_r.
+      263: Export cfsetspeed.
      */
 
      /* Note that we forgot to bump the api for ualarm, strtoll, strtoull */
 
 #define CYGWIN_VERSION_API_MAJOR 0
-#define CYGWIN_VERSION_API_MINOR 259
+#define CYGWIN_VERSION_API_MINOR 263
 
      /* There is also a compatibity version number associated with the
 	shared memory regions.  It is incremented when incompatible

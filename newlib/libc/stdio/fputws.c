@@ -84,10 +84,11 @@ _DEFUN(_fputws_r, (ptr, ws, fp),
 {
   size_t nbytes;
   char buf[BUFSIZ];
+#ifdef _FVWRITE_IN_STREAMIO
   struct __suio uio;
   struct __siov iov;
 
-  _flockfile (fp);
+  _newlib_flockfile_start (fp);
   ORIENT (fp, 1);
   if (cantwrite (ptr, fp) != 0)
     goto error;
@@ -104,12 +105,39 @@ _DEFUN(_fputws_r, (ptr, ws, fp),
 	goto error;
     }
   while (ws != NULL);
-  _funlockfile (fp);
+  _newlib_flockfile_exit (fp);
   return (0);
 
 error:
-  _funlockfile(fp);
+  _newlib_flockfile_end (fp);
   return (-1);
+#else
+  _newlib_flockfile_start (fp);
+  ORIENT (fp, 1);
+  if (cantwrite (ptr, fp) != 0)
+    goto error;
+
+  do
+    {
+      size_t i = 0;
+      nbytes = _wcsrtombs_r (ptr, buf, &ws, sizeof (buf), &fp->_mbstate);
+      if (nbytes == (size_t) -1)
+	goto error;
+      while (i < nbytes)
+        {
+	  if (__sputc_r (ptr, buf[i], fp) == EOF)
+	    goto error;
+	  i++;
+        }
+    }
+  while (ws != NULL);
+  _newlib_flockfile_exit (fp);
+  return (0);
+
+error:
+  _newlib_flockfile_end (fp);
+  return (-1);
+#endif
 }
 
 int

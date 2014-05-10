@@ -1,7 +1,7 @@
 /* shared_info.h: shared info for cygwin
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2008, 2009,
-   2010, 2011 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
+   2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -74,7 +74,7 @@ enum shared_locations
 
 };
 
-void memory_init (bool) __attribute__ ((regparm(1)));
+void __reg1 memory_init (bool);
 void __stdcall shared_destroy ();
 
 #define shared_align_past(p) \
@@ -93,6 +93,3 @@ void *__stdcall open_shared (const WCHAR *, int, HANDLE&, DWORD,
 			     shared_locations *, PSECURITY_ATTRIBUTES = &sec_all,
 			     DWORD = FILE_MAP_READ | FILE_MAP_WRITE);
 extern void user_shared_create (bool reinit);
-extern void init_installation_root ();
-extern WCHAR installation_root[PATH_MAX];
-extern UNICODE_STRING installation_key;

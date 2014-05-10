@@ -11,6 +11,8 @@ This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
 details. */
 
+#include <windows.h>
+#include <winternl.h>
 #define cygwin_internal cygwin_internal_dontuse
 #include <stdio.h>
 #include <fcntl.h>
@@ -19,19 +21,19 @@ details. */
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
-#include <windows.h>
 #include <signal.h>
 #include <errno.h>
-#include "cygwin/include/sys/strace.h"
-#include "cygwin/include/sys/cygwin.h"
-#include "cygwin/include/cygwin/version.h"
+#include "../cygwin/include/sys/strace.h"
+#include "../cygwin/include/sys/cygwin.h"
+#include "../cygwin/include/cygwin/version.h"
 #include "path.h"
 #undef cygwin_internal
 #include "loadlib.h"
-#include "ddk/ntapi.h"
 
 /* we *know* we're being built with GCC */
+#ifndef alloca
 #define alloca __builtin_alloca
+#endif
 
 static const char *pgm;
 static int forkdebug = 1;
@@ -680,7 +682,7 @@ proc_child (unsigned mask, FILE *ofile, pid_t pid)
 	  break;
 
 	case EXIT_PROCESS_DEBUG_EVENT:
-	  res = ev.u.ExitProcess.dwExitCode >> 8;
+	  res = ev.u.ExitProcess.dwExitCode;
 	  remove_child (ev.dwProcessId);
 	  break;
 	case EXCEPTION_DEBUG_EVENT:
@@ -1076,12 +1078,11 @@ character #%d.\n", optarg, (int) (endptr - optarg), endptr);
   if (!ofile)
     ofile = stdout;
 
-  DWORD res = 0;
   if (toggle)
     dotoggle (pid);
   else
-    res = dostrace (mask, ofile, pid, argv + optind);
-  return res;
+    ExitProcess (dostrace (mask, ofile, pid, argv + optind));
+  return 0;
 }
 
 #undef CloseHandle

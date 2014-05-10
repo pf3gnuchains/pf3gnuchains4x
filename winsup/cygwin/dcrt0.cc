@@ -1,7 +1,7 @@
 /* dcrt0.cc -- essentially the main() for the Cygwin dll
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
-   2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
+   2007, 2008, 2009, 2010, 2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -162,7 +162,7 @@ quoted (char *cmd, int winshell)
     {
       char *p;
       strcpy (cmd, cmd + 1);
-      if (*(p = strechr (cmd, quote)))
+      if (*(p = strchrnul (cmd, quote)))
 	strcpy (p, p + 1);
       return p;
     }
@@ -194,6 +194,14 @@ quoted (char *cmd, int winshell)
 /* Perform a glob on word if it contains wildcard characters.
    Also quote every character between quotes to force glob to
    treat the characters literally. */
+
+/* Either X:[...] or \\server\[...] */
+#define is_dos_path(s) (isdrive(s) \
+			|| ((s)[0] == '\\' \
+			    && (s)[1] == '\\' \
+			    && isalpha ((s)[2]) \
+			    && strchr ((s) + 3, '\\')))
+
 static int __stdcall
 globify (char *word, char **&argv, int &argc, int &argvlen)
 {
@@ -202,9 +210,9 @@ globify (char *word, char **&argv, int &argc, int &argvlen)
 
   int n = 0;
   char *p, *s;
-  int dos_spec = isdrive (word);
+  int dos_spec = is_dos_path (word);
   if (!dos_spec && isquote (*word) && word[1] && word[2])
-    dos_spec = isdrive (word + 1);
+    dos_spec = is_dos_path (word + 1);
 
   /* We'll need more space if there are quoting characters in
      word.  If that is the case, doubling the size of the
@@ -312,7 +320,11 @@ build_argv (char *cmd, char **&argv, int &argc, int winshell)
 	    /* Skip over characters until the closing quote */
 	    {
 	      sawquote = cmd;
-	      cmd = quoted (cmd, winshell && argc > 0);
+	      /* Handle quoting.  Only strip off quotes if the parent is
+		 a Cygwin process, or if the word starts with a '@'.
+		 In this case, the insert_file function needs an unquoted
+		 DOS filename and globbing isn't performed anyway. */
+	      cmd = quoted (cmd, winshell && argc > 0 && *word != '@');
 	    }
 	  if (issep (*cmd))	// End of argument if space
 	    break;
@@ -345,7 +357,8 @@ build_argv (char *cmd, char **&argv, int &argc, int winshell)
 	}
     }
 
-  argv[argc] = NULL;
+  if (argv)
+    argv[argc] = NULL;
 
   debug_printf ("argc %d", argc);
 }
@@ -384,7 +397,7 @@ check_sanity_and_sync (per_process *p)
   __cygwin_user_data.cxx_malloc = &default_cygwin_cxx_malloc;
 }
 
-child_info NO_COPY *child_proc_info = NULL;
+child_info NO_COPY *child_proc_info;
 
 #define CYGWIN_GUARD (PAGE_READWRITE | PAGE_GUARD)
 
@@ -590,6 +603,17 @@ child_info_fork::handle_fork ()
 	      "user heap", cygheap->user_heap.base, cygheap->user_heap.ptr,
 	      NULL);
 
+  /* If my_wr_proc_pipe != NULL then it's a leftover handle from a previously
+     forked process.  Close it now or suffer confusion with the parent of our
+     parent.  */
+  if (my_wr_proc_pipe)
+    ForceCloseHandle1 (my_wr_proc_pipe, wr_proc_pipe);
+
+  /* Setup our write end of the process pipe.  Clear the one in the structure.
+     The destructor should never be called for this but, it can't hurt to be
+     safe. */
+  my_wr_proc_pipe = wr_proc_pipe;
+  rd_proc_pipe = wr_proc_pipe = NULL;
   /* Do the relocations here.  These will actually likely be overwritten by the
      below child_copy but we do them here in case there is a read-only section
      which does not get copied by fork. */
@@ -606,18 +630,36 @@ child_info_fork::handle_fork ()
     api_fatal ("recreate_mmaps_after_fork_failed");
 }
 
+bool
+child_info_spawn::get_parent_handle ()
+{
+  parent = OpenProcess (PROCESS_VM_READ, false, parent_winpid);
+  moreinfo->myself_pinfo = NULL;
+  return !!parent;
+}
+
 void
 child_info_spawn::handle_spawn ()
 {
   extern void fixup_lockf_after_exec ();
   HANDLE h;
-  cygheap_fixup_in_child (true);
-  memory_init (false);
+  if (!dynamically_loaded || get_parent_handle ())
+      {
+	cygheap_fixup_in_child (true);
+	memory_init (false);
+      }
   if (!moreinfo->myself_pinfo ||
       !DuplicateHandle (GetCurrentProcess (), moreinfo->myself_pinfo,
 			GetCurrentProcess (), &h, 0,
 			FALSE, DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE))
     h = NULL;
+
+  /* Setup our write end of the process pipe.  Clear the one in the structure.
+     The destructor should never be called for this but, it can't hurt to be
+     safe. */
+  my_wr_proc_pipe = wr_proc_pipe;
+  rd_proc_pipe = wr_proc_pipe = NULL;
+
   myself.thisproc (h);
   __argc = moreinfo->argc;
   __argv = moreinfo->argv;
@@ -639,10 +681,15 @@ child_info_spawn::handle_spawn ()
 
   ready (true);
 
-  /* Need to do this after debug_fixup_after_fork_exec or DEBUGGING handling of
+  /* Keep pointer to parent open if we've execed so that pid will not be reused.
+     Otherwise, we no longer need this handle so close it.
+     Need to do this after debug_fixup_after_fork_exec or DEBUGGING handling of
      handles might get confused. */
-  CloseHandle (child_proc_info->parent);
-  child_proc_info->parent = NULL;
+  if (type != _CH_EXEC && child_proc_info->parent)
+    {
+      CloseHandle (child_proc_info->parent);
+      child_proc_info->parent = NULL;
+    }
 
   signal_fixup_after_exec ();
   fixup_lockf_after_exec ();
@@ -675,6 +722,7 @@ init_windows_system_directory ()
 void
 dll_crt0_0 ()
 {
+  wincap.init ();
   child_proc_info = get_cygwin_startup_info ();
   init_windows_system_directory ();
   init_global_security ();
@@ -717,23 +765,17 @@ dll_crt0_0 ()
       cygwin_user_h = child_proc_info->user_h;
       switch (child_proc_info->type)
 	{
-	  case _CH_FORK:
-	    fork_info->handle_fork ();
-	    break;
-	  case _CH_SPAWN:
-	  case _CH_EXEC:
-	    spawn_info->handle_spawn ();
-	    break;
+	case _CH_FORK:
+	  fork_info->handle_fork ();
+	  break;
+	case _CH_SPAWN:
+	case _CH_EXEC:
+	  spawn_info->handle_spawn ();
+	  break;
 	}
     }
 
   user_data->threadinterface->Init ();
-
-  _cygtls::init ();
-
-  /* Initialize events */
-  events_init ();
-  tty_list::init_session ();
 
   _main_tls = &_my_tls;
 
@@ -746,6 +788,29 @@ dll_crt0_0 ()
   debug_printf ("finished dll_crt0_0 initialization");
 }
 
+static inline void
+main_thread_sinit ()
+{
+  __sinit (_impure_ptr);
+  /* At this point, _impure_ptr == _global_impure_ptr == _GLOBAL_REENT is
+     initialized, but _REENT == _my_tls.local_clib doesn't know about it.
+     It has been copied over from _GLOBAL_REENT in _cygtls::init_thread
+     *before* the initialization took place.
+
+     As soon as the main thread calls a stdio function, this would be
+     rectified.  But if another thread calls a stdio function on
+     stdin/out/err before the main thread does, all the required
+     initialization of stdin/out/err will be done, but _REENT->__sdidinit
+     is *still* 0.  This in turn will result in a call to __sinit in the
+     wrong spot.  The input or output buffer will be NULLed and nothing is
+     read or written in the first stdio function call in the main thread.
+
+     To fix this issue we have to copy over the relevant part of _GLOBAL_REENT
+     to _REENT here again. */
+  _REENT->__sdidinit = -1;
+  _REENT->__cleanup = _GLOBAL_REENT->__cleanup;
+}
+
 /* Take over from libc's crt0.o and start the application. Note the
    various special cases when Cygwin DLL is being runtime loaded (as
    opposed to being link-time loaded by Cygwin apps) from a non
@@ -754,6 +819,11 @@ void
 dll_crt0_1 (void *)
 {
   extern void initial_setlocale ();
+
+  _my_tls.incyg++;
+  /* Inherit "parent" exec'ed process sigmask */
+  if (spawn_info && !in_forkee)
+    _my_tls.sigmask = spawn_info->moreinfo->sigmask;
 
   if (dynamically_loaded)
     sigproc_init ();
@@ -799,8 +869,6 @@ dll_crt0_1 (void *)
   strace.microseconds ();
 #endif
 
-  create_signal_arrived (); /* FIXME: move into wait_sig? */
-
   /* Initialize debug muto, if DLL is built with --enable-debugging.
      Need to do this before any helper threads start. */
   debug_init ();
@@ -826,10 +894,12 @@ dll_crt0_1 (void *)
 	  _tlstop = (char *) fork_info->stacktop;
 	}
 
+      /* Not resetting _my_tls.incyg here because presumably fork will overwrite
+	 it with the value of the forker and all will be good.   */
       longjmp (fork_info->jmp, true);
     }
 
-  __sinit (_impure_ptr);
+  main_thread_sinit ();
 
 #ifdef DEBUGGING
   {
@@ -924,7 +994,13 @@ dll_crt0_1 (void *)
   /* Per POSIX set the default application locale back to "C". */
   _setlocale_r (_REENT, LC_CTYPE, "C");
 
-  if (user_data->main)
+  if (!user_data->main)
+    {
+      /* Handle any signals which may have arrived */
+      _my_tls.call_signal_handler ();
+      _my_tls.incyg--;	/* Not in Cygwin anymore */
+    }
+  else
     {
       /* Create a copy of Cygwin's version of __argv so that, if the user makes
 	 a change to an element of argv[] it does not affect Cygwin's argv.
@@ -935,6 +1011,10 @@ dll_crt0_1 (void *)
       char **oav = __argv;
       while ((*nav++ = *oav++) != NULL)
 	continue;
+      /* Handle any signals which may have arrived */
+      sig_dispatch_pending (false);
+      _my_tls.call_signal_handler ();
+      _my_tls.incyg--;	/* Not in Cygwin anymore */
       cygwin_exit (user_data->main (__argc, newargv, *user_data->envptr));
     }
   __asm__ ("				\n\
@@ -1058,10 +1138,7 @@ do_exit (int status)
   lock_process until_exit (true);
 
   if (exit_state < ES_EVENTS_TERMINATE)
-    {
-      exit_state = ES_EVENTS_TERMINATE;
-      events_terminate ();
-    }
+    exit_state = ES_EVENTS_TERMINATE;
 
   if (exit_state < ES_SIGNAL)
     {

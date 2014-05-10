@@ -1,7 +1,7 @@
 /* limits.h
 
-   Copyright 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
-   2008 Red Hat, Inc.
+   Copyright 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
+   2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -36,8 +36,7 @@ details. */
 
 /* Maximum length of a multibyte character.  */
 #ifndef MB_LEN_MAX
-/* TODO: This is newlib's max value.  We should probably rather define our
-   own _mbtowc_r and _wctomb_r functions which are only codepage dependent. */
+/* Use value from newlib. */
 #define MB_LEN_MAX 8
 #endif
 

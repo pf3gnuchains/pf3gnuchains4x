@@ -1,7 +1,7 @@
 /* termios.cc: termios for WIN32.
 
-   Copyright 1996, 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
-   2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
+   Copyright 1996, 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
+   2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
    Written by Doug Evans and Steve Chamberlain of Cygnus Support
    dje@cygnus.com, sac@cygnus.com
@@ -207,7 +207,7 @@ tcgetpgrp (int fd)
   return res;
 }
 
-extern "C" int
+extern "C" pid_t
 tcgetsid (int fd)
 {
   int res;
@@ -324,6 +324,20 @@ cfsetispeed (struct termios *in_tp, speed_t speed)
 {
   struct termios *tp = __tonew_termios (in_tp);
   int res = setspeed (tp->c_ispeed, speed);
+  __toapp_termios (in_tp, tp);
+  return res;
+}
+
+/* cfsetspeed: 4.4BSD */
+extern "C" int
+cfsetspeed (struct termios *in_tp, speed_t speed)
+{
+  struct termios *tp = __tonew_termios (in_tp);
+  int res;
+  /* errors come only from unsupported baud rates, so setspeed() would return
+     identical results in both calls */
+  if ((res = setspeed (tp->c_ospeed, speed)) == 0)
+    setspeed (tp->c_ispeed, speed);
   __toapp_termios (in_tp, tp);
   return res;
 }

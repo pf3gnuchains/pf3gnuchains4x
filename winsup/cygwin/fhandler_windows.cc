@@ -1,7 +1,7 @@
 /* fhandler_windows.cc: code to access windows message queues.
 
-   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2009,
-   2011 Red Hat, Inc.
+   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2009, 2011, 2012
+   Red Hat, Inc.
 
    Written by Sergey S. Okhapkin (sos@prospect.com.ru).
    Feedback and testing by Andy Piper (andyp@parallax.co.uk).
@@ -96,43 +96,47 @@ fhandler_windows::read (void *buf, size_t& len)
       return;
     }
 
-  HANDLE w4[3] = { get_handle (), signal_arrived, NULL };
+  HANDLE w4[3] = { get_handle (), };
+  set_signal_arrived here (w4[1]);
   DWORD cnt = 2;
   if ((w4[cnt] = pthread::get_cancel_event ()) != NULL)
     ++cnt;
-restart:
-  switch (MsgWaitForMultipleObjectsEx (cnt, w4,
-				       is_nonblocking () ? 0 : INFINITE,
-				       QS_ALLINPUT | QS_ALLPOSTMESSAGE,
-				       MWMO_INPUTAVAILABLE))
+  for (;;)
     {
-    case WAIT_OBJECT_0:
-      if (!PeekMessageW (ptr, hWnd_, 0, 0, PM_REMOVE))
+      switch (MsgWaitForMultipleObjectsEx (cnt, w4,
+					   is_nonblocking () ? 0 : INFINITE,
+					   QS_ALLINPUT | QS_ALLPOSTMESSAGE,
+					   MWMO_INPUTAVAILABLE))
 	{
+	case WAIT_OBJECT_0:
+	  if (!PeekMessageW (ptr, hWnd_, 0, 0, PM_REMOVE))
+	    {
+	      len = (size_t) -1;
+	      __seterrno ();
+	    }
+	  else if (ptr->message == WM_QUIT)
+	    len = 0;
+	  else
+	    len = sizeof (MSG);
+	  break;
+	case WAIT_OBJECT_0 + 1:
+	  if (_my_tls.call_signal_handler ())
+	    continue;
+	  len = (size_t) -1;
+	  set_errno (EINTR);
+	  break;
+	case WAIT_OBJECT_0 + 2:
+	  pthread::static_cancel_self ();
+	  break;
+	case WAIT_TIMEOUT:
+	  len = (size_t) -1;
+	  set_errno (EAGAIN);
+	  break;
+	default:
 	  len = (size_t) -1;
 	  __seterrno ();
+	  break;
 	}
-      else if (ptr->message == WM_QUIT)
-	len = 0;
-      else
-	len = sizeof (MSG);
-      break;
-    case WAIT_OBJECT_0 + 1:
-      if (_my_tls.call_signal_handler ())
-	goto restart;
-      len = (size_t) -1;
-      set_errno (EINTR);
-      break;
-    case WAIT_OBJECT_0 + 2:
-      pthread::static_cancel_self ();
-      break;
-    case WAIT_TIMEOUT:
-      len = (size_t) -1;
-      set_errno (EAGAIN);
-      break;
-    default:
-      len = (size_t) -1;
-      __seterrno ();
       break;
     }
 }

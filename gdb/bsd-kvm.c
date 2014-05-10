@@ -1,6 +1,6 @@
 /* BSD Kernel Data Access Library (libkvm) interface.
 
-   Copyright (C) 2004-2005, 2007-2012 Free Software Foundation, Inc.
+   Copyright (C) 2004-2013 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -105,7 +105,7 @@ bsd_kvm_open (char *filename, int from_tty)
 }
 
 static void
-bsd_kvm_close (int quitting)
+bsd_kvm_close (void)
 {
   if (core_kd)
     {

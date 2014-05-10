@@ -1,6 +1,6 @@
 /* cygwin/if.h
 
-   Copyright 1996, 2001, 2007 Red Hat, Inc.
+   Copyright 1996, 2000, 2001, 2007, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -111,10 +111,12 @@ struct ifconf
 #define ifc_buf ifc_ifcu.ifcu_buf               /* buffer address       */
 #define ifc_req ifc_ifcu.ifcu_req               /* array of structures  */
 
+#ifndef __INSIDE_CYGWIN_NET__
 extern unsigned             if_nametoindex (const char *);
 extern char                *if_indextoname (unsigned, char *);
 extern struct if_nameindex *if_nameindex (void);
 extern void                 if_freenameindex (struct if_nameindex *);
+#endif
 
 #ifdef __cplusplus
 };

@@ -1,7 +1,7 @@
 /* mmap.cc
 
-   Copyright 1996, 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
+   Copyright 1996, 1997, 1998, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
+   2008, 2009, 2010, 2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -526,7 +526,8 @@ mmap_record::alloc_fh ()
   fdev.name = fdev.native = "";
   fdev.parse (get_device ());
   fhandler_base *fh = build_fh_dev (fdev);
-  fh->set_access (get_openflags ());
+  if (fh)
+    fh->set_access (get_openflags ());
   return fh;
 }
 
@@ -671,7 +672,10 @@ is_mmapped_region (caddr_t start_addr, caddr_t end_address)
   mmap_list *map_list = mmapped_areas.get_list_by_fd (-1, NULL);
 
   if (!map_list)
-    return false;
+    {
+      LIST_UNLOCK ();
+      return false;
+    }
 
   mmap_record *rec;
   caddr_t u_addr;
@@ -1656,12 +1660,28 @@ fhandler_disk_file::munmap (HANDLE h, caddr_t addr, size_t len)
 int
 fhandler_disk_file::msync (HANDLE h, caddr_t addr, size_t len, int flags)
 {
-  if (FlushViewOfFile (addr, len) == 0)
-    {
-      __seterrno ();
-      return -1;
-    }
-  return 0;
+  const int retry = 100;
+  /* The wisdom of google tells us that FlushViewOfFile may fail with
+     ERROR_LOCK_VIOLATION if "if the memory system is writing dirty
+     pages to disk".  And, we've seen reports of this happening in the
+     cygwin list.  So retry 99 times and hope we get lucky.  */
+  for (int i = 0; i < retry; i++)
+    if (FlushViewOfFile (addr, len))
+      {
+	/* FlushViewOfFile just triggers the action and returns immediately,
+	   so it's equivalent to MS_ASYNC.  MS_SYNC requires another call to
+	   FlushFileBuffers. */
+	if (flags & MS_SYNC)
+	  FlushFileBuffers (h);
+	return 0;
+      }
+    else if (GetLastError () != ERROR_LOCK_VIOLATION)
+      break;
+    else if (i < (retry - 1))
+      yield ();
+
+  __seterrno ();
+  return -1;
 }
 
 bool

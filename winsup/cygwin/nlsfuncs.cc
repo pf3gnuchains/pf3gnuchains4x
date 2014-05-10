@@ -1,6 +1,6 @@
 /* nlsfuncs.cc: NLS helper functions
 
-   Copyright 2010 Red Hat, Inc.
+   Copyright 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -1190,6 +1190,15 @@ strcoll (const char *s1, const char *s2)
   if (!ret)
     set_errno (EINVAL);
   return ret - CSTR_EQUAL;
+}
+
+/* BSD.  Used in glob.cc and regcomp.c, for instance. */
+extern "C" int
+__collate_range_cmp (int c1, int c2)
+{
+  char s1[2] = { c1, '\0' };
+  char s2[2] = { c2, '\0' };
+  return strcoll (s1, s2);
 }
 
 extern "C" size_t

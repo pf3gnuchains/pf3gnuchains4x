@@ -1,6 +1,5 @@
 /* Simulator option handling.
-   Copyright (C) 1996-1997, 2004, 2007-2012 Free Software Foundation,
-   Inc.
+   Copyright (C) 1996-2013 Free Software Foundation, Inc.
    Contributed by Cygnus Support.
 
 This file is part of GDB, the GNU debugger.
@@ -951,7 +950,7 @@ complete_option_list (char **ret, size_t *cnt, const struct option_list *ol,
    completed is stored in @word.  Trailing text of @word is not.  */
 
 char **
-sim_complete_command (SIM_DESC sd, char *text, char *word)
+sim_complete_command (SIM_DESC sd, const char *text, const char *word)
 {
   char **ret = NULL;
   size_t cnt = 1;

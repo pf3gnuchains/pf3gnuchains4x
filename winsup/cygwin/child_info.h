@@ -1,7 +1,7 @@
 /* child_info.h: shared child info for cygwin
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2008, 2009, 2011
-   Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2008, 2009, 2011, 2012,
+   2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -35,7 +35,7 @@ enum child_status
 #define EXEC_MAGIC_SIZE sizeof(child_info)
 
 /* Change this value if you get a message indicating that it is out-of-sync. */
-#define CURR_CHILD_INFO_MAGIC 0x76041b78U
+#define CURR_CHILD_INFO_MAGIC 0xe399543U
 
 #define NPROCS	256
 
@@ -61,9 +61,12 @@ public:
   void *cygheap_max;
   unsigned char flag;
   int retry;		// number of times we've tried to start child process
+  HANDLE rd_proc_pipe;
+  HANDLE wr_proc_pipe;
   HANDLE subproc_ready;	// used for synchronization with parent
   HANDLE user_h;
   HANDLE parent;
+  DWORD parent_winpid;
   DWORD cygheap_reserve_sz;
   unsigned fhandler_union_cb;
   DWORD exit_code;	// process exit code
@@ -73,15 +76,23 @@ public:
   ~child_info ();
   void refresh_cygheap () { cygheap_max = ::cygheap_max; }
   void ready (bool);
-  bool sync (int, HANDLE&, DWORD) __attribute__ ((regparm (3)));
-  DWORD proc_retry (HANDLE) __attribute__ ((regparm (2)));
+  bool __reg3 sync (int, HANDLE&, DWORD);
+  DWORD __reg2 proc_retry (HANDLE);
   bool isstraced () const {return !!(flag & _CI_STRACED);}
   bool iscygwin () const {return !!(flag & _CI_ISCYGWIN);}
   bool saw_ctrl_c () const {return !!(flag & _CI_SAW_CTRL_C);}
+  void prefork (bool = false);
+  void cleanup ();
+  void postfork (pinfo& child)
+  {
+    ForceCloseHandle (wr_proc_pipe);
+    wr_proc_pipe = NULL;
+    child.set_rd_proc_pipe (rd_proc_pipe);
+    rd_proc_pipe = NULL;
+  }
 };
 
 class mount_info;
-class _pinfo;
 
 class child_info_fork: public child_info
 {
@@ -95,7 +106,7 @@ public:
 			// user stack
   char filler[4];
   child_info_fork ();
-  void handle_fork () __attribute__ ((regparm (1)));;
+  void __reg1 handle_fork ();
   bool abort (const char *fmt = NULL, ...);
   void alloc_stack ();
   void alloc_stack_hard_way (volatile char *);
@@ -111,6 +122,7 @@ public:
   int envc;
   char **envp;
   HANDLE myself_pinfo;
+  sigset_t sigmask;
   int nchildren;
   cchildren children[0];
   static cygheap_exec_info *alloc ();
@@ -120,7 +132,6 @@ public:
 
 class child_info_spawn: public child_info
 {
-  muto *lock;
   HANDLE hExeced;
   HANDLE ev;
 public:
@@ -136,7 +147,7 @@ public:
   void reattach_children ();
   void *operator new (size_t, void *p) __attribute__ ((nothrow)) {return p;}
   void set (child_info_types ci, bool b) { new (this) child_info_spawn (ci, b);}
-  void handle_spawn () __attribute__ ((regparm (1)));
+  void __reg1 handle_spawn ();
   bool set_saw_ctrl_c ()
   {
     if (!has_execed ())
@@ -154,21 +165,20 @@ public:
 	return true;
       }
   }
-  void wait_for_myself () { WaitForSingleObject (ev, INFINITE); }
+  void wait_for_myself ();
   bool has_execed () const
   {
     if (hExeced)
       return true;
     if (type != _CH_EXEC)
       return false;
-    lock->acquire ();
-    lock->release ();
     return !!hExeced;
   }
+  bool get_parent_handle ();
   bool has_execed_cygwin () const { return iscygwin () && has_execed (); }
   operator HANDLE& () {return hExeced;}
-  int worker (const char *, const char *const *, const char *const [], int,
-	      int = -1, int = -1) __attribute__ ((regparm (3)));;
+  int __reg3 worker (const char *, const char *const *, const char *const [], int,
+	      int = -1, int = -1);;
 };
 
 extern child_info_spawn ch_spawn;

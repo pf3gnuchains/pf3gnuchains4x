@@ -1,7 +1,7 @@
 /* winsup.h: main Cygwin header file.
 
-   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
+   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
+   2007, 2008, 2009, 2010, 2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -9,15 +9,7 @@ This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
 details. */
 
-#ifdef DEBUGIT
-#define spf(a, b, c) small_printf (a, b, c)
-#else
-#define spf(a, b, c) do {} while (0)
-#endif
-
-#ifdef HAVE_CONFIG_H
-# include "config.h"
-#endif
+#include "config.h"
 
 #define __INSIDE_CYGWIN__
 
@@ -27,7 +19,11 @@ details. */
 
 #define EXPORT_ALIAS(sym,symalias) extern "C" __typeof (sym) symalias __attribute__ ((alias(#sym)));
 
-#define WINVER 0x0601
+/* Fun, fun, fun.  On Mingw64, WINVER is set according to the value of
+   _WIN32_WINNT, on Mingw32 it's exactly the opposite... */
+#define _WIN32_WINNT 0x0602
+#define WINVER 0x0602
+
 #define _NO_W32_PSEUDO_MODIFIERS
 
 #include <sys/types.h>
@@ -77,7 +73,15 @@ int fcntl64 (int fd, int cmd, ...);
 #define __WIDE(a) L ## a
 #define _WIDE(a) __WIDE(a)
 
+#include "winlean.h"
+
 #ifdef __cplusplus
+
+#include "wincap.h"
+
+#define __reg1 __stdcall __attribute__ ((regparm (1)))
+#define __reg2 __stdcall __attribute__ ((regparm (2)))
+#define __reg3 __stdcall __attribute__ ((regparm (3)))
 
 extern const char case_folded_lower[];
 #define cyg_tolower(c) (case_folded_lower[(unsigned char)(c)])
@@ -87,12 +91,6 @@ extern const char case_folded_upper[];
 #ifndef MALLOC_DEBUG
 #define cfree newlib_cfree_dont_use
 #endif
-
-#include "winlean.h"
-#include "wincap.h"
-
-/* The one function we use from winuser.h most of the time */
-extern "C" DWORD WINAPI GetLastError (void);
 
 /* Used as type by sys_wcstombs_alloc and sys_mbstowcs_alloc.  For a
    description see there. */
@@ -165,11 +163,11 @@ void dll_dllcrt0_1 (void *);
 /* dynamically loaded dll initialization */
 extern "C" int dll_dllcrt0 (HMODULE, per_process *);
 
-void _pei386_runtime_relocator (per_process *);
+extern "C" void _pei386_runtime_relocator (per_process *);
 
 /* dynamically loaded dll initialization for non-cygwin apps */
 extern "C" int dll_noncygwin_dllcrt0 (HMODULE, per_process *);
-void __stdcall do_exit (int) __attribute__ ((regparm (1), noreturn));
+void __reg1 do_exit (int) __attribute__ ((noreturn));
 
 /* libstdc++ malloc operator wrapper support.  */
 extern struct per_process_cxx_malloc default_cygwin_cxx_malloc;
@@ -191,7 +189,6 @@ void uinfo_init ();
 
 /* various events */
 void events_init ();
-void events_terminate ();
 
 void __stdcall close_all_files (bool = false);
 
@@ -209,12 +206,12 @@ extern bool cygwin_finished_initializing;
 void __stdcall set_std_handle (int);
 int __stdcall stat_dev (DWORD, int, unsigned long, struct __stat64 *);
 
-__ino64_t __stdcall hash_path_name (__ino64_t hash, PUNICODE_STRING name) __attribute__ ((regparm(2)));
-__ino64_t __stdcall hash_path_name (__ino64_t hash, PCWSTR name) __attribute__ ((regparm(2)));
-__ino64_t __stdcall hash_path_name (__ino64_t hash, const char *name) __attribute__ ((regparm(2)));
-void __stdcall nofinalslash (const char *src, char *dst) __attribute__ ((regparm(2)));
+__ino64_t __reg2 hash_path_name (__ino64_t hash, PUNICODE_STRING name);
+__ino64_t __reg2 hash_path_name (__ino64_t hash, PCWSTR name);
+__ino64_t __reg2 hash_path_name (__ino64_t hash, const char *name);
+void __reg2 nofinalslash (const char *src, char *dst);
 
-void *hook_or_detect_cygwin (const char *, const void *, WORD&, HANDLE h = NULL) __attribute__ ((regparm (3)));
+void __reg3 *hook_or_detect_cygwin (const char *, const void *, WORD&, HANDLE h = NULL);
 
 /* Time related */
 void __stdcall totimeval (struct timeval *, FILETIME *, int, int);
@@ -230,7 +227,7 @@ void init_console_handler (bool);
 
 void init_global_security ();
 
-void __set_winsock_errno (const char *fn, int ln) __attribute__ ((regparm(2)));
+void __reg2 __set_winsock_errno (const char *fn, int ln);
 #define set_winsock_errno() __set_winsock_errno (__FUNCTION__, __LINE__)
 
 extern bool wsock_started;
@@ -238,24 +235,23 @@ extern bool wsock_started;
 /* Printf type functions */
 extern "C" void vapi_fatal (const char *, va_list ap) __attribute__ ((noreturn));
 extern "C" void api_fatal (const char *, ...) __attribute__ ((noreturn));
-int __small_sprintf (char *dst, const char *fmt, ...) /*__attribute__ ((regparm (2)))*/;
-int __small_vsprintf (char *dst, const char *fmt, va_list ap) /*__attribute__ ((regparm (3)))*/;
-int __small_swprintf (PWCHAR dst, const WCHAR *fmt, ...) /*__attribute__ ((regparm (2)))*/;
-int __small_vswprintf (PWCHAR dst, const WCHAR *fmt, va_list ap) /*__attribute__ ((regparm (3)))*/;
+int __small_sprintf (char *dst, const char *fmt, ...);
+int __small_vsprintf (char *dst, const char *fmt, va_list ap);
+int __small_swprintf (PWCHAR dst, const WCHAR *fmt, ...);
+int __small_vswprintf (PWCHAR dst, const WCHAR *fmt, va_list ap);
 void multiple_cygwin_problem (const char *, unsigned, unsigned);
 
 extern "C" void vklog (int priority, const char *message, va_list ap);
 extern "C" void klog (int priority, const char *message, ...);
 bool child_copy (HANDLE, bool, ...);
 
-int symlink_worker (const char *, const char *, bool, bool)
-  __attribute__ ((regparm (3)));
+int __reg3 symlink_worker (const char *, const char *, bool, bool);
 
 class path_conv;
 
-int __stdcall stat_worker (path_conv &pc, struct __stat64 *buf) __attribute__ ((regparm (2)));
+int __reg2 stat_worker (path_conv &pc, struct __stat64 *buf);
 
-__ino64_t __stdcall readdir_get_ino (const char *path, bool dot_dot) __attribute__ ((regparm (2)));
+__ino64_t __reg2 readdir_get_ino (const char *path, bool dot_dot);
 
 /* mmap functions. */
 enum mmap_region_status
@@ -267,11 +263,14 @@ enum mmap_region_status
 mmap_region_status mmap_is_attached_or_noreserve (void *addr, size_t len);
 bool is_mmapped_region (caddr_t start_addr, caddr_t end_address);
 
-inline bool flush_file_buffers (HANDLE h)
+extern inline bool flush_file_buffers (HANDLE h)
 {
   return (GetFileType (h) != FILE_TYPE_PIPE) ? FlushFileBuffers (h) : true;
 }
 #define FlushFileBuffers flush_file_buffers
+
+/* Make sure that regular ExitThread is never called */
+#define ExitThread exit_thread
 
 /**************************** Exports ******************************/
 
@@ -298,9 +297,12 @@ extern "C" char _data_start__, _data_end__, _bss_start__, _bss_end__;
 extern "C" void (*__CTOR_LIST__) (void);
 extern "C" void (*__DTOR_LIST__) (void);
 
-#if !defined(_GLOBALS_H)
+
+
+#ifndef NO_GLOBALS_H
 #include "globals.h"
-inline void clear_procimptoken ()
+
+extern inline void clear_procimptoken ()
 {
   if (hProcImpToken)
     {
@@ -309,6 +311,5 @@ inline void clear_procimptoken ()
       CloseHandle (old_procimp);
     }
 }
-#endif
-
+#endif /*NO_GLOBALS_H*/
 #endif /* defined __cplusplus */

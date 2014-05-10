@@ -1,6 +1,7 @@
 /* sched.cc: scheduler interface for Cygwin
 
-   Copyright 2001, 2003, 2006, 2008, 2011 Red Hat, Inc.
+   Copyright 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2010, 2011, 2012
+   Red Hat, Inc.
 
    Written by Robert Collins <rbtcollins@hotmail.com>
 
@@ -10,9 +11,6 @@
    Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
    details. */
 
-#ifdef HAVE_CONFIG_H
-#endif
-
 #include "winsup.h"
 #include "miscfuncs.h"
 #include "cygerrno.h"
@@ -20,8 +18,6 @@
 /* for getpid */
 #include <unistd.h>
 #include "registry.h"
-
-extern "C" HWND WINAPI GetForegroundWindow();
 
 /* Win32 priority to UNIX priority Mapping.
    For now, I'm just following the spec: any range of priorities is ok.

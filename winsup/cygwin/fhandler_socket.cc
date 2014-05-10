@@ -1,7 +1,7 @@
 /* fhandler_socket.cc. See fhandler.h for a description of the fhandler classes.
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008,
-   2009, 2010, 2011 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
+   2011, 2012, 2013 Red Hat, Inc.
 
    This file is part of Cygwin.
 
@@ -12,31 +12,29 @@
 /* #define DEBUG_NEST_ON 1 */
 
 #define  __INSIDE_CYGWIN_NET__
+#define USE_SYS_TYPES_FD_SET
 
 #include "winsup.h"
-#include <sys/un.h>
-#include <asm/byteorder.h>
-
-#include <stdlib.h>
-#define USE_SYS_TYPES_FD_SET
-#include <winsock2.h>
-#include <mswsock.h>
-#include <iphlpapi.h>
 #include "cygerrno.h"
 #include "security.h"
-#include "cygwin/version.h"
-#include "perprocess.h"
 #include "path.h"
 #include "fhandler.h"
 #include "dtable.h"
 #include "cygheap.h"
+#include <ws2tcpip.h>
+#include <mswsock.h>
+#include <iphlpapi.h>
+#include <asm/byteorder.h>
+#include "cygwin/version.h"
+#include "perprocess.h"
 #include "shared_info.h"
 #include "sigproc.h"
 #include "wininfo.h"
 #include <unistd.h>
+#include <sys/param.h>
 #include <sys/acl.h>
 #include "cygtls.h"
-#include "cygwin/in6.h"
+#include <sys/un.h>
 #include "ntdll.h"
 #include "miscfuncs.h"
 
@@ -74,6 +72,21 @@ get_inet_addr (const struct sockaddr *in, int inlen,
   switch (in->sa_family)
     {
     case AF_LOCAL:
+      /* Check for abstract socket. These are generated for AF_LOCAL datagram
+	 sockets in recv_internal, to allow a datagram server to use sendto
+	 after recvfrom. */
+      if (inlen >= (int) sizeof (in->sa_family) + 7
+	  && in->sa_data[0] == '\0' && in->sa_data[1] == 'd'
+	  && in->sa_data[6] == '\0')
+	{
+	  struct sockaddr_in addr;
+	  addr.sin_family = AF_INET;
+	  sscanf (in->sa_data + 2, "%04hx", &addr.sin_port);
+	  addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+	  *outlen = sizeof addr;
+	  memcpy (out, &addr, *outlen);
+	  return 0;
+	}
       break;
     case AF_INET:
     case AF_INET6:
@@ -127,9 +140,7 @@ get_inet_addr (const struct sockaddr *in, int inlen,
 	     some greedy Win32 application.  Therefore we should never wait
 	     endlessly without checking for signals and thread cancel event. */
 	  pthread_testcancel ();
-	  /* Using IsEventSignalled like this is racy since another thread could
-	     be waiting for signal_arrived. */
-	  if (IsEventSignalled (signal_arrived)
+	  if (cygwait (NULL, cw_nowait, cw_sig_eintr) == WAIT_SIGNALED
 	      && !_my_tls.call_signal_handler ())
 	    {
 	      set_errno (EINTR);
@@ -661,7 +672,8 @@ fhandler_socket::wait_for_events (const long event_mask, const DWORD flags)
 	  return SOCKET_ERROR;
 	}
 
-      WSAEVENT ev[2] = { wsock_evt, signal_arrived };
+      WSAEVENT ev[2] = { wsock_evt };
+      set_signal_arrived here (ev[1]);
       switch (WSAWaitForMultipleEvents (2, ev, FALSE, 50, FALSE))
 	{
 	  case WSA_WAIT_TIMEOUT:
@@ -805,7 +817,7 @@ fhandler_socket::dup (fhandler_base *child, int flags)
   return -1;
 }
 
-int __stdcall
+int __reg2
 fhandler_socket::fstat (struct __stat64 *buf)
 {
   int res;
@@ -903,17 +915,43 @@ fhandler_socket::bind (const struct sockaddr *name, int namelen)
     {
 #define un_addr ((struct sockaddr_un *) name)
       struct sockaddr_in sin;
-      int len = sizeof sin;
+      int len = namelen - offsetof (struct sockaddr_un, sun_path);
 
-      if (strlen (un_addr->sun_path) >= UNIX_PATH_LEN)
+      /* Check that name is within bounds.  Don't check if the string is
+         NUL-terminated, because there are projects out there which set
+	 namelen to a value which doesn't cover the trailing NUL. */
+      if (len <= 1 || (len = strnlen (un_addr->sun_path, len)) > UNIX_PATH_MAX)
 	{
-	  set_errno (ENAMETOOLONG);
+	  set_errno (len <= 1 ? (len == 1 ? ENOENT : EINVAL) : ENAMETOOLONG);
 	  goto out;
 	}
+      /* Copy over the sun_path string into a buffer big enough to add a
+	 trailing NUL. */
+      char sun_path[len + 1];
+      strncpy (sun_path, un_addr->sun_path, len);
+      sun_path[len] = '\0';
+
+      /* This isn't entirely foolproof, but we check first if the file exists
+	 so we can return with EADDRINUSE before having bound the socket.
+	 This allows an application to call bind again on the same socket using
+	 another filename.  If we bind first, the application will not be able
+	 to call bind successfully ever again. */
+      path_conv pc (sun_path, PC_SYM_FOLLOW);
+      if (pc.error)
+	{
+	  set_errno (pc.error);
+	  goto out;
+	}
+      if (pc.exists ())
+	{
+	  set_errno (EADDRINUSE);
+	  goto out;
+	}
+
       sin.sin_family = AF_INET;
       sin.sin_port = 0;
       sin.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-      if (::bind (get_socket (), (sockaddr *) &sin, len))
+      if (::bind (get_socket (), (sockaddr *) &sin, len = sizeof sin))
 	{
 	  syscall_printf ("AF_LOCAL: bind failed");
 	  set_winsock_errno ();
@@ -929,17 +967,6 @@ fhandler_socket::bind (const struct sockaddr *name, int namelen)
       sin.sin_port = ntohs (sin.sin_port);
       debug_printf ("AF_LOCAL: socket bound to port %u", sin.sin_port);
 
-      path_conv pc (un_addr->sun_path, PC_SYM_FOLLOW);
-      if (pc.error)
-	{
-	  set_errno (pc.error);
-	  goto out;
-	}
-      if (pc.exists ())
-	{
-	  set_errno (EADDRINUSE);
-	  goto out;
-	}
       mode_t mode = adjust_socket_file_mode ((S_IRWXU | S_IRWXG | S_IRWXO)
 					     & ~cygheap->umask);
       DWORD fattr = FILE_ATTRIBUTE_SYSTEM;
@@ -1000,7 +1027,7 @@ fhandler_socket::bind (const struct sockaddr *name, int namelen)
 	    }
 	  else
 	    {
-	      set_sun_path (un_addr->sun_path);
+	      set_sun_path (sun_path);
 	      res = 0;
 	    }
 	  NtClose (fh);
@@ -1128,14 +1155,9 @@ fhandler_socket::listen (int backlog)
 	}
       else if (get_addr_family () == AF_INET6)
 	{
-	  struct sockaddr_in6 sin6 =
-	    {
-	      sin6_family: AF_INET6,
-	      sin6_port: 0,
-	      sin6_flowinfo: 0,
-	      sin6_addr: {{IN6ADDR_ANY_INIT}},
-	      sin6_scope_id: 0
-	    };
+	  struct sockaddr_in6 sin6;
+	  memset (&sin6, 0, sizeof sin6);
+	  sin6.sin6_family = AF_INET6;
 	  if (!::bind (get_socket (), (struct sockaddr *) &sin6, sizeof sin6))
 	    res = ::listen (get_socket (), backlog);
 	}
@@ -1213,12 +1235,12 @@ fhandler_socket::accept4 (struct sockaddr *peer, int *len, int flags)
 		     bound socket name of the peer's socket.  For now
 		     we just fake an unbound socket on the other side. */
 		  static struct sockaddr_un un = { AF_LOCAL, "" };
-		  memcpy (peer, &un, min (*len, (int) sizeof (un.sun_family)));
+		  memcpy (peer, &un, MIN (*len, (int) sizeof (un.sun_family)));
 		  *len = (int) sizeof (un.sun_family);
 		}
 	      else
 		{
-		  memcpy (peer, &lpeer, min (*len, llen));
+		  memcpy (peer, &lpeer, MIN (*len, llen));
 		  *len = llen;
 		}
 	    }
@@ -1246,8 +1268,8 @@ fhandler_socket::getsockname (struct sockaddr *name, int *namelen)
       sun.sun_family = AF_LOCAL;
       sun.sun_path[0] = '\0';
       if (get_sun_path ())
-	strncat (sun.sun_path, get_sun_path (), UNIX_PATH_LEN - 1);
-      memcpy (name, &sun, min (*namelen, (int) SUN_LEN (&sun) + 1));
+	strncat (sun.sun_path, get_sun_path (), UNIX_PATH_MAX - 1);
+      memcpy (name, &sun, MIN (*namelen, (int) SUN_LEN (&sun) + 1));
       *namelen = (int) SUN_LEN (&sun) + (get_sun_path () ? 1 : 0);
       res = 0;
     }
@@ -1261,7 +1283,7 @@ fhandler_socket::getsockname (struct sockaddr *name, int *namelen)
       res = ::getsockname (get_socket (), (struct sockaddr *) &sock, &len);
       if (!res)
 	{
-	  memcpy (name, &sock, min (*namelen, len));
+	  memcpy (name, &sock, MIN (*namelen, len));
 	  *namelen = len;
 	}
       else
@@ -1290,7 +1312,7 @@ fhandler_socket::getsockname (struct sockaddr *name, int *namelen)
 		}
 	      if (!res)
 		{
-		  memcpy (name, &sock, min (*namelen, len));
+		  memcpy (name, &sock, MIN (*namelen, len));
 		  *namelen = len;
 		}
 	    }
@@ -1320,13 +1342,13 @@ fhandler_socket::getpeername (struct sockaddr *name, int *namelen)
       sun.sun_family = AF_LOCAL;
       sun.sun_path[0] = '\0';
       if (get_peer_sun_path ())
-	strncat (sun.sun_path, get_peer_sun_path (), UNIX_PATH_LEN - 1);
-      memcpy (name, &sun, min (*namelen, (int) SUN_LEN (&sun) + 1));
+	strncat (sun.sun_path, get_peer_sun_path (), UNIX_PATH_MAX - 1);
+      memcpy (name, &sun, MIN (*namelen, (int) SUN_LEN (&sun) + 1));
       *namelen = (int) SUN_LEN (&sun) + (get_peer_sun_path () ? 1 : 0);
     }
   else
     {
-      memcpy (name, &sock, min (*namelen, len));
+      memcpy (name, &sock, MIN (*namelen, len));
       *namelen = len;
     }
 
@@ -1338,7 +1360,7 @@ fhandler_socket::read (void *in_ptr, size_t& len)
 {
   WSABUF wsabuf = { len, (char *) in_ptr };
   WSAMSG wsamsg = { NULL, 0, &wsabuf, 1, { 0,  NULL }, 0 };
-  len = recv_internal (&wsamsg);
+  len = recv_internal (&wsamsg, false);
 }
 
 int
@@ -1354,17 +1376,8 @@ fhandler_socket::readv (const struct iovec *const iov, const int iovcnt,
       wsaptr->buf = (char *) iovptr->iov_base;
     }
   WSAMSG wsamsg = { NULL, 0, wsabuf, iovcnt, { 0,  NULL}, 0 };
-  return recv_internal (&wsamsg);
+  return recv_internal (&wsamsg, false);
 }
-
-extern "C" {
-#define WSAID_WSARECVMSG \
-	  {0xf689d7c8,0x6f1f,0x436b,{0x8a,0x53,0xe5,0x4f,0xe3,0x51,0xc3,0x22}};
-typedef int (WSAAPI *LPFN_WSARECVMSG)(SOCKET,LPWSAMSG,LPDWORD,LPWSAOVERLAPPED,
-				      LPWSAOVERLAPPED_COMPLETION_ROUTINE);
-int WSAAPI WSASendMsg(SOCKET,LPWSAMSG,DWORD,LPDWORD, LPWSAOVERLAPPED,
-		      LPWSAOVERLAPPED_COMPLETION_ROUTINE);
-};
 
 /* There's no DLL which exports the symbol WSARecvMsg.  One has to call
    WSAIoctl as below to fetch the function pointer.  Why on earth did the
@@ -1381,28 +1394,33 @@ get_ext_funcptr (SOCKET sock, void *funcptr)
 }
 
 inline ssize_t
-fhandler_socket::recv_internal (LPWSAMSG wsamsg)
+fhandler_socket::recv_internal (LPWSAMSG wsamsg, bool use_recvmsg)
 {
   ssize_t res = 0;
   DWORD ret = 0, wret;
   int evt_mask = FD_READ | ((wsamsg->dwFlags & MSG_OOB) ? FD_OOB : 0);
   LPWSABUF &wsabuf = wsamsg->lpBuffers;
   ULONG &wsacnt = wsamsg->dwBufferCount;
-  bool use_recvmsg = false;
   static NO_COPY LPFN_WSARECVMSG WSARecvMsg;
+  int orig_namelen = wsamsg->namelen;
 
   DWORD wait_flags = wsamsg->dwFlags;
   bool waitall = !!(wait_flags & MSG_WAITALL);
   wsamsg->dwFlags &= (MSG_OOB | MSG_PEEK | MSG_DONTROUTE);
-  if (wsamsg->Control.len > 0)
+  if (use_recvmsg)
     {
       if (!WSARecvMsg
 	  && get_ext_funcptr (get_socket (), &WSARecvMsg) == SOCKET_ERROR)
 	{
-	  set_winsock_errno ();
-	  return SOCKET_ERROR;
+	  if (wsamsg->Control.len > 0)
+	    {
+	      set_winsock_errno ();
+	      return SOCKET_ERROR;
+	    }
+	  use_recvmsg = false;
 	}
-      use_recvmsg = true;
+      else /* Only MSG_PEEK is supported by WSARecvMsg. */
+	wsamsg->dwFlags &= MSG_PEEK;
     }
   if (waitall)
     {
@@ -1481,17 +1499,57 @@ fhandler_socket::recv_internal (LPWSAMSG wsamsg)
       /* According to SUSv3, errno isn't set in that case and no error
 	 condition is returned. */
       if (WSAGetLastError () == WSAEMSGSIZE)
-	return ret + wret;
-
-      if (!ret)
+	ret += wret;
+      else if (!ret)
 	{
 	  /* ESHUTDOWN isn't defined for recv in SUSv3.  Simply EOF is returned
 	     in this case. */
 	  if (WSAGetLastError () == WSAESHUTDOWN)
-	    return 0;
+	    ret = 0;
+	  else
+	    {
+	      set_winsock_errno ();
+	      return SOCKET_ERROR;
+	    }
+	}
+    }
 
-	  set_winsock_errno ();
-	  return SOCKET_ERROR;
+  if (get_addr_family () == AF_LOCAL && wsamsg->name != NULL
+      && orig_namelen >= (int) sizeof (sa_family_t))
+    {
+      /* WSARecvFrom copied the sockaddr_in block to wsamsg->name.  We have to
+	 overwrite it with a sockaddr_un block.  For datagram sockets we
+	 generate a sockaddr_un with a filename analogue to abstract socket
+	 names under Linux.  See `man 7 unix' under Linux for a description. */
+      sockaddr_un *un = (sockaddr_un *) wsamsg->name;
+      un->sun_family = AF_LOCAL;
+      int len = orig_namelen - offsetof (struct sockaddr_un, sun_path);
+      if (len > 0)
+	{
+	  if (get_socket_type () == SOCK_DGRAM)
+	    {
+	      if (len >= 7)
+		{
+		  __small_sprintf (un->sun_path + 1, "d%04x",
+			       ((struct sockaddr_in *) wsamsg->name)->sin_port);
+		  wsamsg->namelen = offsetof (struct sockaddr_un, sun_path) + 7;
+		}
+	      else
+		wsamsg->namelen = offsetof (struct sockaddr_un, sun_path) + 1;
+	      un->sun_path[0] = '\0';
+	    }
+	  else if (!get_peer_sun_path ())
+	    wsamsg->namelen = sizeof (sa_family_t);
+	  else
+	    {
+	      memset (un->sun_path, 0, len);
+	      strncpy (un->sun_path, get_peer_sun_path (), len);
+	      if (un->sun_path[len - 1] == '\0')
+		len = strlen (un->sun_path) + 1;
+	      if (len > UNIX_PATH_MAX)
+		len = UNIX_PATH_MAX;
+	      wsamsg->namelen = offsetof (struct sockaddr_un, sun_path) + len;
+	    }
 	}
     }
 
@@ -1509,7 +1567,7 @@ fhandler_socket::recvfrom (void *ptr, size_t len, int flags,
 		    &wsabuf, 1,
 		    { 0, NULL},
 		    flags };
-  ssize_t ret = recv_internal (&wsamsg);
+  ssize_t ret = recv_internal (&wsamsg, false);
   if (fromlen)
     *fromlen = wsamsg.namelen;
   return ret;
@@ -1524,12 +1582,12 @@ fhandler_socket::recvmsg (struct msghdr *msg, int flags)
 
   /* Disappointing but true:  Even if WSARecvMsg is supported, it's only
      supported for datagram and raw sockets. */
-  if (!wincap.has_recvmsg () || get_socket_type () == SOCK_STREAM
-      || get_addr_family () == AF_LOCAL)
+  bool use_recvmsg = true;
+  if (get_socket_type () == SOCK_STREAM || get_addr_family () == AF_LOCAL
+      || !wincap.has_recvmsg ())
     {
+      use_recvmsg = false;
       msg->msg_controllen = 0;
-      if (!CYGWIN_VERSION_CHECK_FOR_USING_ANCIENT_MSGHDR)
-	msg->msg_flags = 0;
     }
 
   WSABUF wsabuf[msg->msg_iovlen];
@@ -1544,7 +1602,7 @@ fhandler_socket::recvmsg (struct msghdr *msg, int flags)
 		    wsabuf, msg->msg_iovlen,
 		    { msg->msg_controllen, (char *) msg->msg_control },
 		    flags };
-  ssize_t ret = recv_internal (&wsamsg);
+  ssize_t ret = recv_internal (&wsamsg, use_recvmsg);
   if (ret >= 0)
     {
       msg->msg_namelen = wsamsg.namelen;
@@ -1783,7 +1841,7 @@ fhandler_socket::close ()
 	  res = -1;
 	  break;
 	}
-      if (WaitForSingleObject (signal_arrived, 10) == WAIT_OBJECT_0)
+      if (cygwait (10) == WAIT_SIGNALED)
 	{
 	  set_errno (EINTR);
 	  res = -1;

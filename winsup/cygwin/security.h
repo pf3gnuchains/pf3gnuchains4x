@@ -1,7 +1,7 @@
 /* security.h: security declarations
 
-   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
-   2010, 2011 Red Hat, Inc.
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
+   2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -9,8 +9,7 @@ This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
 details. */
 
-#ifndef _SECURITY_H
-#define _SECURITY_H
+#pragma once
 
 #include <accctrl.h>
 
@@ -223,9 +222,12 @@ public:
 
   /* += adds a "normal" SID, *= adds a well-known SID.  See comment in class
      cygsid above. */
-  BOOL operator+= (cygsid &si) { return add ((PSID) si, false); }
+  BOOL operator+= (cygsid &si) { return add ((PSID) si,
+					     si.is_well_known_sid ()); }
   BOOL operator+= (const char *sidstr) { cygsid nsi (sidstr);
-					 return add ((PSID) nsi, false); }
+					 return add ((PSID) nsi,
+						     nsi.is_well_known_sid ());
+				       }
   BOOL operator+= (const PSID psid) { return add (psid, false); }
   BOOL operator*= (cygsid &si) { return add ((PSID) si, true); }
   BOOL operator*= (const char *sidstr) { cygsid nsi (sidstr);
@@ -352,13 +354,13 @@ extern cygpsid well_known_samba_unix_user_fake_sid;
 
 bool privilege_luid (const PWCHAR pname, LUID &luid, bool &high_integrity);
 
-inline BOOL
+extern inline BOOL
 well_known_sid_type (SID_NAME_USE type)
 {
   return type == SidTypeAlias || type == SidTypeWellKnownGroup;
 }
 
-inline BOOL
+extern inline BOOL
 legal_sid_type (SID_NAME_USE type)
 {
   return type == SidTypeUser  || type == SidTypeGroup
@@ -367,38 +369,24 @@ legal_sid_type (SID_NAME_USE type)
 
 class path_conv;
 /* File manipulation */
-int __stdcall get_file_attribute (HANDLE, path_conv &, mode_t *,
-				  __uid32_t *, __gid32_t *)
-		__attribute__ ((regparm (3)));
-int __stdcall set_file_attribute (HANDLE, path_conv &,
-				  __uid32_t, __gid32_t, mode_t)
-		__attribute__ ((regparm (3)));
-int __stdcall get_object_sd (HANDLE, security_descriptor &)
-		__attribute__ ((regparm (2)));
-int __stdcall get_object_attribute (HANDLE, __uid32_t *, __gid32_t *, mode_t *)
-		__attribute__ ((regparm (3)));
-int __stdcall set_object_attribute (HANDLE, __uid32_t, __gid32_t, mode_t)
-		__attribute__ ((regparm (3)));
-int __stdcall create_object_sd_from_attribute (HANDLE, __uid32_t, __gid32_t,
-					       mode_t, security_descriptor &)
-		__attribute__ ((regparm (3)));
-int __stdcall set_object_sd (HANDLE, security_descriptor &, bool)
-		__attribute__ ((regparm (3)));
+int __reg3 get_file_attribute (HANDLE, path_conv &, mode_t *,
+				  __uid32_t *, __gid32_t *);
+int __reg3 set_file_attribute (HANDLE, path_conv &,
+				  __uid32_t, __gid32_t, mode_t);
+int __reg2 get_object_sd (HANDLE, security_descriptor &);
+int __reg3 get_object_attribute (HANDLE, __uid32_t *, __gid32_t *, mode_t *);
+int __reg3 set_object_attribute (HANDLE, __uid32_t, __gid32_t, mode_t);
+int __reg3 create_object_sd_from_attribute (HANDLE, __uid32_t, __gid32_t,
+					       mode_t, security_descriptor &);
+int __reg3 set_object_sd (HANDLE, security_descriptor &, bool);
 
-int __stdcall get_reg_attribute (HKEY hkey, mode_t *, __uid32_t *, __gid32_t *)
-		__attribute__ ((regparm (3)));
-LONG __stdcall get_file_sd (HANDLE fh, path_conv &, security_descriptor &, bool)
-		__attribute__ ((regparm (3)));
-LONG __stdcall set_file_sd (HANDLE fh, path_conv &, security_descriptor &, bool)
-		__attribute__ ((regparm (3)));
-bool __stdcall add_access_allowed_ace (PACL, int, DWORD, PSID, size_t &, DWORD)
-		__attribute__ ((regparm (3)));
-bool __stdcall add_access_denied_ace (PACL, int, DWORD, PSID, size_t &, DWORD)
-		__attribute__ ((regparm (3)));
-int __stdcall check_file_access (path_conv &, int, bool)
-		__attribute__ ((regparm (3)));
-int __stdcall check_registry_access (HANDLE, int, bool)
-		__attribute__ ((regparm (3)));
+int __reg3 get_reg_attribute (HKEY hkey, mode_t *, __uid32_t *, __gid32_t *);
+LONG __reg3 get_file_sd (HANDLE fh, path_conv &, security_descriptor &, bool);
+LONG __reg3 set_file_sd (HANDLE fh, path_conv &, security_descriptor &, bool);
+bool __reg3 add_access_allowed_ace (PACL, int, DWORD, PSID, size_t &, DWORD);
+bool __reg3 add_access_denied_ace (PACL, int, DWORD, PSID, size_t &, DWORD);
+int __reg3 check_file_access (path_conv &, int, bool);
+int __reg3 check_registry_access (HANDLE, int, bool);
 
 void set_security_attribute (path_conv &pc, int attribute,
 			     PSECURITY_ATTRIBUTES psa,
@@ -470,9 +458,15 @@ void set_cygwin_privileges (HANDLE token);
 
 /* Various types of security attributes for use in Create* functions. */
 extern SECURITY_ATTRIBUTES sec_none, sec_none_nih, sec_all, sec_all_nih;
-extern SECURITY_ATTRIBUTES *__stdcall __sec_user (PVOID, PSID, PSID,
-						  DWORD, BOOL)
-		__attribute__ ((regparm (3)));
+extern SECURITY_ATTRIBUTES *__reg3 __sec_user (PVOID, PSID, PSID,
+						  DWORD, BOOL);
+
+extern PSECURITY_DESCRIPTOR _recycler_sd (void *buf, bool users, bool dir);
+#define recycler_sd(users,dir) \
+  (_recycler_sd (alloca (sizeof (SECURITY_DESCRIPTOR) + MAX_DACL_LEN (3)), \
+		 (users), \
+		 (dir)))
+
 extern PSECURITY_DESCRIPTOR _everyone_sd (void *buf, ACCESS_MASK access);
 #define everyone_sd(access)	(_everyone_sd (alloca (SD_MIN_SIZE), (access)))
 
@@ -481,12 +475,10 @@ extern PSECURITY_DESCRIPTOR _everyone_sd (void *buf, ACCESS_MASK access);
 extern bool sec_acl (PACL acl, bool original, bool admins, PSID sid1 = NO_SID,
 		     PSID sid2 = NO_SID, DWORD access2 = 0);
 
-ssize_t __stdcall read_ea (HANDLE, path_conv &, const char *,
-			   char *, size_t)
-		__attribute__ ((regparm (3)));
-int __stdcall write_ea (HANDLE, path_conv &, const char *, const char *,
-			size_t, int)
-		__attribute__ ((regparm (3)));
+ssize_t __reg3 read_ea (HANDLE, path_conv &, const char *,
+			   char *, size_t);
+int __reg3 write_ea (HANDLE, path_conv &, const char *, const char *,
+			size_t, int);
 
 /* Note: sid1 is usually (read: currently always) the current user's
    effective sid (cygheap->user.sid ()). */
@@ -503,5 +495,3 @@ sec_user (SECURITY_ATTRIBUTES *sa_buf, PSID sid1, PSID sid2 = NULL,
 {
   return __sec_user (sa_buf, sid1, sid2, access2, TRUE);
 }
-
-#endif /*_SECURITY_H*/

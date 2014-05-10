@@ -1,8 +1,8 @@
 /* environ.cc: Cygwin-adopted functions from newlib to manipulate
    process's environment.
 
-   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
+   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
+   2008, 2009, 2010, 2011, 2012, 2013 Red Hat, Inc.
 
 This software is a copyrighted work licensed under the terms of the
 Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
@@ -32,11 +32,6 @@ details. */
 #include "shared_info.h"
 #include "ntdll.h"
 
-extern bool dos_file_warning;
-extern bool ignore_case_with_glob;
-extern bool allow_winsymlinks;
-bool reset_com = false;
-
 static char **lastenviron;
 
 /* Parse CYGWIN options */
@@ -45,8 +40,9 @@ static NO_COPY bool export_settings = false;
 
 enum settings
   {
-    justset,
     isfunc,
+    setdword,
+    setbool,
     setbit
   };
 
@@ -116,15 +112,17 @@ static struct parse_thing
       } values[2];
   } known[] NO_COPY =
 {
-  {"dosfilewarning", {&dos_file_warning}, justset, NULL, {{false}, {true}}},
+  {"detect_bloda", {&detect_bloda}, setbool, NULL, {{false}, {true}}},
+  {"dosfilewarning", {&dos_file_warning}, setbool, NULL, {{false}, {true}}},
   {"error_start", {func: error_start_init}, isfunc, NULL, {{0}, {0}}},
-  {"export", {&export_settings}, justset, NULL, {{false}, {true}}},
+  {"export", {&export_settings}, setbool, NULL, {{false}, {true}}},
   {"glob", {func: glob_init}, isfunc, NULL, {{0}, {s: "normal"}}},
+  {"pipe_byte", {&pipe_byte}, setbool, NULL, {{false}, {true}}},
   {"proc_retry", {func: set_proc_retry}, isfunc, NULL, {{0}, {5}}},
-  {"reset_com", {&reset_com}, justset, NULL, {{false}, {true}}},
+  {"reset_com", {&reset_com}, setbool, NULL, {{false}, {true}}},
   {"tty", {func: tty_is_gone}, isfunc, NULL, {{0}, {0}}},
-  {"winsymlinks", {&allow_winsymlinks}, justset, NULL, {{false}, {true}}},
-  {NULL, {0}, justset, 0, {{0}, {0}}}
+  {"winsymlinks", {&allow_winsymlinks}, setbool, NULL, {{false}, {true}}},
+  {NULL, {0}, setdword, 0, {{0}, {0}}}
 };
 
 /* Parse a string of the form "something=stuff somethingelse=more-stuff",
@@ -184,12 +182,19 @@ parse_options (const char *inbuf)
 		  k->values[istrue].s : eq);
 		debug_printf ("%s (called func)", k->name);
 		break;
-	      case justset:
+	      case setdword:
 		if (!istrue || !eq)
 		  *k->setting.x = k->values[istrue].i;
 		else
 		  *k->setting.x = strtol (eq, NULL, 0);
 		debug_printf ("%s %d", k->name, *k->setting.x);
+		break;
+	      case setbool:
+		if (!istrue || !eq)
+		  *k->setting.b = k->values[istrue].i;
+		else
+		  *k->setting.b = !!strtol (eq, NULL, 0);
+		debug_printf ("%s%s", *k->setting.b ? "" : "no", k->name);
 		break;
 	      case setbit:
 		*k->setting.x &= ~k->values[istrue].i;
@@ -370,7 +375,7 @@ win_env::add_cache (const char *in_posix, const char *in_native)
   to the beginning of the environment variable name.  *in_posix is any
   known posix value for the environment variable. Returns a pointer to
   the appropriate conversion structure.  */
-win_env * __stdcall
+win_env * __reg3
 getwinenv (const char *env, const char *in_posix, win_env *temp)
 {
   if (!match_first_char (env, WC))
@@ -824,7 +829,7 @@ environ_init (char **envp, int envc)
       envp[i] = newp;
       if (*newp == '=')
 	*newp = '!';
-      char *eq = strechr (newp, '=');
+      char *eq = strchrnul (newp, '=');
       ucenv (newp, eq);	/* uppercase env vars which need it */
       if (*newp == 'T' && strncmp (newp, "TERM=", 5) == 0)
 	sawTERM = 1;
@@ -867,7 +872,7 @@ env_sort (const void *a, const void *b)
   return strcmp (*p, *q);
 }
 
-char * __stdcall
+char * __reg3
 getwinenveq (const char *name, size_t namelen, int x)
 {
   WCHAR name0[namelen - 1];
@@ -902,8 +907,7 @@ struct spenv
   bool add_if_exists;		/* if true, retrieve value from cache */
   const char * (cygheap_user::*from_cygheap) (const char *, size_t);
 
-  char *retrieve (bool, const char * const = NULL)
-    __attribute__ ((regparm (3)));
+  char __reg3 *retrieve (bool, const char * const = NULL);
 };
 
 #define env_dontadd almost_null
@@ -967,7 +971,7 @@ spenv::retrieve (bool no_envblock, const char *const env)
    filled with null terminated strings, terminated by double null characters.
    Converts environment variables noted in conv_envvars into win32 form
    prior to placing them in the string.  */
-char ** __stdcall
+char ** __reg3
 build_env (const char * const *envp, PWCHAR &envblock, int &envc,
 	   bool no_envblock)
 {

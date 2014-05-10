@@ -1,6 +1,6 @@
 /* advapi32.cc: Win32 replacement functions.
 
-   Copyright 2011 Red Hat, Inc.
+   Copyright 2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -12,7 +12,6 @@ details. */
 #include <winioctl.h>
 #include "shared_info.h"
 #include "ntdll.h"
-#include <wchar.h>
 
 #define DEFAULT_NTSTATUS_TO_BOOL_RETURN \
   if (!NT_SUCCESS (status)) \
@@ -43,8 +42,8 @@ DuplicateTokenEx (HANDLE tok, DWORD access, LPSECURITY_ATTRIBUTES sec_attr,
     { sizeof sqos, level, SECURITY_STATIC_TRACKING, FALSE };
   OBJECT_ATTRIBUTES attr =
     { sizeof attr, NULL, NULL,
-      sec_attr && sec_attr->bInheritHandle? OBJ_INHERIT : 0,
-      sec_attr ? sec_attr->lpSecurityDescriptor : NULL, &sqos };
+      (sec_attr && sec_attr->bInheritHandle) ? OBJ_INHERIT : 0U,
+      (sec_attr ? sec_attr->lpSecurityDescriptor : NULL), &sqos };
   NTSTATUS status = NtDuplicateToken (tok, access, &attr, FALSE, type, new_tok);
   DEFAULT_NTSTATUS_TO_BOOL_RETURN
 }
@@ -89,7 +88,7 @@ ImpersonateLoggedOnUser (HANDLE tok)
   DEFAULT_NTSTATUS_TO_BOOL_RETURN
 }
 
-BOOL
+BOOL WINAPI
 ImpersonateNamedPipeClient (HANDLE pipe)
 {
   IO_STATUS_BLOCK io;

@@ -1,7 +1,7 @@
 /* heap.cc: Cygwin heap manager.
 
-   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
+   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
+   2007, 2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -192,8 +192,15 @@ heap_init ()
 	api_fatal ("MEM_COMMIT failed, %E");
     }
 
-  debug_printf ("heap base %p, heap top %p", cygheap->user_heap.base,
-		cygheap->user_heap.top);
+  /* CV 2012-05-21: Moved printing heap size here from strace::activate.
+     The value printed in strace.activate was always wrong, because at the
+     time it's called, cygheap points to cygheap_dummy.  Above all, the heap
+     size has not been evaluated yet, except in a forked child.  Since
+     heap_init is called early, the heap size is printed pretty much at the
+     start of the strace output, so there isn't anything lost. */
+  debug_printf ("heap base %p, heap top %p, heap size %p (%u)",
+		cygheap->user_heap.base, cygheap->user_heap.top,
+		cygheap->user_heap.chunk, cygheap->user_heap.chunk);
   page_const--;
   // malloc_init ();
 }

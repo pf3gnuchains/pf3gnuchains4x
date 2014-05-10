@@ -1,4 +1,4 @@
-#   Copyright 1993, 1997-1998, 2007-2012 Free Software Foundation, Inc.
+#   Copyright 1993-2013 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -60,7 +60,7 @@ proc gdb_load { arg } {
     } else {
 	if ![target_info exists netport] {
 	    perror "Need either netport or gdb_serial entry for [target_info name].";
-	    return -1;
+	    return -1
 	}
 	set targetname [target_info netport];
 	set command "target $protocol udp [target_info netport]\n";
@@ -105,7 +105,7 @@ proc gdb_load { arg } {
 	    set arg [remote_download host $arg];
 	    if { $arg == "" } {
 		error "download failed"
-		return -1;
+		return -1
 	    }
 	}
 	send_gdb "load $arg $offset\n"

@@ -123,6 +123,39 @@ AC_ARG_ENABLE(newlib-reent-small,
   no)  newlib_reent_small=no ;;
   *)   AC_MSG_ERROR(bad value ${enableval} for newlib-reent-small option) ;;
  esac], [newlib_reent_small=])dnl
+ 
+dnl Support --disable-newlib-fvwrite-in-streamio
+AC_ARG_ENABLE(newlib-fvwrite-in-streamio,
+[  --disable-newlib-fvwrite-in-streamio    disable iov in streamio],
+[if test "${newlib_fvwrite_in_streamio+set}" != set; then
+  case "${enableval}" in
+    yes) newlib_fvwrite_in_streamio=yes ;;
+    no)  newlib_fvwrite_in_streamio=no  ;;
+    *)   AC_MSG_ERROR(bad value ${enableval} for newlib-fvwrite-in-streamio option) ;;
+  esac
+ fi], [newlib_fvwrite_in_streamio=yes])dnl
+
+dnl Support --disable-newlib-fseek-optimization
+AC_ARG_ENABLE(newlib-fseek-optimization,
+[  --disable-newlib-fseek-optimization    disable fseek optimization],
+[if test "${newlib_fseek_optimization+set}" != set; then
+  case "${enableval}" in
+    yes) newlib_fseek_optimization=yes ;;
+    no)  newlib_fseek_optimization=no  ;;
+    *)   AC_MSG_ERROR(bad value ${enableval} for newlib-fseek-optimization option) ;;
+  esac
+ fi], [newlib_fseek_optimization=yes])dnl
+ 
+dnl Support --enable-newlib-wide-orient
+dnl This option is also read in libc/configure.in.  It is repeated
+dnl here so that it shows up in the help text.
+AC_ARG_ENABLE(newlib_wide_orient,
+[  --disable-newlib-wide-orient    Turn off wide orientation in streamio],
+[case "${enableval}" in
+   yes) newlib_wide_orient=yes ;;
+   no)  newlib_wide_orient=no ;;
+   *) AC_MSG_ERROR(bad value ${enableval} for newlib-wide-orient) ;;
+ esac],[newlib_wide_orient=yes])
 
 NEWLIB_CONFIGURE(.)
 
@@ -137,13 +170,19 @@ AC_LIBTOOL_WIN32_DLL
 AM_PROG_LIBTOOL
 fi
 
-AC_ARG_ENABLE(newlib_hw_fp,
-[  --enable-newlib-hw-fp    Turn on hardware floating point math],
-[case "${enableval}" in
-   yes) newlib_hw_fp=true ;;
-   no)  newlib_hw_fp=false ;;
-   *) AC_MSG_ERROR(bad value ${enableval} for --enable-newlib-hw-fp) ;;
- esac],[newlib_hw_fp=false])
+dnl The following is being disabled because the mathfp library is
+dnl not up to standard due to inaccuracies caused by some of the
+dnl floating-point algorithms used.  If you wish to work on this,
+dnl comment out the following line and uncomment out the lines
+dnl following it to re-enable the feature.
+newlib_hw_fp=false
+#AC_ARG_ENABLE(newlib_hw_fp,
+#[  --enable-newlib-hw-fp    Turn on hardware floating point math],
+#[case "${enableval}" in
+#   yes) newlib_hw_fp=true ;;
+#   no)  newlib_hw_fp=false ;;
+#   *) AC_MSG_ERROR(bad value ${enableval} for --enable-newlib-hw-fp) ;;
+# esac],[newlib_hw_fp=false])
 AM_CONDITIONAL(NEWLIB_HW_FP, test x$newlib_hw_fp = xtrue)
 
 # These get added in the top-level configure.in, except in the case where
@@ -305,6 +344,18 @@ fi
 
 if test "${newlib_atexit_dynamic_alloc}" = "yes"; then
 AC_DEFINE_UNQUOTED(_ATEXIT_DYNAMIC_ALLOC)
+fi
+ 
+if test "${newlib_fvwrite_in_streamio}" = "yes"; then
+AC_DEFINE_UNQUOTED(_FVWRITE_IN_STREAMIO)
+fi
+ 
+if test "${newlib_fseek_optimization}" = "yes"; then
+AC_DEFINE_UNQUOTED(_FSEEK_OPTIMIZATION)
+fi
+ 
+if test "${newlib_wide_orient}" = "yes"; then
+AC_DEFINE_UNQUOTED(_WIDE_ORIENT)
 fi
 
 dnl

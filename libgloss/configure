@@ -665,6 +665,8 @@ target_alias
 CCAS
 CCASFLAGS'
 ac_subdirs_all='doc
+aarch64
+epiphany
 i386
 m32r
 m68hc11
@@ -2390,6 +2392,16 @@ config_testsuite=true
 config_libnosys=true
 
 case "${target}" in
+  aarch64*-*-*)
+	subdirs="$subdirs aarch64"
+
+	config_testsuite=true
+	;;
+  epiphany-*-*)
+	subdirs="$subdirs epiphany"
+
+	config_testsuite=true
+	;;
   i[3456]86-*-elf* | i[3456]86-*-coff*)
 	subdirs="$subdirs i386"
 
@@ -2422,7 +2434,7 @@ case "${target}" in
 	subdirs="$subdirs sparc"
 
 	;;
-  sh*-*-pe | mips*-*-pe | *arm-wince-pe)
+  sh*-*-pe | mips*-*-pe | *arm*-wince-pe)
 	subdirs="$subdirs wince"
 
 	;;
@@ -2518,7 +2530,7 @@ case "${target}" in
 	subdirs="$subdirs rx"
 
 	;;
-  arm*-*-elf | arm*-*-coff | arm-*-*)
+  arm*-*-elf | arm*-*-coff | arm*-*-*)
 	subdirs="$subdirs arm"
 
 	;;

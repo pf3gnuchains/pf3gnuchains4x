@@ -1,7 +1,7 @@
 /* thread.h: Locking and threading module definitions
 
-   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2007,
-   2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
+   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2007, 2008, 2009,
+   2010, 2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -16,30 +16,20 @@ details. */
 #define WRITE_LOCK 1
 #define READ_LOCK  2
 
+/* Default is a 1 Megs stack with a 4K guardpage.  The pthread stacksize
+   does not include the guardpage size, so we subtract the default guardpage
+   size. Additionally, the Windows stack handling disallows to use the last
+   two pages as guard page  (tested on XP and W7).  That results in a zone of
+   three pages which have to be subtract to get the actual stack size. */
+#define PTHREAD_DEFAULT_STACKSIZE (1024 * 1024 - 3 * wincap.page_size ())
+#define PTHREAD_DEFAULT_GUARDSIZE (wincap.page_size ())
+
 #include <pthread.h>
 #include <limits.h>
 #include "security.h"
 #include <errno.h>
 #include "cygerrno.h"
-
-enum cw_sig_wait
-{
-  cw_sig_nosig,
-  cw_sig_eintr,
-  cw_sig_resume
-};
-
-enum cw_cancel_action
-{
-  cw_cancel_self,
-  cw_no_cancel_self,
-  cw_no_cancel
-};
-
-DWORD cancelable_wait (HANDLE, PLARGE_INTEGER timeout = NULL,
-		       const cw_cancel_action = cw_cancel_self,
-		       const enum cw_sig_wait = cw_sig_nosig)
-  __attribute__ ((regparm (3)));
+#include "cygwait.h"
 
 class fast_mutex
 {
@@ -69,18 +59,18 @@ public:
 
   void lock ()
   {
-    if (InterlockedIncrement ((long *) &lock_counter) != 1)
-      cancelable_wait (win32_obj_id, NULL, cw_no_cancel, cw_sig_resume);
+    if (InterlockedIncrement (&lock_counter) != 1)
+      cygwait (win32_obj_id, cw_infinite, cw_sig);
   }
 
   void unlock ()
   {
-    if (InterlockedDecrement ((long *) &lock_counter))
+    if (InterlockedDecrement (&lock_counter))
       ::SetEvent (win32_obj_id);
   }
 
 private:
-  unsigned long lock_counter;
+  LONG lock_counter;
   HANDLE win32_obj_id;
 };
 
@@ -129,18 +119,20 @@ List_insert (list_node *&head, list_node *node)
     return;
   do
     node->next = head;
-  while (InterlockedCompareExchangePointer (&head, node, node->next) != node->next);
+  while (InterlockedCompareExchangePointer ((PVOID volatile *) &head,
+					    node, node->next) != node->next);
 }
 
 template <class list_node> inline void
-List_remove (fast_mutex &mx, list_node *&head, list_node const *node)
+List_remove (fast_mutex &mx, list_node *&head, list_node *node)
 {
   if (!node)
     return;
   mx.lock ();
   if (head)
     {
-      if (InterlockedCompareExchangePointer (&head, node->next, node) != node)
+      if (InterlockedCompareExchangePointer ((PVOID volatile *) &head,
+					     node->next, node) != node)
 	{
 	  list_node *cur = head;
 
@@ -307,7 +299,7 @@ public:
   }
 
 protected:
-  unsigned long lock_counter;
+  LONG lock_counter;
   HANDLE win32_obj_id;
   pthread_t owner;
 #ifdef DEBUGGING
@@ -353,9 +345,6 @@ public:
 
   pthread_spinlock (int);
 };
-
-#define WAIT_CANCELED   (WAIT_OBJECT_0 + 1)
-#define WAIT_SIGNALED  (WAIT_OBJECT_0 + 2)
 
 class _cygtls;
 class pthread: public verifyable_object
@@ -454,7 +443,7 @@ private:
   void precreate (pthread_attr *);
   void postcreate ();
   bool create_cancel_event ();
-  static void set_tls_self_pointer (pthread *);
+  void set_tls_self_pointer ();
   void cancel_self () __attribute__ ((noreturn));
   DWORD get_thread_id ();
 };
@@ -566,6 +555,7 @@ public:
     struct RWLOCK_READER *next;
     pthread_t thread;
     unsigned long n;
+    RWLOCK_READER (): next (NULL), thread (pthread::self ()), n (0) {}
   } *readers;
   fast_mutex readers_mx;
 
@@ -594,9 +584,9 @@ public:
 private:
   static List<pthread_rwlock> rwlocks;
 
-  void add_reader (struct RWLOCK_READER *rd);
+  RWLOCK_READER *add_reader ();
   void remove_reader (struct RWLOCK_READER *rd);
-  struct RWLOCK_READER *lookup_reader (pthread_t thread);
+  struct RWLOCK_READER *lookup_reader ();
 
   void release ()
   {
@@ -693,7 +683,7 @@ struct MTinterface
 {
   // General
   int concurrency;
-  long int threadcount;
+  LONG threadcount;
 
   callback *pthread_prepare;
   callback *pthread_child;

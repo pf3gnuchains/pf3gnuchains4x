@@ -1,7 +1,7 @@
 /* ps.cc
 
-   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2008, 2009, 2010, 2011 Red Hat, Inc.
+   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
+   2007, 2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -23,8 +23,8 @@ details. */
 #include <sys/cygwin.h>
 #include <cygwin/version.h>
 #include <psapi.h>
-#include <ddk/ntapi.h>
-#include <ddk/winddk.h>
+#include <ntdef.h>
+#include <ntdll.h>
 #include "loadlib.h"
 
 /* Maximum possible path length under NT.  There's no official define
@@ -347,7 +347,7 @@ main (int argc, char *argv[])
 		     unicode_buf to have enough space for a maximum sized
 		     UNICODE_STRING. */
 		  if (uni->Length == 0)	/* System process */
-		    win32path = L"System";
+		    win32path = (wchar_t *) L"System";
 		  else
 		    {
 		      uni->Buffer[uni->Length / sizeof (WCHAR)] = L'\0';

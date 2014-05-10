@@ -9,6 +9,11 @@ _BEGIN_STD_C
 #define _JBLEN 23
 #endif
 
+#if defined(__aarch64__)
+#define _JBLEN 22
+#define _JBTYPE long long
+#endif
+
 #if defined(__AVR__)
 #define _JBLEN 24
 #endif
@@ -23,6 +28,12 @@ _BEGIN_STD_C
 
 #ifdef __BFIN__
 #define _JBLEN  40
+#endif
+
+#ifdef __epiphany__
+/* All callee preserved registers: r4-r10,fp, sp, lr,r15, r32-r39  */
+#define _JBTYPE long long
+#define _JBLEN 10
 #endif
 
 /* necv70 was 9 as well. */
@@ -294,7 +305,8 @@ extern "C" {
 
 /* POSIX sigsetjmp/siglongjmp macros */
 #ifdef _JBTYPE
-typedef _JBTYPE sigjmp_buf[_JBLEN+1+(sizeof (sigset_t)/sizeof (_JBTYPE))];
+typedef _JBTYPE sigjmp_buf[_JBLEN+1+((sizeof (_JBTYPE) + sizeof (sigset_t) - 1)
+				     /sizeof (_JBTYPE))];
 #else
 typedef int sigjmp_buf[_JBLEN+1+(sizeof (sigset_t)/sizeof (int))];
 #endif

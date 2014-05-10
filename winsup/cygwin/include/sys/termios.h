@@ -1,7 +1,7 @@
 /* sys/termios.h
 
-   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2005, 2006,
-   2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
+   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
+   2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -13,6 +13,8 @@ details. */
 
 #ifndef	_SYS_TERMIOS_H
 #define _SYS_TERMIOS_H
+
+#include <sys/types.h>
 
 #define	TIOCMGET	0x5415
 #define	TIOCMBIS	0x5416
@@ -83,6 +85,7 @@ POSIX commands */
 #define CEOT	CTRL('D')
 #define CEOL	0
 #define CEOL2	0
+#define CBRK	CEOL
 #define CEOF	CTRL('D')
 #define CSTART	CTRL('Q')
 #define CSTOP	CTRL('S')
@@ -91,7 +94,9 @@ POSIX commands */
 #define CSUSP	CTRL('Z')
 #define CDSUSP	CTRL('Y')
 #define CRPRNT	CTRL('R')
+#define CREPRINT	CRPRNT
 #define CFLUSH	CTRL('O')
+#define CDISCARD	CFLUSH
 #define CWERASE	CTRL('W')
 #define CLNEXT	CTRL('V')
 
@@ -239,6 +244,12 @@ POSIX commands */
    `struct termios'.  If VAL is _POSIX_VDISABLE, no character can match it.  */
 #define CCEQ(val, c)	((c) == (val) && (val) != _POSIX_VDISABLE)
 
+#define TTYDEF_IFLAG	(BRKINT	| ICRNL	| IMAXBEL | IXON | IXANY)
+#define TTYDEF_OFLAG	(OPOST | ONLCR)
+#define TTYDEF_LFLAG	(ICANON | ISIG | IEXTEN | ECHO | ECHOE | ECHOKE | ECHOCTL)
+#define TTYDEF_CFLAG	(CREAD | CS8 | HUPCL)
+#define TTYDEF_SPEED	(B9600)
+
 typedef unsigned char cc_t;
 typedef unsigned int  tcflag_t;
 typedef unsigned int  speed_t;
@@ -328,12 +339,13 @@ int tcsendbreak (int, int);
 int tcdrain (int);
 int tcflush (int, int);
 int tcflow (int, int);
-int tcgetsid (int);
+pid_t tcgetsid (int);
 void cfmakeraw (struct termios *);
 speed_t cfgetispeed(const struct termios *);
 speed_t cfgetospeed(const struct termios *);
 int cfsetispeed (struct termios *, speed_t);
 int cfsetospeed (struct termios *, speed_t);
+int cfsetspeed (struct termios *, speed_t);
 
 #ifdef __cplusplus
 }

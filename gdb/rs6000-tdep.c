@@ -1,7 +1,6 @@
 /* Target-dependent code for GDB, the GNU debugger.
 
-   Copyright (C) 1986-1987, 1989, 1991-2012 Free Software Foundation,
-   Inc.
+   Copyright (C) 1986-2013 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -52,6 +51,7 @@
 
 #include "solib-svr4.h"
 #include "ppc-tdep.h"
+#include "ppc-ravenscar-thread.h"
 
 #include "gdb_assert.h"
 #include "dis-asm.h"
@@ -108,7 +108,7 @@ static struct cmd_list_element *showpowerpccmdlist = NULL;
 static enum auto_boolean powerpc_soft_float_global = AUTO_BOOLEAN_AUTO;
 
 /* The vector ABI to use.  Keep this in sync with powerpc_vector_abi.  */
-static const char *powerpc_vector_strings[] =
+static const char *const powerpc_vector_strings[] =
 {
   "auto",
   "generic",
@@ -1822,6 +1822,15 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 
 	  /* Set up frame pointer */
 	}
+      else if (op == 0x603d0000)       /* oril r29, r1, 0x0 */
+	{
+	  fdata->frameless = 0;
+	  framep = 1;
+	  fdata->alloca_reg = (tdep->ppc_gp0_regnum + 29);
+	  continue;
+
+	  /* Another way to set up the frame pointer.  */
+	}
       else if (op == 0x603f0000	/* oril r31, r1, 0x0 */
 	       || op == 0x7c3f0b78)
 	{			/* mr r31, r1 */
@@ -2143,15 +2152,15 @@ rs6000_skip_main_prologue (struct gdbarch *gdbarch, CORE_ADDR pc)
     {
       CORE_ADDR displ = op & BL_DISPLACEMENT_MASK;
       CORE_ADDR call_dest = pc + 4 + displ;
-      struct minimal_symbol *s = lookup_minimal_symbol_by_pc (call_dest);
+      struct bound_minimal_symbol s = lookup_minimal_symbol_by_pc (call_dest);
 
       /* We check for ___eabi (three leading underscores) in addition
          to __eabi in case the GCC option "-fleading-underscore" was
 	 used to compile the program.  */
-      if (s != NULL
-          && SYMBOL_LINKAGE_NAME (s) != NULL
-	  && (strcmp (SYMBOL_LINKAGE_NAME (s), "__eabi") == 0
-	      || strcmp (SYMBOL_LINKAGE_NAME (s), "___eabi") == 0))
+      if (s.minsym != NULL
+          && SYMBOL_LINKAGE_NAME (s.minsym) != NULL
+	  && (strcmp (SYMBOL_LINKAGE_NAME (s.minsym), "__eabi") == 0
+	      || strcmp (SYMBOL_LINKAGE_NAME (s.minsym), "___eabi") == 0))
 	pc += 4;
     }
   return pc;
@@ -2189,7 +2198,7 @@ rs6000_frame_align (struct gdbarch *gdbarch, CORE_ADDR addr)
 
 static int
 rs6000_in_solib_return_trampoline (struct gdbarch *gdbarch,
-				   CORE_ADDR pc, char *name)
+				   CORE_ADDR pc, const char *name)
 {
   return name && !strncmp (name, "@FIX", 4);
 }
@@ -2217,7 +2226,7 @@ rs6000_skip_trampoline_code (struct frame_info *frame, CORE_ADDR pc)
   unsigned int ii, op;
   int rel;
   CORE_ADDR solib_target_pc;
-  struct minimal_symbol *msymbol;
+  struct bound_minimal_symbol msymbol;
 
   static unsigned trampoline_code[] =
   {
@@ -2233,9 +2242,9 @@ rs6000_skip_trampoline_code (struct frame_info *frame, CORE_ADDR pc)
 
   /* Check for bigtoc fixup code.  */
   msymbol = lookup_minimal_symbol_by_pc (pc);
-  if (msymbol 
+  if (msymbol.minsym
       && rs6000_in_solib_return_trampoline (gdbarch, pc,
-					    SYMBOL_LINKAGE_NAME (msymbol)))
+					    SYMBOL_LINKAGE_NAME (msymbol.minsym)))
     {
       /* Double-check that the third instruction from PC is relative "b".  */
       op = read_memory_integer (pc + 8, 4, byte_order);
@@ -3075,21 +3084,6 @@ find_variant_by_arch (enum bfd_architecture arch, unsigned long mach)
 static int
 gdb_print_insn_powerpc (bfd_vma memaddr, disassemble_info *info)
 {
-  if (!info->disassembler_options)
-    {
-      /* When debugging E500 binaries and disassembling code containing
-	 E500-specific (SPE) instructions, one sometimes sees AltiVec
-	 instructions instead.  The opcode spaces for SPE instructions
-	 and AltiVec instructions overlap, and specifiying the "any" cpu
-	 looks for AltiVec instructions first.  If we know we're
-	 debugging an E500 binary, however, we can specify the "e500x2"
-	 cpu and get much more sane disassembly output.  */
-      if (info->mach == bfd_mach_ppc_e500)
-	info->disassembler_options = "e500x2";
-      else
-	info->disassembler_options = "any";
-    }
-
   if (info->endian == BFD_ENDIAN_BIG)
     return print_insn_big_powerpc (memaddr, info);
   else
@@ -3543,7 +3537,6 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   enum bfd_architecture arch;
   unsigned long mach;
   bfd abfd;
-  asection *sect;
   enum auto_boolean soft_float_flag = powerpc_soft_float_global;
   int soft_float;
   enum powerpc_vector_abi vector_abi = powerpc_vector_abi_global;
@@ -4160,6 +4153,12 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   gdb_assert (gdbarch_num_regs (gdbarch)
 	      + gdbarch_num_pseudo_regs (gdbarch) == cur_reg);
 
+  /* Register the ravenscar_arch_ops.  */
+  if (mach == bfd_mach_ppc_e500)
+    register_e500_ravenscar_ops (gdbarch);
+  else
+    register_ppc_ravenscar_ops (gdbarch);
+
   return gdbarch;
 }
 
@@ -4237,6 +4236,68 @@ show_powerpc_exact_watchpoints (struct ui_file *file, int from_tty,
 				const char *value)
 {
   fprintf_filtered (file, _("Use of exact watchpoints is %s.\n"), value);
+}
+
+/* Read a PPC instruction from memory.  PPC instructions are always
+   big-endian, no matter what endianness the program is running in, so
+   we can hardcode BFD_ENDIAN_BIG for read_memory_unsigned_integer.  */
+
+static unsigned int
+read_insn (CORE_ADDR pc)
+{
+  return read_memory_unsigned_integer (pc, 4, BFD_ENDIAN_BIG);
+}
+
+/* Return non-zero if the instructions at PC match the series
+   described in PATTERN, or zero otherwise.  PATTERN is an array of
+   'struct ppc_insn_pattern' objects, terminated by an entry whose
+   mask is zero.
+
+   When the match is successful, fill INSN[i] with what PATTERN[i]
+   matched.  If PATTERN[i] is optional, and the instruction wasn't
+   present, set INSN[i] to 0 (which is not a valid PPC instruction).
+   INSN should have as many elements as PATTERN.  Note that, if
+   PATTERN contains optional instructions which aren't present in
+   memory, then INSN will have holes, so INSN[i] isn't necessarily the
+   i'th instruction in memory.  */
+
+int
+ppc_insns_match_pattern (CORE_ADDR pc, struct ppc_insn_pattern *pattern,
+			 unsigned int *insn)
+{
+  int i;
+
+  for (i = 0; pattern[i].mask; i++)
+    {
+      insn[i] = read_insn (pc);
+      if ((insn[i] & pattern[i].mask) == pattern[i].data)
+	pc += 4;
+      else if (pattern[i].optional)
+	insn[i] = 0;
+      else
+	return 0;
+    }
+
+  return 1;
+}
+
+/* Return the 'd' field of the d-form instruction INSN, properly
+   sign-extended.  */
+
+CORE_ADDR
+ppc_insn_d_field (unsigned int insn)
+{
+  return ((((CORE_ADDR) insn & 0xffff) ^ 0x8000) - 0x8000);
+}
+
+/* Return the 'ds' field of the ds-form instruction INSN, with the two
+   zero bits concatenated at the right, and properly
+   sign-extended.  */
+
+CORE_ADDR
+ppc_insn_ds_field (unsigned int insn)
+{
+  return ((((CORE_ADDR) insn & 0xfffc) ^ 0x8000) - 0x8000);
 }
 
 /* Initialization code.  */
