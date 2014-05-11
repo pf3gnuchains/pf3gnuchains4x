@@ -13,8 +13,6 @@ details. */
 
 #include "winsup.h"
 #include <sys/time.h>
-#include <wingdi.h>
-#include <winuser.h>
 #define USE_SYS_TYPES_FD_SET
 #include <winsock2.h>
 #include "perprocess.h"
@@ -26,7 +24,7 @@ wininfo NO_COPY winmsg;
 
 muto NO_COPY wininfo::_lock;
 
-int __stdcall
+int __reg3
 wininfo::process (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 #ifndef NOSTRACE
@@ -57,7 +55,7 @@ process_window_events (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 }
 
 /* Handle windows events.  Inherits ownership of the wininfo lock */
-DWORD WINAPI
+DWORD __reg1 WINAPI
 wininfo::winthread ()
 {
   MSG msg;

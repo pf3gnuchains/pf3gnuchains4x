@@ -80,6 +80,9 @@ enum path_types
   PATH_NO_ACCESS_CHECK	= PC_NO_ACCESS_CHECK,
   PATH_CTTY		= 0x00400000,	/* could later be used as ctty */
   PATH_OPEN		= 0x00800000,	/* use open semantics */
+  					/* FIXME?  PATH_OPEN collides with
+					   PATH_NO_ACCESS_CHECK, but it looks
+					   like they are never used together. */
   PATH_LNK		= 0x01000000,
   PATH_TEXT		= 0x02000000,
   PATH_REP		= 0x04000000,
@@ -153,7 +156,7 @@ class path_conv
   ULONG objcaseinsensitive () const {return caseinsensitive;}
   bool has_acls () const {return !(path_flags & PATH_NOACL) && fs.has_acls (); }
   bool hasgood_inode () const {return !(path_flags & PATH_IHASH); }
-  bool isgood_inode (__ino64_t ino) const;
+  bool isgood_inode (ino_t ino) const;
   bool support_sparse () const
   {
     return (path_flags & PATH_SPARSE)
@@ -191,6 +194,13 @@ class path_conv
   void set_cygexec (bool isset)
   {
     if (isset)
+      path_flags |= PATH_CYGWIN_EXEC;
+    else
+      path_flags &= ~PATH_CYGWIN_EXEC;
+  }
+  void set_cygexec (void *target)
+  {
+    if (target)
       path_flags |= PATH_CYGWIN_EXEC;
     else
       path_flags &= ~PATH_CYGWIN_EXEC;
@@ -344,8 +354,7 @@ class path_conv
   {
     return eq_worker (pc, pc.path, pc.normalized_path);
   }
-  DWORD get_devn () {return (DWORD) dev;}
-  short get_unitn () const {return dev.get_minor ();}
+  dev_t get_device () {return dev.get_device ();}
   DWORD file_attributes () const {return fileattr;}
   void file_attributes (DWORD new_attr) {fileattr = new_attr;}
   DWORD fs_flags () const {return fs.flags ();}
@@ -362,6 +371,7 @@ class path_conv
   bool fs_is_cifs () const {return fs.is_cifs ();}
   bool fs_is_nwfs () const {return fs.is_nwfs ();}
   bool fs_is_ncfsd () const {return fs.is_ncfsd ();}
+  bool fs_is_afs () const {return fs.is_afs ();}
   fs_info_type fs_type () const {return fs.what_fs ();}
   ULONG fs_serial_number () const {return fs.serial_number ();}
   inline const char *set_path (const char *p)
@@ -380,7 +390,7 @@ class path_conv
   void reset_conv_handle () { conv_handle.set (NULL); }
   void close_conv_handle () { conv_handle.close (); }
 
-  __ino64_t get_ino_by_handle (HANDLE h);
+  ino_t get_ino_by_handle (HANDLE h);
 #if 0 /* obsolete, method still exists in fhandler_disk_file.cc */
   unsigned __stdcall ndisk_links (DWORD);
 #endif
@@ -437,19 +447,4 @@ int normalize_win32_path (const char *, char *, char *&);
 int normalize_posix_path (const char *, char *, char *&);
 PUNICODE_STRING __reg3 get_nt_native_path (const char *, UNICODE_STRING&, bool);
 
-/* FIXME: Move to own include file eventually */
-
-#define MAX_ETC_FILES 2
-class etc
-{
-  friend class dtable;
-  static int curr_ix;
-  static bool change_possible[MAX_ETC_FILES + 1];
-  static OBJECT_ATTRIBUTES fn[MAX_ETC_FILES + 1];
-  static LARGE_INTEGER last_modified[MAX_ETC_FILES + 1];
-  static bool dir_changed (int);
-  static int init (int, POBJECT_ATTRIBUTES);
-  static bool file_changed (int);
-  static bool test_file_change (int);
-  friend class pwdgrp;
-};
+int __reg3 symlink_worker (const char *, const char *, bool);

@@ -48,6 +48,7 @@
 #include "interps.h"
 #include "observer.h"
 #include "maint.h"
+#include "filenames.h"
 
 /* readline include files.  */
 #include "readline/readline.h"
@@ -78,20 +79,9 @@ extern void initialize_all_files (void);
 #define DEFAULT_PROMPT	"(gdb) "
 #endif
 
-/* Initialization file name for gdb.  This is overridden in some configs.  */
+/* Initialization file name for gdb.  This is host-dependent.  */
 
-#ifndef PATH_MAX
-# ifdef FILENAME_MAX
-#  define PATH_MAX FILENAME_MAX
-# else
-#  define PATH_MAX 512
-# endif
-#endif
-
-#ifndef	GDBINIT_FILENAME
-#define	GDBINIT_FILENAME	".gdbinit"
-#endif
-char gdbinit[PATH_MAX + 1] = GDBINIT_FILENAME;
+const char gdbinit[] = GDBINIT;
 
 int inhibit_gdbinit = 0;
 
@@ -154,13 +144,6 @@ int saved_command_line_size = 100;
    is issuing commands too.  */
 int server_command;
 
-/* Baud rate specified for talking to serial target systems.  Default
-   is left as -1, so targets can choose their own defaults.  */
-/* FIXME: This means that "show remotebaud" and gr_files_info can
-   print -1 or (unsigned int)-1.  This is a Bad User Interface.  */
-
-int baud_rate = -1;
-
 /* Timeout limit for response from target.  */
 
 /* The default value has been changed many times over the years.  It 
@@ -208,11 +191,6 @@ void (*deprecated_init_ui_hook) (char *argv0);
    otherwise.  */
 
 int (*deprecated_ui_loop_hook) (int);
-
-/* Called instead of command_loop at top level.  Can be invoked via
-   throw_exception().  */
-
-void (*deprecated_command_loop_hook) (void);
 
 
 /* Called from print_frame_info to list the line we stopped in.  */
@@ -425,6 +403,7 @@ execute_command (char *p, int from_tty)
   if (p == NULL)
     {
       do_cleanups (cleanup);
+      discard_cleanups (cleanup_if_error);
       return;
     }
 
@@ -1155,8 +1134,14 @@ Type \"show configuration\" for configuration details.");
     {
       fprintf_filtered (stream,
 			_("\nFor bug reporting instructions, please see:\n"));
-      fprintf_filtered (stream, "%s.", REPORT_BUGS_TO);
+      fprintf_filtered (stream, "%s.\n", REPORT_BUGS_TO);
     }
+  fprintf_filtered (stream,
+		    _("Find the GDB manual and other documentation \
+resources online at:\n<http://www.gnu.org/software/gdb/documentation/>.\n"));
+  fprintf_filtered (stream, _("For help, type \"help\".\n"));
+  fprintf_filtered (stream, _("Type \"apropos word\" to search for \
+commands related to \"word\"."));
 }
 
 /* Print the details of GDB build-time configuration.  */
@@ -1242,6 +1227,21 @@ This GDB was configured as follows:\n\
              --without-zlib\n\
 "));
 #endif
+#if HAVE_LIBBABELTRACE
+    fprintf_filtered (stream, _("\
+             --with-babeltrace\n\
+"));
+#else
+    fprintf_filtered (stream, _("\
+             --without-babeltrace\n\
+"));
+#endif
+    /* We assume "relocatable" will be printed at least once, thus we always
+       print this text.  It's a reasonably safe assumption for now.  */
+    fprintf_filtered (stream, _("\n\
+(\"Relocatable\" means the directory can be moved with the GDB installation\n\
+tree, and GDB will still find it.)\n\
+"));
 }
 
 
@@ -1348,18 +1348,9 @@ quit_confirm (void)
   stb = mem_fileopen ();
   old_chain = make_cleanup_ui_file_delete (stb);
 
-  /* This is something of a hack.  But there's no reliable way to see
-     if a GUI is running.  The `use_windows' variable doesn't cut
-     it.  */
-  if (deprecated_init_ui_hook)
-    fprintf_filtered (stb, _("A debugging session is active.\n"
-			     "Do you still want to close the debugger?"));
-  else
-    {
-      fprintf_filtered (stb, _("A debugging session is active.\n\n"));
-      iterate_over_inferiors (print_inferior_quit_action, stb);
-      fprintf_filtered (stb, _("\nQuit anyway? "));
-    }
+  fprintf_filtered (stb, _("A debugging session is active.\n\n"));
+  iterate_over_inferiors (print_inferior_quit_action, stb);
+  fprintf_filtered (stb, _("\nQuit anyway? "));
 
   str = ui_file_xstrdup (stb, NULL);
   make_cleanup (xfree, str);
@@ -1421,7 +1412,8 @@ quit_force (char *args, int from_tty)
   /* Save the history information if it is appropriate to do so.  */
   DO_TRY
     {
-      if (write_history_p && history_filename)
+      if (write_history_p && history_filename
+	  && input_from_terminal_p ())
 	write_history (history_filename);
     }
   DO_PRINT_EX;
@@ -1693,6 +1685,17 @@ set_gdb_datadir (char *args, int from_tty, struct cmd_list_element *c)
 }
 
 static void
+set_history_filename (char *args, int from_tty, struct cmd_list_element *c)
+{
+  /* We include the current directory so that if the user changes
+     directories the file written will be the same as the one
+     that was read.  */
+  if (!IS_ABSOLUTE_PATH (history_filename))
+    history_filename = reconcat (history_filename, current_directory, "/", 
+				 history_filename, (char *) NULL);
+}
+
+static void
 init_main (void)
 {
   /* Initialize the prompt to a simple "(gdb) " prompt or to whatever
@@ -1768,7 +1771,7 @@ variable \"HISTSIZE\", or to 256 if this variable is not set."),
 Set the filename in which to record the command history"), _("\
 Show the filename in which to record the command history"), _("\
 (the list of previous commands of which a record is kept)."),
-			    NULL,
+			    set_history_filename,
 			    show_history_filename,
 			    &sethistlist, &showhistlist);
 

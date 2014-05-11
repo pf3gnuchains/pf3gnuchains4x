@@ -433,7 +433,7 @@ read_fat_string_value (char *dest, struct value *val, int max_len)
 
   /* Extract LEN characters from the fat string.  */
   array_val = value_ind (value_field (val, array_fieldno));
-  read_memory (value_address (array_val), dest, len);
+  read_memory (value_address (array_val), (gdb_byte *) dest, len);
 
   /* Add the NUL character to close the string.  */
   dest[len] = '\0';
@@ -1310,7 +1310,8 @@ task_command_1 (char *taskno_str, int from_tty, struct inferior *inf)
   ada_find_printable_frame (get_selected_frame (NULL));
   printf_filtered (_("[Switching to task %d]\n"), taskno);
   print_stack_frame (get_selected_frame (NULL),
-                     frame_relative_level (get_selected_frame (NULL)), 1);
+                     frame_relative_level (get_selected_frame (NULL)),
+		     SRC_AND_LOC, 1);
 }
 
 

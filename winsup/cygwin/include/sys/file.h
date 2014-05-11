@@ -23,7 +23,6 @@
 #ifndef _FILE_H_
 #define _FILE_H_
 
-#include <sys/cdefs.h>
 #include <fcntl.h>
 
 /* Whence values for lseek(); renamed by POSIX 1003.1 */
@@ -32,23 +31,16 @@
 #define L_INCR		SEEK_CUR
 #define L_XTND		SEEK_END
 
-/* Operations for flock() function */
-#define	LOCK_SH		1	/* Shared lock. */
-#define	LOCK_EX		2	/* Exclusive lock. */
-#define	LOCK_NB		4	/* Don't block when locking. */
-#define	LOCK_UN		8	/* Unlock. */
+/* Including <sys/file.h> always defines flock & macros. */
+#if __BSD_VISIBLE - 0 == 0
 
-/* Operations for access function */
-#define	F_OK		0	/* does file exist */
-#define X_OK		1	/* is it executable or searchable by caller */
-#define	W_OK		2	/* is it writable by caller */
-#define	R_OK		4	/* is it readable by caller */
+#define LOCK_SH		0x01		/* shared file lock */
+#define LOCK_EX		0x02		/* exclusive file lock */
+#define LOCK_NB		0x04		/* don't block when locking */
+#define LOCK_UN		0x08		/* unlock file */
 
-/* Apply or remove an advisory lock on the file fd refers to. */
-__BEGIN_DECLS
+extern int flock _PARAMS ((int, int));
 
-int	_EXFUN(flock, (int, int));
-
-__END_DECLS
+#endif
 
 #endif

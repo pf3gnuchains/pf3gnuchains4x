@@ -65,28 +65,13 @@
 extern void _initialize_hppa_hpux_tdep (void);
 extern initialize_file_ftype _initialize_hppa_hpux_tdep;
 
-static int
-in_opd_section (CORE_ADDR pc)
-{
-  struct obj_section *s;
-  int retval = 0;
-
-  s = find_pc_section (pc);
-
-  retval = (s != NULL
-	    && s->the_bfd_section->name != NULL
-	    && strcmp (s->the_bfd_section->name, ".opd") == 0);
-  return (retval);
-}
-
 /* Return one if PC is in the call path of a trampoline, else return zero.
 
    Note we return one for *any* call trampoline (long-call, arg-reloc), not
    just shared library trampolines (import, export).  */
 
 static int
-hppa32_hpux_in_solib_call_trampoline (struct gdbarch *gdbarch,
-				      CORE_ADDR pc, char *name)
+hppa32_hpux_in_solib_call_trampoline (struct gdbarch *gdbarch, CORE_ADDR pc)
 {
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   struct bound_minimal_symbol minsym;
@@ -156,8 +141,7 @@ hppa32_hpux_in_solib_call_trampoline (struct gdbarch *gdbarch,
 }
 
 static int
-hppa64_hpux_in_solib_call_trampoline (struct gdbarch *gdbarch,
-				      CORE_ADDR pc, char *name)
+hppa64_hpux_in_solib_call_trampoline (struct gdbarch *gdbarch, CORE_ADDR pc)
 {
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
 
@@ -798,7 +782,7 @@ hppa64_hpux_find_global_pointer (struct gdbarch *gdbarch,
 
   faddr = value_as_address (function);
 
-  if (in_opd_section (faddr))
+  if (pc_in_section (faddr, ".opd"))
     {
       target_read_memory (faddr, buf, sizeof (buf));
       return extract_unsigned_integer (&buf[24], 8, byte_order);
@@ -1278,9 +1262,9 @@ hppa_hpux_push_dummy_code (struct gdbarch *gdbarch, CORE_ADDR sp,
 
 static void
 hppa_hpux_supply_ss_narrow (struct regcache *regcache,
-			    int regnum, const char *save_state)
+			    int regnum, const gdb_byte *save_state)
 {
-  const char *ss_narrow = save_state + HPPA_HPUX_SS_NARROW_OFFSET;
+  const gdb_byte *ss_narrow = save_state + HPPA_HPUX_SS_NARROW_OFFSET;
   int i, offset = 0;
 
   for (i = HPPA_R1_REGNUM; i < HPPA_FP0_REGNUM; i++)
@@ -1294,9 +1278,9 @@ hppa_hpux_supply_ss_narrow (struct regcache *regcache,
 
 static void
 hppa_hpux_supply_ss_fpblock (struct regcache *regcache,
-			     int regnum, const char *save_state)
+			     int regnum, const gdb_byte *save_state)
 {
-  const char *ss_fpblock = save_state + HPPA_HPUX_SS_FPBLOCK_OFFSET;
+  const gdb_byte *ss_fpblock = save_state + HPPA_HPUX_SS_FPBLOCK_OFFSET;
   int i, offset = 0;
 
   /* FIXME: We view the floating-point state as 64 single-precision
@@ -1329,9 +1313,9 @@ hppa_hpux_supply_ss_fpblock (struct regcache *regcache,
 
 static void
 hppa_hpux_supply_ss_wide (struct regcache *regcache,
-			  int regnum, const char *save_state)
+			  int regnum, const gdb_byte *save_state)
 {
-  const char *ss_wide = save_state + HPPA_HPUX_SS_WIDE_OFFSET;
+  const gdb_byte *ss_wide = save_state + HPPA_HPUX_SS_WIDE_OFFSET;
   int i, offset = 8;
 
   if (register_size (get_regcache_arch (regcache), HPPA_R1_REGNUM) == 4)
@@ -1353,8 +1337,8 @@ hppa_hpux_supply_save_state (const struct regset *regset,
 {
   struct gdbarch *gdbarch = get_regcache_arch (regcache);
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
-  const char *proc_info = regs;
-  const char *save_state = proc_info + 8;
+  const gdb_byte *proc_info = regs;
+  const gdb_byte *save_state = proc_info + 8;
   ULONGEST flags;
 
   flags = extract_unsigned_integer (save_state + HPPA_HPUX_SS_FLAGS_OFFSET,

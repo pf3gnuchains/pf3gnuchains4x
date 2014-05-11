@@ -51,10 +51,11 @@ ANSI_SYNOPSIS
 	#include <stdio.h>
 	#include <stdarg.h>
 	#include <wchar.h>
-	int vwprintf(const wchar_t *<[fmt]>, va_list <[list]>);
-	int vfwprintf(FILE *<[fp]>, const wchar_t *<[fmt]>, va_list <[list]>);
-	int vswprintf(wchar_t *<[str]>, size_t <[size]>, const wchar_t *<[fmt]>,
-			va_list <[list]>);
+	int vwprintf(const wchar_t *__restrict <[fmt]>, va_list <[list]>);
+	int vfwprintf(FILE *__restrict <[fp]>,
+		const wchar_t *__restrict <[fmt]>, va_list <[list]>);
+	int vswprintf(wchar_t * __restrict <[str]>, size_t <[size]>,
+		const wchar_t *__ restrict <[fmt]>, va_list <[list]>);
 
 	int _vwprintf_r(struct _reent *<[reent]>, const wchar_t *<[fmt]>,
 		va_list <[list]>);
@@ -166,6 +167,7 @@ int _EXFUN(__SPRINT, (struct _reent *, FILE *, register struct __suio *));
 int _EXFUN(__SPRINT, (struct _reent *, FILE *, _CONST char *, size_t));
 #endif
 #ifndef STRING_ONLY
+#ifdef _UNBUF_STREAM_OPT
 /*
  * Helper function for `fprintf to unbuffered unix file': creates a
  * temporary buffer.  We only work on write-only files; this avoids
@@ -209,6 +211,7 @@ _DEFUN(__sbwprintf, (rptr, fp, fmt, ap),
 #endif
 	return (ret);
 }
+#endif /* _UNBUF_STREAM_OPT */
 #endif /* !STRING_ONLY */
 
 
@@ -364,8 +367,8 @@ _EXFUN(get_arg, (struct _reent *data, int n, wchar_t *fmt,
 #ifndef STRING_ONLY
 int
 _DEFUN(VFWPRINTF, (fp, fmt0, ap),
-       FILE * fp         _AND
-       _CONST wchar_t *fmt0 _AND
+       FILE *__restrict fp         _AND
+       _CONST wchar_t *__restrict fmt0 _AND
        va_list ap)
 {
   int result;
@@ -599,12 +602,14 @@ _DEFUN(_VFWPRINTF_R, (data, fp, fmt0, ap),
 		return (EOF);
 	}
 
+#ifdef _UNBUF_STREAM_OPT
 	/* optimise fwprintf(stderr) (and other unbuffered Unix files) */
 	if ((fp->_flags & (__SNBF|__SWR|__SRW)) == (__SNBF|__SWR) &&
 	    fp->_file >= 0) {
 		_newlib_flockfile_exit (fp);
 		return (__sbwprintf (data, fp, fmt0, ap));
 	}
+#endif
 #else /* STRING_ONLY */
         /* Create initial buffer if we are called by asprintf family.  */
         if (fp->_flags & __SMBF && !fp->_bf._base)

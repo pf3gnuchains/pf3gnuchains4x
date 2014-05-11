@@ -61,14 +61,8 @@ typedef struct {
 	void (*gl_closedir)(void *);
 	struct dirent *(*gl_readdir)(void *);
 	void *(*gl_opendir)(const char *);
-#if defined (__INSIDE_CYGWIN__)
-	int (*gl_lstat) __P((const char *, struct __stat64 *));
-	int (*gl_stat) __P((const char *, struct __stat64 *));
-#else
-
 	int (*gl_lstat) __P((const char *, struct stat *));
 	int (*gl_stat) __P((const char *, struct stat *));
-#endif
 } glob_t;
 
 /* Believed to have been introduced in 1003.2-1992 */
@@ -109,7 +103,7 @@ __BEGIN_DECLS
 # define DLLEXPORT __declspec(dllimport)
 #endif
 
-int	DLLEXPORT glob (const char *, int, int (*)(const char *, int), glob_t *);
+int	DLLEXPORT glob (const char *__restrict , int, int (*)(const char *, int), glob_t *__restrict);
 void	DLLEXPORT globfree (glob_t *);
 int	DLLEXPORT glob_pattern_p (const char *, int);
 __END_DECLS

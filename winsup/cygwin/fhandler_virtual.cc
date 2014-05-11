@@ -1,7 +1,7 @@
 /* fhandler_virtual.cc: base fhandler class for virtual filesystems
 
-   Copyright 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012
-   Red Hat, Inc.
+   Copyright 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012,
+   2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -84,10 +84,9 @@ fhandler_virtual::opendir (int fd)
       else
 	{
 	  cygheap_fdnew cfd;
-	  if (cfd >= 0)
+	  if (cfd >= 0 && open (O_RDONLY, 0))
 	    {
 	      cfd = this;
-	      cfd->nohandle (true);
 	      dir->__d_fd = cfd;
 	      dir->__fh = this;
 	      res = dir;
@@ -126,15 +125,15 @@ fhandler_virtual::closedir (DIR * dir)
   return 0;
 }
 
-_off64_t
-fhandler_virtual::lseek (_off64_t offset, int whence)
+off_t
+fhandler_virtual::lseek (off_t offset, int whence)
 {
   /*
    * On Linux, when you lseek within a /proc file,
    * the contents of the file are updated.
    */
   if (!fill_filebuf ())
-    return (_off64_t) -1;
+    return (off_t) -1;
   switch (whence)
     {
     case SEEK_SET:
@@ -148,7 +147,7 @@ fhandler_virtual::lseek (_off64_t offset, int whence)
       break;
     default:
       set_errno (EINVAL);
-      return (_off64_t) -1;
+      return (off_t) -1;
     }
   return position;
 }
@@ -181,7 +180,7 @@ fhandler_virtual::close ()
   return 0;
 }
 
-void __stdcall
+void __reg3
 fhandler_virtual::read (void *ptr, size_t& len)
 {
   if (len == 0)
@@ -246,7 +245,7 @@ fhandler_virtual::fchmod (mode_t mode)
 }
 
 int
-fhandler_virtual::fchown (__uid32_t uid, __gid32_t gid)
+fhandler_virtual::fchown (uid_t uid, gid_t gid)
 {
   /* Same as on Linux. */
   set_errno (EPERM);
@@ -254,7 +253,7 @@ fhandler_virtual::fchown (__uid32_t uid, __gid32_t gid)
 }
 
 int
-fhandler_virtual::facl (int cmd, int nentries, __aclent32_t *aclbufp)
+fhandler_virtual::facl (int cmd, int nentries, aclent_t *aclbufp)
 {
   int res = fhandler_base::facl (cmd, nentries, aclbufp);
   if (res >= 0 && cmd == GETACL)
@@ -266,13 +265,14 @@ fhandler_virtual::facl (int cmd, int nentries, __aclent32_t *aclbufp)
   return res;
 }
 
-int __stdcall
+int __reg2
 fhandler_virtual::fstatvfs (struct statvfs *sfs)
 {
   /* Virtual file system.  Just return an empty buffer with a few values
      set to something useful.  Just as on Linux. */
   memset (sfs, 0, sizeof (*sfs));
   sfs->f_bsize = sfs->f_frsize = 4096;
+  sfs->f_flag = ST_RDONLY;
   sfs->f_namemax = NAME_MAX;
   return 0;
 }

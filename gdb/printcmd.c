@@ -533,6 +533,10 @@ print_scalar_formatted (const void *valaddr, struct type *type,
       }
       break;
 
+    case 'z':
+      print_hex_chars (stream, valaddr, len, byte_order);
+      break;
+
     default:
       error (_("Undefined output format \"%c\"."), options->format);
     }
@@ -689,6 +693,17 @@ build_address_symbolic (struct gdbarch *gdbarch,
     {
       if (SYMBOL_VALUE_ADDRESS (msymbol) > name_location || symbol == NULL)
 	{
+	  /* If this is a function (i.e. a code address), strip out any
+	     non-address bits.  For instance, display a pointer to the
+	     first instruction of a Thumb function as <function>; the
+	     second instruction will be <function+2>, even though the
+	     pointer is <function+3>.  This matches the ISA behavior.  */
+	  if (MSYMBOL_TYPE (msymbol) == mst_text
+	      || MSYMBOL_TYPE (msymbol) == mst_text_gnu_ifunc
+	      || MSYMBOL_TYPE (msymbol) == mst_file_text
+	      || MSYMBOL_TYPE (msymbol) == mst_solib_trampoline)
+	    addr = gdbarch_addr_bits_remove (gdbarch, addr);
+
 	  /* The msymbol is closer to the address than the symbol;
 	     use the msymbol instead.  */
 	  symbol = 0;
@@ -936,11 +951,10 @@ static void
 print_command_1 (const char *exp, int voidprint)
 {
   struct expression *expr;
-  struct cleanup *old_chain = 0;
+  struct cleanup *old_chain = make_cleanup (null_cleanup, NULL);
   char format = 0;
   struct value *val;
   struct format_data fmt;
-  int cleanup = 0;
 
   if (exp && *exp == '/')
     {
@@ -960,8 +974,7 @@ print_command_1 (const char *exp, int voidprint)
   if (exp && *exp)
     {
       expr = parse_expression (exp);
-      old_chain = make_cleanup (free_current_contents, &expr);
-      cleanup = 1;
+      make_cleanup (free_current_contents, &expr);
       val = evaluate_expression (expr);
     }
   else
@@ -996,8 +1009,7 @@ print_command_1 (const char *exp, int voidprint)
 	annotate_value_end ();
     }
 
-  if (cleanup)
-    do_cleanups (old_chain);
+  do_cleanups (old_chain);
 }
 
 static void
@@ -1139,8 +1151,8 @@ sym_info (char *arg, int from_tty)
 	   a pagination request inside printf_filtered.  */
 	old_chain = make_cleanup (xfree, loc_string);
 
-	gdb_assert (osect->objfile && osect->objfile->name);
-	obj_name = osect->objfile->name;
+	gdb_assert (osect->objfile && objfile_name (osect->objfile));
+	obj_name = objfile_name (osect->objfile);
 
 	if (MULTI_OBJFILE_P ())
 	  if (pc_in_unmapped_range (addr, osect))
@@ -1189,7 +1201,7 @@ address_info (char *exp, int from_tty)
   struct gdbarch *gdbarch;
   int regno;
   struct symbol *sym;
-  struct minimal_symbol *msymbol;
+  struct bound_minimal_symbol msymbol;
   long val;
   struct obj_section *section;
   CORE_ADDR load_addr, context_pc = 0;
@@ -1215,14 +1227,14 @@ address_info (char *exp, int from_tty)
 	  return;
 	}
 
-      msymbol = lookup_minimal_symbol (exp, NULL, NULL);
+      msymbol = lookup_bound_minimal_symbol (exp);
 
-      if (msymbol != NULL)
+      if (msymbol.minsym != NULL)
 	{
-	  struct objfile *objfile = msymbol_objfile (msymbol);
+	  struct objfile *objfile = msymbol.objfile;
 
 	  gdbarch = get_objfile_arch (objfile);
-	  load_addr = SYMBOL_VALUE_ADDRESS (msymbol);
+	  load_addr = SYMBOL_VALUE_ADDRESS (msymbol.minsym);
 
 	  printf_filtered ("Symbol \"");
 	  fprintf_symbol_filtered (gdb_stdout, exp,
@@ -1230,7 +1242,7 @@ address_info (char *exp, int from_tty)
 	  printf_filtered ("\" is at ");
 	  fputs_filtered (paddress (gdbarch, load_addr), gdb_stdout);
 	  printf_filtered (" in a file compiled without debugging");
-	  section = SYMBOL_OBJ_SECTION (objfile, msymbol);
+	  section = SYMBOL_OBJ_SECTION (objfile, msymbol.minsym);
 	  if (section_is_overlay (section))
 	    {
 	      load_addr = overlay_unmapped_address (load_addr, section);
@@ -1371,7 +1383,7 @@ address_info (char *exp, int from_tty)
 	      printf_filtered (_("a thread-local variable at offset %s "
 				 "in the thread-local storage for `%s'"),
 			       paddress (gdbarch, load_addr),
-			       section->objfile->name);
+			       objfile_name (section->objfile));
 	    else
 	      {
 		printf_filtered (_("static storage at address "));
@@ -2446,6 +2458,7 @@ static void
 printf_command (char *arg, int from_tty)
 {
   ui_printf (arg, gdb_stdout);
+  gdb_flush (gdb_stdout);
 }
 
 /* Implement the "eval" command.  */
@@ -2488,7 +2501,8 @@ Examine memory: x/FMT ADDRESS.\n\
 ADDRESS is an expression for the memory address to examine.\n\
 FMT is a repeat count followed by a format letter and a size letter.\n\
 Format letters are o(octal), x(hex), d(decimal), u(unsigned decimal),\n\
-  t(binary), f(float), a(address), i(instruction), c(char) and s(string).\n\
+  t(binary), f(float), a(address), i(instruction), c(char), s(string)\n\
+  and z(hex, zero padded on the left).\n\
 Size letters are b(byte), h(halfword), w(word), g(giant, 8 bytes).\n\
 The specified number of objects of the specified size are printed\n\
 according to the format.\n\n\

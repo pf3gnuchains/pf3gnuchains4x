@@ -881,12 +881,12 @@ struct elf_backend_data
   bfd_boolean (*check_directives)
     (bfd *abfd, struct bfd_link_info *info);
 
-  /* The AS_NEEDED_CLEANUP function is called once per --as-needed
-     input file that was not needed by the add_symbols phase of the
-     ELF backend linker.  The function must undo any target specific
-     changes in the symbol hash table.  */
-  bfd_boolean (*as_needed_cleanup)
-    (bfd *abfd, struct bfd_link_info *info);
+  /* The NOTICE_AS_NEEDED function is called as the linker is about to
+     handle an as-needed lib (ACT = notice_as_needed), and after the
+     linker has decided to keep the lib (ACT = notice_needed) or when
+     the lib is not needed (ACT = notice_not_needed).  */
+  bfd_boolean (*notice_as_needed)
+    (bfd *abfd, struct bfd_link_info *info, enum notice_asneeded_action act);
 
   /* The ADJUST_DYNAMIC_SYMBOL function is called by the ELF backend
      linker for every symbol which is defined by a dynamic object and
@@ -2139,6 +2139,8 @@ extern bfd_boolean _bfd_elf_default_relocs_compatible
 
 extern bfd_boolean _bfd_elf_relocs_compatible
   (const bfd_target *, const bfd_target *);
+extern bfd_boolean _bfd_elf_notice_as_needed
+  (bfd *, struct bfd_link_info *, enum notice_asneeded_action);
 
 extern struct elf_link_hash_entry *_bfd_elf_archive_symbol_lookup
   (bfd *, struct bfd_link_info *, const char *);
@@ -2378,12 +2380,9 @@ struct elf_dyn_relocs
 
 extern bfd_boolean _bfd_elf_create_ifunc_sections
   (bfd *, struct bfd_link_info *);
-extern asection * _bfd_elf_create_ifunc_dyn_reloc
-  (bfd *, struct bfd_link_info *, asection *sec, asection *sreloc,
-   struct elf_dyn_relocs **);
 extern bfd_boolean _bfd_elf_allocate_ifunc_dyn_relocs
   (struct bfd_link_info *, struct elf_link_hash_entry *,
-   struct elf_dyn_relocs **, unsigned int, unsigned int);
+   struct elf_dyn_relocs **, unsigned int, unsigned int, unsigned int);
 
 extern void elf_append_rela (bfd *, asection *, Elf_Internal_Rela *);
 extern void elf_append_rel (bfd *, asection *, Elf_Internal_Rela *);
@@ -2497,16 +2496,16 @@ extern asection _bfd_elf_large_com_section;
 	rel_hdr = _bfd_elf_single_rel_hdr (input_section->output_section); \
 									\
 	/* Avoid empty output section.  */				\
-	if (rel_hdr->sh_size > count * rel_hdr->sh_entsize)		\
+	if (rel_hdr->sh_size > rel_hdr->sh_entsize)			\
 	  {								\
-	    rel_hdr->sh_size -= count * rel_hdr->sh_entsize;		\
+	    rel_hdr->sh_size -= rel_hdr->sh_entsize;			\
 	    rel_hdr = _bfd_elf_single_rel_hdr (input_section);		\
-	    rel_hdr->sh_size -= count * rel_hdr->sh_entsize;		\
+	    rel_hdr->sh_size -= rel_hdr->sh_entsize;			\
 									\
 	    memmove (rel, rel + count,					\
 		     (relend - rel - count) * sizeof (*rel));		\
 									\
-	    input_section->reloc_count -= count;			\
+	    input_section->reloc_count--;				\
 	    relend -= count;						\
 	    rel--;							\
 	    continue;							\

@@ -432,11 +432,7 @@ post_create_inferior (struct target_ops *target, int from_tty)
 
       /* Create the hooks to handle shared library load and unload
 	 events.  */
-#ifdef SOLIB_CREATE_INFERIOR_HOOK
-      SOLIB_CREATE_INFERIOR_HOOK (PIDGET (inferior_ptid));
-#else
       solib_create_inferior_hook (from_tty);
-#endif
 
       if (current_program_space->solib_add_generation == solib_add_generation)
 	{
@@ -452,13 +448,7 @@ post_create_inferior (struct target_ops *target, int from_tty)
 	  /* If the solist is global across processes, there's no need to
 	     refetch it here.  */
 	  if (!gdbarch_has_global_solist (target_gdbarch ()))
-	    {
-#ifdef SOLIB_ADD
-	      SOLIB_ADD (NULL, 0, target, auto_solib_add);
-#else
-	      solib_add (NULL, 0, target, auto_solib_add);
-#endif
-	    }
+	    solib_add (NULL, 0, target, auto_solib_add);
 	}
     }
 
@@ -1056,9 +1046,14 @@ step_once (int skip_subroutines, int single_inst, int count, int thread)
 				 &tp->control.step_range_start,
 				 &tp->control.step_range_end);
 
+	  tp->control.may_range_step = 1;
+
 	  /* If we have no line info, switch to stepi mode.  */
 	  if (tp->control.step_range_end == 0 && step_stop_if_no_debug)
-	    tp->control.step_range_start = tp->control.step_range_end = 1;
+	    {
+	      tp->control.step_range_start = tp->control.step_range_end = 1;
+	      tp->control.may_range_step = 0;
+	    }
 	  else if (tp->control.step_range_end == 0)
 	    {
 	      const char *name;
@@ -1347,6 +1342,7 @@ until_next_command (int from_tty)
       tp->control.step_range_start = BLOCK_START (SYMBOL_BLOCK_VALUE (func));
       tp->control.step_range_end = sal.end;
     }
+  tp->control.may_range_step = 1;
 
   tp->control.step_over_calls = STEP_OVER_ALL;
 
@@ -1452,7 +1448,7 @@ get_return_value (struct value *function, struct type *value_type)
   if (!stop_regs)
     {
       stop_regs = regcache_dup (get_current_regcache ());
-      cleanup = make_cleanup_regcache_xfree (stop_regs);
+      make_cleanup_regcache_xfree (stop_regs);
     }
 
   gdbarch = get_regcache_arch (stop_regs);
@@ -1510,7 +1506,7 @@ print_return_value (struct value *function, struct type *value_type)
       ui_out_field_fmt (uiout, "gdb-result-var", "$%d",
 			record_latest_value (value));
       ui_out_text (uiout, " = ");
-      get_raw_print_options (&opts);
+      get_no_prettyformat_print_options (&opts);
       value_print (value, stb, &opts);
       ui_out_field_stream (uiout, "return-value", stb);
       ui_out_text (uiout, "\n");
@@ -1769,7 +1765,7 @@ finish_command (char *arg, int from_tty)
       if (from_tty)
 	{
 	  printf_filtered (_("Run till exit from "));
-	  print_stack_frame (get_selected_frame (NULL), 1, LOCATION);
+	  print_stack_frame (get_selected_frame (NULL), 1, LOCATION, 0);
 	}
 
       proceed ((CORE_ADDR) -1, GDB_SIGNAL_DEFAULT, 1);
@@ -1794,7 +1790,7 @@ finish_command (char *arg, int from_tty)
       else
 	printf_filtered (_("Run till exit from "));
 
-      print_stack_frame (get_selected_frame (NULL), 1, LOCATION);
+      print_stack_frame (get_selected_frame (NULL), 1, LOCATION, 0);
     }
 
   if (execution_direction == EXEC_REVERSE)
@@ -2037,6 +2033,12 @@ default_print_one_register_info (struct ui_file *file,
       fprintf_filtered (file, "*value not available*\n");
       return;
     }
+  else if (value_optimized_out (val))
+    {
+      val_print_optimized_out (val, file);
+      fprintf_filtered (file, "\n");
+      return;
+    }
 
   /* If virtual format is floating, print it that way, and in raw
      hex.  */
@@ -2056,17 +2058,8 @@ default_print_one_register_info (struct ui_file *file,
 		 value_embedded_offset (val), 0,
 		 file, 0, val, &opts, current_language);
 
-      fprintf_filtered (file, "\t(raw 0x");
-      for (j = 0; j < TYPE_LENGTH (regtype); j++)
-	{
-	  int idx;
-
-	  if (byte_order == BFD_ENDIAN_BIG)
-	    idx = j;
-	  else
-	    idx = TYPE_LENGTH (regtype) - 1 - j;
-	  fprintf_filtered (file, "%02x", (unsigned char) valaddr[idx]);
-	}
+      fprintf_filtered (file, "\t(raw ");
+      print_hex_chars (file, valaddr, TYPE_LENGTH (regtype), byte_order);
       fprintf_filtered (file, ")");
     }
   else
@@ -2120,9 +2113,6 @@ default_print_registers_info (struct gdbarch *gdbarch,
 
   for (i = 0; i < numregs; i++)
     {
-      struct type *regtype;
-      struct value *val;
-
       /* Decide between printing all regs, non-float / vector regs, or
          specific reg.  */
       if (regnum == -1)
@@ -2150,16 +2140,9 @@ default_print_registers_info (struct gdbarch *gdbarch,
 	  || *(gdbarch_register_name (gdbarch, i)) == '\0')
 	continue;
 
-      regtype = register_type (gdbarch, i);
-      val = allocate_value (regtype);
-
-      /* Get the data in raw format.  */
-      if (! deprecated_frame_register_read (frame, i, value_contents_raw (val)))
-	mark_value_bytes_unavailable (val, 0, TYPE_LENGTH (value_type (val)));
-
       default_print_one_register_info (file,
 				       gdbarch_register_name (gdbarch, i),
-				       val);
+				       value_of_register (i, frame));
     }
 }
 
@@ -2347,7 +2330,7 @@ kill_command (char *arg, int from_tty)
       if (target_has_stack)
 	{
 	  printf_filtered (_("In %s,\n"), target_longname);
-	  print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC);
+	  print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC, 1);
 	}
     }
   bfd_cache_close_all ();
@@ -2425,7 +2408,7 @@ attach_command_post_wait (char *args, int from_tty, int async_exec)
   exec_file = (char *) get_exec_file (0);
   if (!exec_file)
     {
-      exec_file = target_pid_to_exec_file (PIDGET (inferior_ptid));
+      exec_file = target_pid_to_exec_file (ptid_get_pid (inferior_ptid));
       if (exec_file)
 	{
 	  /* It's possible we don't have a full path, but rather just a
@@ -2450,7 +2433,7 @@ attach_command_post_wait (char *args, int from_tty, int async_exec)
     }
 
   /* Take any necessary post-attaching actions for this platform.  */
-  target_post_attach (PIDGET (inferior_ptid));
+  target_post_attach (ptid_get_pid (inferior_ptid));
 
   post_create_inferior (&current_target, from_tty);
 

@@ -42,8 +42,6 @@
 #include "gdb_string.h"
 #include "gdb_assert.h"
 
-DEF_VEC_I(int);
-
 extern int dwarf2_always_disassemble;
 
 static void dwarf_expr_frame_base_1 (struct symbol *framefunc, CORE_ADDR pc,
@@ -89,6 +87,16 @@ enum debug_loc_kind
   /* An internal value indicating an invalid kind of entry was found.  */
   DEBUG_LOC_INVALID_ENTRY = -2
 };
+
+/* Helper function which throws an error if a synthetic pointer is
+   invalid.  */
+
+static void
+invalid_synthetic_pointer (void)
+{
+  error (_("access outside bounds of object "
+	   "referenced via synthetic pointer"));
+}
 
 /* Decode the addresses in a non-dwo .debug_loc entry.
    A pointer to the next byte to examine is returned in *NEW_PTR.
@@ -1594,7 +1602,7 @@ read_pieced_value (struct value *v)
   struct frame_info *frame = frame_find_by_id (VALUE_FRAME_ID (v));
   size_t type_len;
   size_t buffer_size = 0;
-  char *buffer = NULL;
+  gdb_byte *buffer = NULL;
   struct cleanup *cleanup;
   int bits_big_endian
     = gdbarch_bits_big_endian (get_type_arch (value_type (v)));
@@ -1631,8 +1639,6 @@ read_pieced_value (struct value *v)
 	  bits_to_skip -= this_size_bits;
 	  continue;
 	}
-      if (this_size_bits > type_len - offset)
-	this_size_bits = type_len - offset;
       if (bits_to_skip > 0)
 	{
 	  dest_offset_bits = 0;
@@ -1645,6 +1651,8 @@ read_pieced_value (struct value *v)
 	  dest_offset_bits = offset;
 	  source_offset_bits = 0;
 	}
+      if (this_size_bits > type_len - offset)
+	this_size_bits = type_len - offset;
 
       this_size = (this_size_bits + source_offset_bits % 8 + 7) / 8;
       source_offset = source_offset_bits / 8;
@@ -1777,7 +1785,7 @@ write_pieced_value (struct value *to, struct value *from)
   struct frame_info *frame = frame_find_by_id (VALUE_FRAME_ID (to));
   size_t type_len;
   size_t buffer_size = 0;
-  char *buffer = NULL;
+  gdb_byte *buffer = NULL;
   struct cleanup *cleanup;
   int bits_big_endian
     = gdbarch_bits_big_endian (get_type_arch (value_type (to)));
@@ -2077,8 +2085,15 @@ indirect_pieced_value (struct value *value)
 
   frame = get_selected_frame (_("No frame selected."));
 
-  /* This is an offset requested by GDB, such as value subcripts.  */
+  /* This is an offset requested by GDB, such as value subscripts.
+     However, due to how synthetic pointers are implemented, this is
+     always presented to us as a pointer type.  This means we have to
+     sign-extend it manually as appropriate.  */
   byte_offset = value_as_address (value);
+  if (TYPE_LENGTH (value_type (value)) < sizeof (LONGEST))
+    byte_offset = gdb_sign_extend (byte_offset,
+				   8 * TYPE_LENGTH (value_type (value)));
+  byte_offset += piece->v.ptr.offset;
 
   gdb_assert (piece);
   baton
@@ -2086,9 +2101,37 @@ indirect_pieced_value (struct value *value)
 				     get_frame_address_in_block_wrapper,
 				     frame);
 
-  return dwarf2_evaluate_loc_desc_full (TYPE_TARGET_TYPE (type), frame,
-					baton.data, baton.size, baton.per_cu,
-					piece->v.ptr.offset + byte_offset);
+  if (baton.data != NULL)
+    return dwarf2_evaluate_loc_desc_full (TYPE_TARGET_TYPE (type), frame,
+					  baton.data, baton.size, baton.per_cu,
+					  byte_offset);
+
+  {
+    struct obstack temp_obstack;
+    struct cleanup *cleanup;
+    const gdb_byte *bytes;
+    LONGEST len;
+    struct value *result;
+
+    obstack_init (&temp_obstack);
+    cleanup = make_cleanup_obstack_free (&temp_obstack);
+
+    bytes = dwarf2_fetch_constant_bytes (piece->v.ptr.die, c->per_cu,
+					 &temp_obstack, &len);
+    if (bytes == NULL)
+      result = allocate_optimized_out_value (TYPE_TARGET_TYPE (type));
+    else
+      {
+	if (byte_offset < 0
+	    || byte_offset + TYPE_LENGTH (TYPE_TARGET_TYPE (type)) > len)
+	  invalid_synthetic_pointer ();
+	bytes += byte_offset;
+	result = value_from_contents (TYPE_TARGET_TYPE (type), bytes);
+      }
+
+    do_cleanups (cleanup);
+    return result;
+  }
 }
 
 static void *
@@ -2133,16 +2176,6 @@ static const struct lval_funcs pieced_value_funcs = {
   copy_pieced_value_closure,
   free_pieced_value_closure
 };
-
-/* Helper function which throws an error if a synthetic pointer is
-   invalid.  */
-
-static void
-invalid_synthetic_pointer (void)
-{
-  error (_("access outside bounds of object "
-	   "referenced via synthetic pointer"));
-}
 
 /* Virtual method table for dwarf2_evaluate_loc_desc_full below.  */
 
@@ -2250,17 +2283,28 @@ dwarf2_evaluate_loc_desc_full (struct type *type, struct frame_info *frame,
 	case DWARF_VALUE_REGISTER:
 	  {
 	    struct gdbarch *arch = get_frame_arch (frame);
-	    ULONGEST dwarf_regnum = value_as_long (dwarf_expr_fetch (ctx, 0));
+	    int dwarf_regnum
+	      = longest_to_int (value_as_long (dwarf_expr_fetch (ctx, 0)));
 	    int gdb_regnum = gdbarch_dwarf2_reg_to_regnum (arch, dwarf_regnum);
 
 	    if (byte_offset != 0)
 	      error (_("cannot use offset on synthetic pointer to register"));
 	    do_cleanups (value_chain);
-	    if (gdb_regnum != -1)
-	      retval = value_from_register (type, gdb_regnum, frame);
-	    else
-	      error (_("Unable to access DWARF register number %s"),
-		     paddress (arch, dwarf_regnum));
+	   if (gdb_regnum == -1)
+	      error (_("Unable to access DWARF register number %d"),
+		     dwarf_regnum);
+	   retval = value_from_register (type, gdb_regnum, frame);
+	   if (value_optimized_out (retval))
+	     {
+	       /* This means the register has undefined value / was
+		  not saved.  As we're computing the location of some
+		  variable etc. in the program, not a value for
+		  inspecting a register ($pc, $sp, etc.), return a
+		  generic optimized out value instead, so that we show
+		  <optimized out> instead of <not saved>.  */
+	       do_cleanups (value_chain);
+	       retval = allocate_optimized_out_value (type);
+	     }
 	  }
 	  break;
 
@@ -2270,11 +2314,9 @@ dwarf2_evaluate_loc_desc_full (struct type *type, struct frame_info *frame,
 	    int in_stack_memory = dwarf_expr_fetch_in_stack_memory (ctx, 0);
 
 	    do_cleanups (value_chain);
-	    retval = allocate_value_lazy (type);
-	    VALUE_LVAL (retval) = lval_memory;
+	    retval = value_at_lazy (type, address + byte_offset);
 	    if (in_stack_memory)
 	      set_value_stack (retval, 1);
-	    set_value_address (retval, address + byte_offset);
 	  }
 	  break;
 
@@ -3455,7 +3497,7 @@ locexpr_describe_location_piece (struct symbol *symbol, struct ui_file *stream,
       fprintf_filtered (stream, 
 			_("a thread-local variable at offset 0x%s "
 			  "in the thread-local storage for `%s'"),
-			phex_nz (offset, addr_size), objfile->name);
+			phex_nz (offset, addr_size), objfile_name (objfile));
 
       data += 1 + addr_size + 1;
     }
@@ -3478,7 +3520,7 @@ locexpr_describe_location_piece (struct symbol *symbol, struct ui_file *stream,
       fprintf_filtered (stream, 
 			_("a thread-local variable at offset 0x%s "
 			  "in the thread-local storage for `%s'"),
-			phex_nz (offset, addr_size), objfile->name);
+			phex_nz (offset, addr_size), objfile_name (objfile));
       ++data;
     }
 

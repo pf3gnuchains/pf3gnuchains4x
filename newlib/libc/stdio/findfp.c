@@ -62,7 +62,11 @@ _DEFUN(std, (ptr, flags, file, data),
   ptr->_flags |= __SL64;
 #endif /* __LARGE64_FILES */
   ptr->_seek = __sseek;
+#ifdef _STDIO_CLOSE_PER_REENT_STD_STREAMS
   ptr->_close = __sclose;
+#else /* _STDIO_CLOSE_STD_STREAMS */
+  ptr->_close = NULL;
+#endif /* _STDIO_CLOSE_STD_STREAMS */
 #if !defined(__SINGLE_THREAD__) && !defined(_REENT_SMALL)
   __lock_init_recursive (ptr->_lock);
   /*
@@ -166,8 +170,17 @@ _VOID
 _DEFUN(_cleanup_r, (ptr),
        struct _reent *ptr)
 {
-  _CAST_VOID _fwalk(ptr, fclose);
-  /* _CAST_VOID _fwalk (ptr, fflush); */	/* `cheating' */
+#ifdef _STDIO_BSD_SEMANTICS
+  /* BSD and Glibc systems only flush streams which have been written to
+     at exit time.  Calling flush rather than close for speed, as on
+     the aforementioned systems. */
+  _CAST_VOID _fwalk_reent (ptr, __sflushw_r);
+#else
+  /* Otherwise close files and flush read streams, too.
+     FIXME: Do we really have to call fclose rather than fflush for
+     RTOS compatibility? */
+  _CAST_VOID _fwalk_reent (ptr, _fclose_r);
+#endif
 }
 
 #ifndef _REENT_ONLY

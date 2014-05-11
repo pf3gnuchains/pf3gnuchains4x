@@ -38,6 +38,7 @@
 #include "observer.h"
 #include "fnmatch.h"
 #include "top.h"
+#include "filestuff.h"
 
 /* The suffix of per-objfile scripts to auto-load as non-Python command files.
    E.g. When the program loads libfoo.so, look for libfoo-gdb.gdb.  */
@@ -515,7 +516,7 @@ source_gdb_script_for_objfile (struct objfile *objfile, FILE *file,
   is_safe = file_is_auto_load_safe (filename, _("auto-load: Loading canned "
 						"sequences of commands script "
 						"\"%s\" for objfile \"%s\".\n"),
-				    filename, objfile->name);
+				    filename, objfile_name (objfile));
 
   /* Add this script to the hash table too so "info auto-load gdb-scripts"
      can print it.  */
@@ -738,7 +739,7 @@ auto_load_objfile_script_1 (struct objfile *objfile, const char *realname,
 
   cleanups = make_cleanup (xfree, filename);
 
-  input = fopen (filename, "r");
+  input = gdb_fopen_cloexec (filename, "r");
   debugfile = filename;
   if (debug_auto_load)
     fprintf_unfiltered (gdb_stdlog, _("auto-load: Attempted file \"%s\" %s.\n"),
@@ -770,7 +771,7 @@ auto_load_objfile_script_1 (struct objfile *objfile, const char *realname,
 	  strcat (debugfile, filename);
 
 	  make_cleanup (xfree, debugfile);
-	  input = fopen (debugfile, "r");
+	  input = gdb_fopen_cloexec (debugfile, "r");
 	  if (debug_auto_load)
 	    fprintf_unfiltered (gdb_stdlog, _("auto-load: Attempted file "
 					      "\"%s\" %s.\n"),
@@ -808,7 +809,7 @@ void
 auto_load_objfile_script (struct objfile *objfile,
 			  const struct script_language *language)
 {
-  char *realname = gdb_realpath (objfile->name);
+  char *realname = gdb_realpath (objfile_name (objfile));
   struct cleanup *cleanups = make_cleanup (xfree, realname);
 
   if (!auto_load_objfile_script_1 (objfile, realname, language))
@@ -839,7 +840,7 @@ auto_load_objfile_script (struct objfile *objfile,
 void
 load_auto_scripts_for_objfile (struct objfile *objfile)
 {
-  if (!global_auto_load)
+  if (!global_auto_load || (objfile->flags & OBJF_NOT_FILENAME) != 0)
     return;
 
   if (auto_load_gdb_scripts)

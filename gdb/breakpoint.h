@@ -24,6 +24,7 @@
 #include "vec.h"
 #include "ax.h"
 #include "command.h"
+#include "break-common.h"
 
 struct value;
 struct block;
@@ -214,15 +215,6 @@ enum bpdisp
     disp_disable,		/* Disable it */
     disp_donttouch		/* Leave it alone */
   };
-
-enum target_hw_bp_type
-  {
-    hw_write   = 0, 		/* Common  HW watchpoint */
-    hw_read    = 1, 		/* Read    HW watchpoint */
-    hw_access  = 2, 		/* Access  HW watchpoint */
-    hw_execute = 3		/* Execute HW breakpoint */
-  };
-
 
 /* Status of breakpoint conditions used when synchronizing
    conditions with the target.  */
@@ -595,8 +587,7 @@ struct breakpoint_ops
      This function is called inside `create_breakpoint'.  */
   void (*create_breakpoints_sal) (struct gdbarch *,
 				  struct linespec_result *,
-				  struct linespec_sals *, char *,
-				  char *,
+				  char *, char *,
 				  enum bptype, enum bpdisp, int, int,
 				  int, const struct breakpoint_ops *,
 				  int, int, int, unsigned);
@@ -613,7 +604,12 @@ struct breakpoint_ops
      should still be delivered to the inferior.  This is used to make
      'catch signal' interact properly with 'handle'; see
      bpstat_explains_signal.  */
-  enum bpstat_signal_value (*explains_signal) (struct breakpoint *);
+  enum bpstat_signal_value (*explains_signal) (struct breakpoint *,
+					       enum gdb_signal);
+
+  /* Called after evaluating the breakpoint's condition,
+     and only if it evaluated true.  */
+  void (*after_condition_true) (struct bpstats *bs);
 };
 
 /* Helper for breakpoint_ops->print_recreate implementations.  Prints
@@ -1009,7 +1005,8 @@ bpstat bpstat_find_breakpoint (bpstat, struct breakpoint *);
 /* Nonzero if a signal that we got in wait() was due to circumstances
    explained by the bpstat; and the signal should therefore not be
    delivered.  */
-extern enum bpstat_signal_value bpstat_explains_signal (bpstat);
+extern enum bpstat_signal_value bpstat_explains_signal (bpstat,
+							enum gdb_signal);
 
 /* Nonzero is this bpstat causes a stop.  */
 extern int bpstat_causes_stop (bpstat);
@@ -1212,6 +1209,7 @@ extern void tbreak_command (char *, int);
 extern struct breakpoint_ops base_breakpoint_ops;
 extern struct breakpoint_ops bkpt_breakpoint_ops;
 extern struct breakpoint_ops tracepoint_breakpoint_ops;
+extern struct breakpoint_ops dprintf_breakpoint_ops;
 
 extern void initialize_breakpoint_ops (void);
 
@@ -1240,6 +1238,7 @@ extern void
 				 char *addr_string,
 				 const struct breakpoint_ops *ops,
 				 int tempflag,
+				 int enabled,
 				 int from_tty);
 
 extern void init_catchpoint (struct breakpoint *b,
@@ -1553,8 +1552,8 @@ extern int user_breakpoint_p (struct breakpoint *);
 /* Attempt to determine architecture of location identified by SAL.  */
 extern struct gdbarch *get_sal_arch (struct symtab_and_line sal);
 
-extern void handle_solib_event (void);
-
 extern void breakpoint_free_objfile (struct objfile *objfile);
+
+extern char *ep_parse_optional_if_clause (char **arg);
 
 #endif /* !defined (BREAKPOINT_H) */

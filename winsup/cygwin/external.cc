@@ -1,7 +1,7 @@
 /* external.cc: Interface to Cygwin internals from external programs.
 
    Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
-   2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
+   2008, 2009, 2010, 2011, 2012, 2014 Red Hat, Inc.
 
    Written by Christopher Faylor <cgf@cygnus.com>
 
@@ -26,6 +26,7 @@ details. */
 #include "child_info.h"
 #include "environ.h"
 #include "cygserver_setpwd.h"
+#include "pwdgrp.h"
 #include <unistd.h>
 #include <stdlib.h>
 #include <wchar.h>
@@ -113,7 +114,7 @@ fillout_pinfo (pid_t pid, int winpid)
   return &ep;
 }
 
-static inline DWORD
+static inline uintptr_t
 get_cygdrive_info (char *user, char *system, char *user_flags,
 		   char *system_flags)
 {
@@ -122,7 +123,7 @@ get_cygdrive_info (char *user, char *system, char *user_flags,
   return (res == ERROR_SUCCESS) ? 1 : 0;
 }
 
-static DWORD
+static bool
 check_ntsec (const char *filename)
 {
   if (!filename)
@@ -200,7 +201,7 @@ exit_process (UINT status, bool useTerminateProcess)
 }
 
 
-extern "C" unsigned long
+extern "C" uintptr_t
 cygwin_internal (cygwin_getinfo_types t, ...)
 {
   va_list arg;
@@ -218,7 +219,7 @@ cygwin_internal (cygwin_getinfo_types t, ...)
 	break;
 
       case CW_GETTHREADNAME:
-	res = (DWORD) cygthread::name (va_arg (arg, DWORD));
+	res = (uintptr_t) cygthread::name (va_arg (arg, DWORD));
 	break;
 
       case CW_SETTHREADNAME:
@@ -229,11 +230,11 @@ cygwin_internal (cygwin_getinfo_types t, ...)
 	break;
 
       case CW_GETPINFO:
-	res = (DWORD) fillout_pinfo (va_arg (arg, DWORD), 0);
+	res = (uintptr_t) fillout_pinfo (va_arg (arg, DWORD), 0);
 	break;
 
       case CW_GETVERSIONINFO:
-	res = (DWORD) cygwin_version_strings;
+	res = (uintptr_t) cygwin_version_strings;
 	break;
 
       case CW_READ_V1_MOUNT_TABLES:
@@ -247,7 +248,7 @@ cygwin_internal (cygwin_getinfo_types t, ...)
 	   Hilarity ensues if the DLL is not loaded like while the process
 	   is forking. */
 	__cygwin_user_data.cxx_malloc = &default_cygwin_cxx_malloc;
-	res = (DWORD) &__cygwin_user_data;
+	res = (uintptr_t) &__cygwin_user_data;
 	break;
 
       case CW_PERFILE:
@@ -264,7 +265,7 @@ cygwin_internal (cygwin_getinfo_types t, ...)
 	break;
 
       case CW_GETPINFO_FULL:
-	res = (DWORD) fillout_pinfo (va_arg (arg, pid_t), 1);
+	res = (uintptr_t) fillout_pinfo (va_arg (arg, pid_t), 1);
 	break;
 
       case CW_INIT_EXCEPTIONS:
@@ -299,7 +300,7 @@ cygwin_internal (cygwin_getinfo_types t, ...)
 	  else
 	    {
 	      set_errno (ESRCH);
-	      res = (DWORD) -1;
+	      res = (uintptr_t) -1;
 	    }
 	}
 	break;
@@ -337,7 +338,7 @@ cygwin_internal (cygwin_getinfo_types t, ...)
 	  size_t n;
 	  pid_t pid = va_arg (arg, pid_t);
 	  pinfo p (pid);
-	  res = (DWORD) p->cmdline (n);
+	  res = (uintptr_t) p->cmdline (n);
 	}
 	break;
       case CW_CHECK_NTSEC:
@@ -379,13 +380,13 @@ cygwin_internal (cygwin_getinfo_types t, ...)
       case CW_GET_UID_FROM_SID:
 	{
 	  cygpsid psid = va_arg (arg, PSID);
-	  res = psid.get_id (false, NULL);
+	  res = psid.get_uid (NULL);
 	}
 	break;
       case CW_GET_GID_FROM_SID:
 	{
 	  cygpsid psid = va_arg (arg, PSID);
-	  res = psid.get_id (true, NULL);
+	  res = psid.get_gid (NULL);
 	}
 	break;
       case CW_GET_BINMODE:
@@ -406,24 +407,24 @@ cygwin_internal (cygwin_getinfo_types t, ...)
 	  const char *name = va_arg (arg, const char *);
 	  const void *hookfn = va_arg (arg, const void *);
 	  WORD subsys;
-	  res = (unsigned long) hook_or_detect_cygwin (name, hookfn, subsys);
+	  res = (uintptr_t) hook_or_detect_cygwin (name, hookfn, subsys);
 	}
 	break;
       case CW_ARGV:
 	{
 	  child_info_spawn *ci = (child_info_spawn *) get_cygwin_startup_info ();
-	  res = (unsigned long) (ci ? ci->moreinfo->argv : NULL);
+	  res = (uintptr_t) (ci ? ci->moreinfo->argv : NULL);
 	}
 	break;
       case CW_ENVP:
 	{
 	  child_info_spawn *ci = (child_info_spawn *) get_cygwin_startup_info ();
-	  res = (unsigned long) (ci ? ci->moreinfo->envp : NULL);
+	  res = (uintptr_t) (ci ? ci->moreinfo->envp : NULL);
 	}
 	break;
       case CW_DEBUG_SELF:
 	error_start_init (va_arg (arg, const char *));
-	try_to_debug ();
+	res = try_to_debug ();
 	break;
       case CW_SYNC_WINENV:
 	create_winenv (NULL);
@@ -550,6 +551,71 @@ cygwin_internal (cygwin_getinfo_types t, ...)
 	  if (ddm)
 	    delete ddm;
 	  res = 0;
+	}
+	break;
+
+      case CW_SETENT:
+	{
+	  int group = va_arg (arg, int);
+	  int enums = va_arg (arg, int);
+	  PCWSTR enum_tdoms = va_arg (arg, PCWSTR);
+	  if (group)
+	    res = (uintptr_t) setgrent_filtered (enums, enum_tdoms);
+	  else
+	    res = (uintptr_t) setpwent_filtered (enums, enum_tdoms);
+	}
+	break;
+
+      case CW_GETENT:
+	{
+	  int group = va_arg (arg, int);
+	  void *obj = va_arg (arg, void *);
+	  if (obj)
+	    {
+	      if (group)
+		res = (uintptr_t) getgrent_filtered (obj);
+	      else
+		res = (uintptr_t) getpwent_filtered (obj);
+	    }
+	}
+	break;
+
+      case CW_ENDENT:
+	{
+	  int group = va_arg (arg, int);
+	  void *obj = va_arg (arg, void *);
+	  if (obj)
+	    {
+	      if (group)
+		endgrent_filtered (obj);
+	      else
+		endpwent_filtered (obj);
+	      res = 0;
+	    }
+	}
+	break;
+
+      case CW_GETNSSSEP:
+	res = (uintptr_t) cygheap->pg.nss_separator ();
+	break;
+
+      case CW_GETPWSID:
+	{
+	  int db_only = va_arg (arg, int);
+	  PSID psid = va_arg (arg, PSID);
+	  cygpsid sid (psid);
+	  res = (uintptr_t) (db_only ? internal_getpwsid_from_db (sid)
+				     : internal_getpwsid (sid));
+	}
+	break;
+
+      case CW_GETGRSID:
+	{
+	  int db_only = va_arg (arg, int);
+	  PSID psid = va_arg (arg, PSID);
+	  cygpsid sid (psid);
+	  res = (uintptr_t) (db_only ? internal_getgrsid_from_db (sid)
+				     : internal_getgrsid (sid));
 	}
 	break;
 

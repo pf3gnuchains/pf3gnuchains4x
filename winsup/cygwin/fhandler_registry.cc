@@ -29,8 +29,8 @@ details. */
  * the bottom 16 bits are the absolute position and the top 15 bits
  * make up the value index if we are enuerating values.
  */
-static const _off_t REG_ENUM_VALUES_MASK = 0x8000000;
-static const _off_t REG_POSITION_MASK = 0xffff;
+static const __int32_t REG_ENUM_VALUES_MASK = 0x8000000;
+static const __int32_t REG_POSITION_MASK = 0xffff;
 
 /* These key paths are used below whenever we return key information.
    The problem is UAC virtualization when running an admin account with
@@ -59,7 +59,7 @@ static const char *registry_listing[] =
   "HKEY_CURRENT_USER",
   "HKEY_LOCAL_MACHINE",
   "HKEY_USERS",
-  "HKEY_PERFORMANCE_DATA",	// NT/2000/XP
+  "HKEY_PERFORMANCE_DATA",
   NULL
 };
 
@@ -87,7 +87,7 @@ fetch_hkey (int idx) /* idx *must* be valid */
   if (registry_keys[idx] == HKEY_CLASSES_ROOT)
     {
       if (RegOpenUserClassesRoot (cygheap->user.issetuid ()
-				  ? cygheap->user.imp_token () : hProcImpToken,
+				  ? cygheap->user.imp_token () : hProcToken,
 				  0, KEY_READ, &key) == ERROR_SUCCESS)
 	return key;
     }
@@ -96,6 +96,17 @@ fetch_hkey (int idx) /* idx *must* be valid */
       if (RegOpenCurrentUser (KEY_READ, &key) == ERROR_SUCCESS)
 	return key;
     }
+  else if (registry_keys[idx] == HKEY_CURRENT_CONFIG)
+    {
+      if (RegOpenKeyExW (HKEY_LOCAL_MACHINE,
+		       L"System\\CurrentControlSet\\Hardware Profiles\\Current",
+		       0, KEY_READ, &key) == ERROR_SUCCESS)
+	return key;
+    }
+  /* Unfortunately there's no way to generate a valid OS registry key for
+     the other root keys.  HKEY_USERS and HKEY_LOCAL_MACHINE are file
+     handles internally, HKEY_PERFORMANCE_DATA is just a bad hack and
+     no registry key at all. */
   return registry_keys[idx];
 }
 
@@ -462,7 +473,7 @@ fhandler_proc ()
 }
 
 int __reg2
-fhandler_registry::fstat (struct __stat64 *buf)
+fhandler_registry::fstat (struct stat *buf)
 {
   fhandler_base::fstat (buf);
   buf->st_mode &= ~_IFMT & NO_W;
@@ -508,7 +519,7 @@ fhandler_registry::fstat (struct __stat64 *buf)
 	      RegQueryInfoKeyW (hKey, NULL, NULL, NULL, &subkey_count, NULL,
 				NULL, NULL, NULL, NULL, NULL, &ftLastWriteTime))
 	    {
-	      to_timestruc_t (&ftLastWriteTime, &buf->st_mtim);
+	      to_timestruc_t ((PLARGE_INTEGER) &ftLastWriteTime, &buf->st_mtim);
 	      buf->st_ctim = buf->st_birthtim = buf->st_mtim;
 	      time_as_timestruc_t (&buf->st_atim);
 	      if (file_type > virt_none)
@@ -551,8 +562,8 @@ fhandler_registry::fstat (struct __stat64 *buf)
 		  else
 		    buf->st_size = dwSize;
 		}
-	      __uid32_t uid;
-	      __gid32_t gid;
+	      uid_t uid;
+	      gid_t gid;
 	      if (get_reg_attribute (hKey, &buf->st_mode, &uid, &gid) == 0)
 		{
 		  buf->st_uid = uid;
@@ -575,8 +586,8 @@ fhandler_registry::fstat (struct __stat64 *buf)
 	     and it's also rather unlikely that the user is the owner.
 	     Therefore it's probably most safe to assume unknown ownership
 	     and no permissions for nobody. */
-	  buf->st_uid = UNKNOWN_UID;
-	  buf->st_gid = UNKNOWN_GID;
+	  buf->st_uid = ILLEGAL_UID;
+	  buf->st_gid = ILLEGAL_GID;
 	  buf->st_mode &= ~0777;
 	}
     }
@@ -616,7 +627,7 @@ fhandler_registry::readdir (DIR *dir, dirent *de)
       dir->__handle = open_key (path + 1, KEY_READ, wow64, false);
       if (dir->__handle == INVALID_HANDLE_VALUE)
 	goto out;
-      dir->__d_internal = (unsigned) new __DIR_hash ();
+      dir->__d_internal = (uintptr_t) new __DIR_hash ();
     }
   if (dir->__d_position < SPECIAL_DOT_FILE_COUNT)
     {
@@ -820,7 +831,8 @@ fhandler_registry::open (int flags, mode_t mode)
 		set_io_handle (fetch_hkey (i));
 		/* Marking as nohandle allows to call dup on pseudo registry
 		   handles. */
-		nohandle (true);
+		if (get_handle () >= HKEY_CLASSES_ROOT)
+		  nohandle (true);
 		flags |= O_DIROPEN;
 		goto success;
 	      }
@@ -893,7 +905,7 @@ success:
   set_flags ((flags & ~O_TEXT) | O_BINARY);
   set_open_status ();
 out:
-  syscall_printf ("%d = fhandler_registry::open(%p, %d)", res, flags, mode);
+  syscall_printf ("%d = fhandler_registry::open(%p, 0%o)", res, flags, mode);
   return res;
 }
 

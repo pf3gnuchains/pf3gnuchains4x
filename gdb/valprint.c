@@ -76,11 +76,14 @@ struct converted_character
 typedef struct converted_character converted_character_d;
 DEF_VEC_O (converted_character_d);
 
+/* Command lists for set/show print raw.  */
+struct cmd_list_element *setprintrawlist;
+struct cmd_list_element *showprintrawlist;
 
 /* Prototypes for local functions */
 
 static int partial_memory_read (CORE_ADDR memaddr, gdb_byte *myaddr,
-				int len, int *errnoptr);
+				int len, int *errptr);
 
 static void show_print (char *, int);
 
@@ -104,9 +107,9 @@ void _initialize_valprint (void);
 
 struct value_print_options user_print_options =
 {
-  Val_pretty_default,		/* pretty */
-  0,				/* prettyprint_arrays */
-  0,				/* prettyprint_structs */
+  Val_prettyformat_default,	/* prettyformat */
+  0,				/* prettyformat_arrays */
+  0,				/* prettyformat_structs */
   0,				/* vtblprint */
   1,				/* unionprint */
   1,				/* addressprint */
@@ -133,12 +136,12 @@ get_user_print_options (struct value_print_options *opts)
 }
 
 /* Initialize *OPTS to be a copy of the user print options, but with
-   pretty-printing disabled.  */
+   pretty-formatting disabled.  */
 void
-get_raw_print_options (struct value_print_options *opts)
+get_no_prettyformat_print_options (struct value_print_options *opts)
 {  
   *opts = user_print_options;
-  opts->pretty = Val_no_prettyprint;
+  opts->prettyformat = Val_no_prettyformat;
 }
 
 /* Initialize *OPTS to be a copy of the user print options, but using
@@ -221,19 +224,19 @@ show_stop_print_at_null (struct ui_file *file, int from_tty,
 /* Controls pretty printing of structures.  */
 
 static void
-show_prettyprint_structs (struct ui_file *file, int from_tty,
+show_prettyformat_structs (struct ui_file *file, int from_tty,
 			  struct cmd_list_element *c, const char *value)
 {
-  fprintf_filtered (file, _("Prettyprinting of structures is %s.\n"), value);
+  fprintf_filtered (file, _("Pretty formatting of structures is %s.\n"), value);
 }
 
 /* Controls pretty printing of arrays.  */
 
 static void
-show_prettyprint_arrays (struct ui_file *file, int from_tty,
+show_prettyformat_arrays (struct ui_file *file, int from_tty,
 			 struct cmd_list_element *c, const char *value)
 {
-  fprintf_filtered (file, _("Prettyprinting of arrays is %s.\n"), value);
+  fprintf_filtered (file, _("Pretty formatting of arrays is %s.\n"), value);
 }
 
 /* If nonzero, causes unions inside structures or other unions to be
@@ -272,8 +275,8 @@ show_symbol_print (struct ui_file *file, int from_tty,
    we want to print scalar arguments, but not aggregate arguments.
    This function distinguishes between the two.  */
 
-static int
-scalar_type_p (struct type *type)
+int
+val_print_scalar_type_p (struct type *type)
 {
   CHECK_TYPEDEF (type);
   while (TYPE_CODE (type) == TYPE_CODE_REF)
@@ -311,7 +314,7 @@ valprint_check_validity (struct ui_file *stream,
       if (!value_bits_valid (val, TARGET_CHAR_BIT * embedded_offset,
 			     TARGET_CHAR_BIT * TYPE_LENGTH (type)))
 	{
-	  val_print_optimized_out (stream);
+	  val_print_optimized_out (val, stream);
 	  return 0;
 	}
 
@@ -333,9 +336,12 @@ valprint_check_validity (struct ui_file *stream,
 }
 
 void
-val_print_optimized_out (struct ui_file *stream)
+val_print_optimized_out (const struct value *val, struct ui_file *stream)
 {
-  fprintf_filtered (stream, _("<optimized out>"));
+  if (val != NULL && value_lval_const (val) == lval_register)
+    fprintf_filtered (stream, _("<not saved>"));
+  else
+    fprintf_filtered (stream, _("<optimized out>"));
 }
 
 void
@@ -390,7 +396,7 @@ generic_val_print (struct type *type, const gdb_byte *valaddr,
           if (!get_array_bounds (type, &low_bound, &high_bound))
             error (_("Could not determine the array high bound"));
 
-	  if (options->prettyprint_arrays)
+	  if (options->prettyformat_arrays)
 	    {
 	      print_spaces_filtered (2 + 2 * recurse, stream);
 	    }
@@ -736,9 +742,9 @@ val_print (struct type *type, const gdb_byte *valaddr, int embedded_offset,
   struct value_print_options local_opts = *options;
   struct type *real_type = check_typedef (type);
 
-  if (local_opts.pretty == Val_pretty_default)
-    local_opts.pretty = (local_opts.prettyprint_structs
-			 ? Val_prettyprint : Val_no_prettyprint);
+  if (local_opts.prettyformat == Val_prettyformat_default)
+    local_opts.prettyformat = (local_opts.prettyformat_structs
+			       ? Val_prettyformat : Val_no_prettyformat);
 
   QUIT;
 
@@ -767,7 +773,7 @@ val_print (struct type *type, const gdb_byte *valaddr, int embedded_offset,
 
   /* Handle summary mode.  If the value is a scalar, print it;
      otherwise, print an ellipsis.  */
-  if (options->summary && !scalar_type_p (type))
+  if (options->summary && !val_print_scalar_type_p (type))
     {
       fprintf_filtered (stream, "...");
       return;
@@ -799,10 +805,10 @@ value_check_printable (struct value *val, struct ui_file *stream,
 
   if (value_entirely_optimized_out (val))
     {
-      if (options->summary && !scalar_type_p (value_type (val)))
+      if (options->summary && !val_print_scalar_type_p (value_type (val)))
 	fprintf_filtered (stream, "...");
       else
-	val_print_optimized_out (stream);
+	val_print_optimized_out (val, stream);
       return 0;
     }
 
@@ -963,7 +969,7 @@ val_print_scalar_formatted (struct type *type,
      printed, because all bits contribute to its representation.  */
   if (!value_bits_valid (val, TARGET_CHAR_BIT * embedded_offset,
 			      TARGET_CHAR_BIT * TYPE_LENGTH (type)))
-    val_print_optimized_out (stream);
+    val_print_optimized_out (val, stream);
   else if (!value_bytes_available (val, embedded_offset, TYPE_LENGTH (type)))
     val_print_unavailable (stream);
   else
@@ -1642,7 +1648,7 @@ val_print_array_elements (struct type *type,
     {
       if (i != 0)
 	{
-	  if (options->prettyprint_arrays)
+	  if (options->prettyformat_arrays)
 	    {
 	      fprintf_filtered (stream, ",\n");
 	      print_spaces_filtered (2 + 2 * recurse, stream);
@@ -1705,15 +1711,15 @@ val_print_array_elements (struct type *type,
 
 /* Read LEN bytes of target memory at address MEMADDR, placing the
    results in GDB's memory at MYADDR.  Returns a count of the bytes
-   actually read, and optionally an errno value in the location
-   pointed to by ERRNOPTR if ERRNOPTR is non-null.  */
+   actually read, and optionally a target_xfer_error value in the
+   location pointed to by ERRPTR if ERRPTR is non-null.  */
 
 /* FIXME: cagney/1999-10-14: Only used by val_print_string.  Can this
    function be eliminated.  */
 
 static int
 partial_memory_read (CORE_ADDR memaddr, gdb_byte *myaddr,
-		     int len, int *errnoptr)
+		     int len, int *errptr)
 {
   int nread;			/* Number of bytes actually read.  */
   int errcode;			/* Error from last read.  */
@@ -1738,9 +1744,9 @@ partial_memory_read (CORE_ADDR memaddr, gdb_byte *myaddr,
 	  nread--;
 	}
     }
-  if (errnoptr != NULL)
+  if (errptr != NULL)
     {
-      *errnoptr = errcode;
+      *errptr = errcode;
     }
   return (nread);
 }
@@ -1749,7 +1755,7 @@ partial_memory_read (CORE_ADDR memaddr, gdb_byte *myaddr,
    each.  Fetch at most FETCHLIMIT characters.  BUFFER will be set to a newly
    allocated buffer containing the string, which the caller is responsible to
    free, and BYTES_READ will be set to the number of bytes read.  Returns 0 on
-   success, or errno on failure.
+   success, or a target_xfer_error on failure.
 
    If LEN > 0, reads exactly LEN characters (including eventual NULs in
    the middle or end of the string).  If LEN is -1, stops at the first
@@ -2518,18 +2524,14 @@ val_print_string (struct type *elttype, const char *encoding,
 
   if (errcode != 0)
     {
-      if (errcode == EIO)
-	{
-	  fprintf_filtered (stream, "<Address ");
-	  fputs_filtered (paddress (gdbarch, addr), stream);
-	  fprintf_filtered (stream, " out of bounds>");
-	}
-      else
-	{
-	  fprintf_filtered (stream, "<Error reading address ");
-	  fputs_filtered (paddress (gdbarch, addr), stream);
-	  fprintf_filtered (stream, ": %s>", safe_strerror (errcode));
-	}
+      char *str;
+
+      str = memory_error_message (errcode, gdbarch, addr);
+      make_cleanup (xfree, str);
+
+      fprintf_filtered (stream, "<error: ");
+      fputs_filtered (str, stream);
+      fprintf_filtered (stream, ">");
     }
 
   gdb_flush (stream);
@@ -2686,6 +2688,21 @@ show_print (char *args, int from_tty)
 {
   cmd_show_list (showprintlist, from_tty, "");
 }
+
+static void
+set_print_raw (char *arg, int from_tty)
+{
+  printf_unfiltered (
+     "\"set print raw\" must be followed by the name of a \"print raw\" subcommand.\n");
+  help_list (setprintrawlist, "set print raw ", -1, gdb_stdout);
+}
+
+static void
+show_print_raw (char *args, int from_tty)
+{
+  cmd_show_list (showprintrawlist, from_tty, "");
+}
+
 
 void
 _initialize_valprint (void)
@@ -2702,6 +2719,14 @@ _initialize_valprint (void)
 		  &showprintlist, "show print ", 0, &showlist);
   add_alias_cmd ("p", "print", no_class, 1, &showlist);
   add_alias_cmd ("pr", "print", no_class, 1, &showlist);
+
+  add_prefix_cmd ("raw", no_class, set_print_raw,
+		  _("\
+Generic command for setting what things to print in \"raw\" mode."),
+		  &setprintrawlist, "set print raw ", 0, &setprintlist);
+  add_prefix_cmd ("raw", no_class, show_print_raw,
+		  _("Generic command for showing \"print raw\" settings."),
+		  &showprintrawlist, "show print raw ", 0, &showprintlist);
 
   add_setshow_uinteger_cmd ("elements", no_class,
 			    &user_print_options.print_max, _("\
@@ -2730,11 +2755,11 @@ Show threshold for repeated print elements."), _("\
 			    &setprintlist, &showprintlist);
 
   add_setshow_boolean_cmd ("pretty", class_support,
-			   &user_print_options.prettyprint_structs, _("\
-Set prettyprinting of structures."), _("\
-Show prettyprinting of structures."), NULL,
+			   &user_print_options.prettyformat_structs, _("\
+Set pretty formatting of structures."), _("\
+Show pretty formatting of structures."), NULL,
 			   NULL,
-			   show_prettyprint_structs,
+			   show_prettyformat_structs,
 			   &setprintlist, &showprintlist);
 
   add_setshow_boolean_cmd ("union", class_support,
@@ -2746,11 +2771,11 @@ Show printing of unions interior to structures."), NULL,
 			   &setprintlist, &showprintlist);
 
   add_setshow_boolean_cmd ("array", class_support,
-			   &user_print_options.prettyprint_arrays, _("\
-Set prettyprinting of arrays."), _("\
-Show prettyprinting of arrays."), NULL,
+			   &user_print_options.prettyformat_arrays, _("\
+Set pretty formatting of arrays."), _("\
+Show pretty formatting of arrays."), NULL,
 			   NULL,
-			   show_prettyprint_arrays,
+			   show_prettyformat_arrays,
 			   &setprintlist, &showprintlist);
 
   add_setshow_boolean_cmd ("address", class_support,

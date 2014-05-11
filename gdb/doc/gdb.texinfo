@@ -4072,13 +4072,66 @@ shared library.  Use the @code{catch} command to set a catchpoint.
 @kindex catch
 @item catch @var{event}
 Stop when @var{event} occurs.  @var{event} can be any of the following:
-@table @code
-@item throw
-@cindex stop on C@t{++} exceptions
-The throwing of a C@t{++} exception.
 
-@item catch
-The catching of a C@t{++} exception.
+@table @code
+@item throw @r{[}@var{regexp}@r{]}
+@itemx rethrow @r{[}@var{regexp}@r{]}
+@itemx catch @r{[}@var{regexp}@r{]}
+@cindex stop on C@t{++} exceptions
+The throwing, re-throwing, or catching of a C@t{++} exception.
+
+If @var{regexp} is given, then only exceptions whose type matches the
+regular expression will be caught.
+
+@vindex $_exception@r{, convenience variable}
+The convenience variable @code{$_exception} is available at an
+exception-related catchpoint, on some systems.  This holds the
+exception being thrown.
+
+There are currently some limitations to C@t{++} exception handling in
+@value{GDBN}:
+
+@itemize @bullet
+@item
+The support for these commands is system-dependent.  Currently, only
+systems using the @samp{gnu-v3} C@t{++} ABI (@pxref{ABI}) are
+supported.
+
+@item
+The regular expression feature and the @code{$_exception} convenience
+variable rely on the presence of some SDT probes in @code{libstdc++}.
+If these probes are not present, then these features cannot be used.
+These probes were first available in the GCC 4.8 release, but whether
+or not they are available in your GCC also depends on how it was
+built.
+
+@item
+The @code{$_exception} convenience variable is only valid at the
+instruction at which an exception-related catchpoint is set.
+
+@item
+When an exception-related catchpoint is hit, @value{GDBN} stops at a
+location in the system library which implements runtime exception
+support for C@t{++}, usually @code{libstdc++}.  You can use @code{up}
+(@pxref{Selection}) to get to your code.
+
+@item
+If you call a function interactively, @value{GDBN} normally returns
+control to you when the function has finished executing.  If the call
+raises an exception, however, the call may bypass the mechanism that
+returns control to you and cause your program either to abort or to
+simply continue running until it hits a breakpoint, catches a signal
+that @value{GDBN} is listening for, or exits.  This is the case even if
+you set a catchpoint for the exception; catchpoints on exceptions are
+disabled within interactive calls.  @xref{Calling}, for information on
+controlling this with @code{set unwind-on-terminating-exception}.
+
+@item
+You cannot raise an exception interactively.
+
+@item
+You cannot install an exception handler interactively.
+@end itemize
 
 @item exception
 @cindex Ada exception catching
@@ -4287,57 +4340,6 @@ automatically deleted after the first time the event is caught.
 @end table
 
 Use the @code{info break} command to list the current catchpoints.
-
-There are currently some limitations to C@t{++} exception handling
-(@code{catch throw} and @code{catch catch}) in @value{GDBN}:
-
-@itemize @bullet
-@item
-If you call a function interactively, @value{GDBN} normally returns
-control to you when the function has finished executing.  If the call
-raises an exception, however, the call may bypass the mechanism that
-returns control to you and cause your program either to abort or to
-simply continue running until it hits a breakpoint, catches a signal
-that @value{GDBN} is listening for, or exits.  This is the case even if
-you set a catchpoint for the exception; catchpoints on exceptions are
-disabled within interactive calls.
-
-@item
-You cannot raise an exception interactively.
-
-@item
-You cannot install an exception handler interactively.
-@end itemize
-
-@cindex raise exceptions
-Sometimes @code{catch} is not the best way to debug exception handling:
-if you need to know exactly where an exception is raised, it is better to
-stop @emph{before} the exception handler is called, since that way you
-can see the stack before any unwinding takes place.  If you set a
-breakpoint in an exception handler instead, it may not be easy to find
-out where the exception was raised.
-
-To stop just before an exception handler is called, you need some
-knowledge of the implementation.  In the case of @sc{gnu} C@t{++}, exceptions are
-raised by calling a library function named @code{__raise_exception}
-which has the following ANSI C interface:
-
-@smallexample
-    /* @var{addr} is where the exception identifier is stored.
-       @var{id} is the exception identifier.  */
-    void __raise_exception (void **addr, void *id);
-@end smallexample
-
-@noindent
-To make the debugger catch all exceptions before any stack
-unwinding takes place, set a breakpoint on @code{__raise_exception}
-(@pxref{Breakpoints, ,Breakpoints; Watchpoints; and Exceptions}).
-
-With a conditional breakpoint (@pxref{Conditions, ,Break Conditions})
-that depends on the value of @var{id}, you can stop your program when
-a specific exception is raised.  You can use multiple conditional
-breakpoints to stop your program when any of a number of exceptions are
-raised.
 
 
 @node Delete Breaks
@@ -5217,6 +5219,38 @@ Execute one machine instruction, but if it is a function call,
 proceed until the function returns.
 
 An argument is a repeat count, as in @code{next}.
+
+@end table
+
+@anchor{range stepping}
+@cindex range stepping
+@cindex target-assisted range stepping
+By default, and if available, @value{GDBN} makes use of
+target-assisted @dfn{range stepping}.  In other words, whenever you
+use a stepping command (e.g., @code{step}, @code{next}), @value{GDBN}
+tells the target to step the corresponding range of instruction
+addresses instead of issuing multiple single-steps.  This speeds up
+line stepping, particularly for remote targets.  Ideally, there should
+be no reason you would want to turn range stepping off.  However, it's
+possible that a bug in the debug info, a bug in the remote stub (for
+remote targets), or even a bug in @value{GDBN} could make line
+stepping behave incorrectly when target-assisted range stepping is
+enabled.  You can use the following command to turn off range stepping
+if necessary:
+
+@table @code
+@kindex set range-stepping
+@kindex show range-stepping
+@item set range-stepping
+@itemx show range-stepping
+Control whether range stepping is enabled.
+
+If @code{on}, and the target supports it, @value{GDBN} tells the
+target to step a range of addresses itself, instead of issuing
+multiple single-steps.  If @code{off}, @value{GDBN} always issues
+single-steps, even if range stepping is supported by the target.  The
+default is @code{on}.
+
 @end table
 
 @node Skipping Over Functions and Files
@@ -5830,6 +5864,24 @@ after the breakpoint condition, like this:
 
 @end table
 
+Thread-specific breakpoints are automatically deleted when
+@value{GDBN} detects the corresponding thread is no longer in the
+thread list.  For example:
+
+@smallexample
+(@value{GDBP}) c
+Thread-specific breakpoint 3 deleted - thread 28 no longer in the thread list.
+@end smallexample
+
+There are several ways for a thread to disappear, such as a regular
+thread exit, but also when you detach from the process with the
+@code{detach} command (@pxref{Attach, ,Debugging an Already-running
+Process}), or if @value{GDBN} loses the remote connection
+(@pxref{Remote Debugging}), etc.  Note that with some targets,
+@value{GDBN} is only able to detect a thread has exited when the user
+explictly asks for the thread list with the @code{info threads}
+command.
+
 @node Interrupted System Calls
 @subsection Interrupted System Calls 
 
@@ -6207,6 +6259,23 @@ usual ``live'' debugging of the process from that state.
 When the inferior process exits, or @value{GDBN} detaches from it,
 process record and replay target will automatically stop itself.
 
+@kindex record goto
+@item record goto
+Go to a specific location in the execution log.  There are several
+ways to specify the location to go to:
+
+@table @code
+@item record goto begin
+@itemx record goto start
+Go to the beginning of the execution log.
+
+@item record goto end
+Go to the end of the execution log.
+
+@item record goto @var{n}
+Go to instruction number @var{n} in the execution log.
+@end table
+
 @kindex record save
 @item record save @var{filename}
 Save the execution log to a file @file{@var{filename}}.
@@ -6463,6 +6532,7 @@ currently executing frame and describes it briefly, similar to the
 @menu
 * Frames::                      Stack frames
 * Backtrace::                   Backtraces
+* Frame Filter Management::     Managing frame filters
 * Selection::                   Selecting a frame
 * Frame Info::                  Information on a frame
 
@@ -6550,6 +6620,7 @@ line per frame, for many frames, starting with the currently executing
 frame (frame zero), followed by its caller (frame one), and on up the
 stack.
 
+@anchor{backtrace-command}
 @table @code
 @kindex backtrace
 @kindex bt @r{(@code{backtrace})}
@@ -6575,6 +6646,19 @@ Similar, but print only the outermost @var{n} frames.
 @itemx bt full -@var{n}
 Print the values of the local variables also.  @var{n} specifies the
 number of frames to print, as described above.
+
+@item backtrace no-filters
+@itemx bt no-filters
+@itemx bt no-filters @var{n}
+@itemx bt no-filters -@var{n}
+@itemx bt no-filters full
+@itemx bt no-filters full @var{n}
+@itemx bt no-filters full -@var{n}
+Do not run Python frame filters on this backtrace.  @xref{Frame
+Filter API}, for more information.  Additionally use @ref{disable
+frame-filter all} to turn off all frame filters.  This is only
+relevant when @value{GDBN} has been configured with @code{Python}
+support.
 @end table
 
 @kindex where
@@ -6723,6 +6807,149 @@ Display an absolute filename.
 
 @item show filename-display
 Show the current way to display filenames.
+@end table
+
+@node Frame Filter Management
+@section Management of Frame Filters.
+@cindex managing frame filters
+
+Frame filters are Python based utilities to manage and decorate the
+output of frames.  @xref{Frame Filter API}, for further information.
+
+Managing frame filters is performed by several commands available
+within @value{GDBN}, detailed here.
+
+@table @code
+@kindex info frame-filter
+@item info frame-filter
+Print a list of installed frame filters from all dictionaries, showing
+their name, priority and enabled status.
+
+@kindex disable frame-filter
+@anchor{disable frame-filter all}
+@item disable frame-filter @var{filter-dictionary} @var{filter-name}
+Disable a frame filter in the dictionary matching
+@var{filter-dictionary}, or @code{all}, and @var{filter-name}.
+@var{filter-dictionary} may be @code{all}, @code{global},
+@code{progspace} or the name of the object file where the frame filter
+dictionary resides.  When @code{all} is specified, all frame filters
+across all dictionaries are disabled.  @var{filter-name} is the name
+of the frame filter and is used when @code{all} is not the option for
+@var{filter-dictionary}.  A disabled frame-filter is not deleted, it
+may be enabled again later.
+
+@kindex enable frame-filter
+@item enable frame-filter @var{filter-dictionary} @var{filter-name}
+Enable a frame filter in the dictionary matching
+@var{filter-dictionary}, or @code{all}, and @var{filter-name}.
+@var{filter-dictionary} may be @code{all}, @code{global},
+@code{progspace} or the name of the object file where the frame filter
+dictionary resides.  When @code{all} is specified, all frame filters across
+all dictionaries are enabled.  @var{filter-name} is the name of the frame
+filter and is used when @code{all} is not the option for
+@var{filter-dictionary}.
+
+Example:
+
+@smallexample
+(gdb) info frame-filter
+
+global frame-filters:
+  Priority  Enabled  Name
+  1000      No       PrimaryFunctionFilter
+  100       Yes      Reverse
+
+progspace /build/test frame-filters:
+  Priority  Enabled  Name
+  100       Yes      ProgspaceFilter
+
+objfile /build/test frame-filters:
+  Priority  Enabled  Name
+  999       Yes      BuildProgra Filter
+
+(gdb) disable frame-filter /build/test BuildProgramFilter
+(gdb) info frame-filter
+
+global frame-filters:
+  Priority  Enabled  Name
+  1000      No       PrimaryFunctionFilter
+  100       Yes      Reverse
+
+progspace /build/test frame-filters:
+  Priority  Enabled  Name
+  100       Yes      ProgspaceFilter
+
+objfile /build/test frame-filters:
+  Priority  Enabled  Name
+  999       No       BuildProgramFilter
+
+(gdb) enable frame-filter global PrimaryFunctionFilter
+(gdb) info frame-filter
+
+global frame-filters:
+  Priority  Enabled  Name
+  1000      Yes      PrimaryFunctionFilter
+  100       Yes      Reverse
+
+progspace /build/test frame-filters:
+  Priority  Enabled  Name
+  100       Yes      ProgspaceFilter
+
+objfile /build/test frame-filters:
+  Priority  Enabled  Name
+  999       No       BuildProgramFilter
+@end smallexample
+
+@kindex set frame-filter priority
+@item set frame-filter priority @var{filter-dictionary} @var{filter-name} @var{priority}
+Set the @var{priority} of a frame filter in the dictionary matching
+@var{filter-dictionary}, and the frame filter name matching
+@var{filter-name}.  @var{filter-dictionary} may be @code{global},
+@code{progspace} or the name of the object file where the frame filter
+dictionary resides.  @var{priority} is an integer.
+
+@kindex show frame-filter priority
+@item show frame-filter priority @var{filter-dictionary} @var{filter-name}
+Show the @var{priority} of a frame filter in the dictionary matching
+@var{filter-dictionary}, and the frame filter name matching
+@var{filter-name}.  @var{filter-dictionary} may be @code{global},
+@code{progspace} or the name of the object file where the frame filter
+dictionary resides.
+
+Example:
+
+@smallexample
+(gdb) info frame-filter
+
+global frame-filters:
+  Priority  Enabled  Name
+  1000      Yes      PrimaryFunctionFilter
+  100       Yes      Reverse
+
+progspace /build/test frame-filters:
+  Priority  Enabled  Name
+  100       Yes      ProgspaceFilter
+
+objfile /build/test frame-filters:
+  Priority  Enabled  Name
+  999       No       BuildProgramFilter
+
+(gdb) set frame-filter priority global Reverse 50
+(gdb) info frame-filter
+
+global frame-filters:
+  Priority  Enabled  Name
+  1000      Yes      PrimaryFunctionFilter
+  50        Yes      Reverse
+
+progspace /build/test frame-filters:
+  Priority  Enabled  Name
+  100       Yes      ProgspaceFilter
+
+objfile /build/test frame-filters:
+  Priority  Enabled  Name
+  999       No       BuildProgramFilter
+@end smallexample
 @end table
 
 @node Selection
@@ -8308,6 +8535,11 @@ Without this format, @value{GDBN} displays pointers to and arrays of
 strings.  Single-byte members of a vector are displayed as an integer
 array.
 
+@item z
+Like @samp{x} formatting, the value is treated as an integer and
+printed as hexadecimal, but leading zeros are printed to pad the value
+to the size of the integer type.
+
 @item r
 @cindex raw printing
 Print using the @samp{raw} formatting.  By default, @value{GDBN} will
@@ -8820,6 +9052,18 @@ thus speeding up the display of each Ada frame.
 
 @item show print frame-arguments
 Show how the value of arguments should be displayed when printing a frame.
+
+@item set print raw frame-arguments on
+Print frame arguments in raw, non pretty-printed, form.
+
+@item set print raw frame-arguments off
+Print frame arguments in pretty-printed form, if there is a pretty-printer
+for the value (@pxref{Pretty Printing}),
+otherwise print the value in raw form.
+This is the default.
+
+@item show print raw frame-arguments
+Show whether to print frame arguments in raw form.
 
 @anchor{set print entry-values}
 @item set print entry-values @var{value}
@@ -9525,8 +9769,68 @@ to match the format in which the data was printed.
 
 @item $_exitcode
 @vindex $_exitcode@r{, convenience variable}
-The variable @code{$_exitcode} is automatically set to the exit code when
-the program being debugged terminates.
+When the program being debugged terminates normally, @value{GDBN}
+automatically sets this variable to the exit code of the program, and
+resets @code{$_exitsignal} to @code{void}.
+
+@item $_exitsignal
+@vindex $_exitsignal@r{, convenience variable}
+When the program being debugged dies due to an uncaught signal,
+@value{GDBN} automatically sets this variable to that signal's number,
+and resets @code{$_exitcode} to @code{void}.
+
+To distinguish between whether the program being debugged has exited
+(i.e., @code{$_exitcode} is not @code{void}) or signalled (i.e.,
+@code{$_exitsignal} is not @code{void}), the convenience function
+@code{$_isvoid} can be used (@pxref{Convenience Funs,, Convenience
+Functions}).  For example, considering the following source code:
+
+@smallexample
+#include <signal.h>
+
+int
+main (int argc, char *argv[])
+@{
+  raise (SIGALRM);
+  return 0;
+@}
+@end smallexample
+
+A valid way of telling whether the program being debugged has exited
+or signalled would be:
+
+@smallexample
+(@value{GDBP}) define has_exited_or_signalled
+Type commands for definition of ``has_exited_or_signalled''.
+End with a line saying just ``end''.
+>if $_isvoid ($_exitsignal)
+ >echo The program has exited\n
+ >else
+ >echo The program has signalled\n
+ >end
+>end
+(@value{GDBP}) run
+Starting program:
+
+Program terminated with signal SIGALRM, Alarm clock.
+The program no longer exists.
+(@value{GDBP}) has_exited_or_signalled
+The program has signalled
+@end smallexample
+
+As can be seen, @value{GDBN} correctly informs that the program being
+debugged has signalled, since it calls @code{raise} and raises a
+@code{SIGALRM} signal.  If the program being debugged had not called
+@code{raise}, then @value{GDBN} would report a normal exit:
+
+@smallexample
+(@value{GDBP}) has_exited_or_signalled
+The program has exited
+@end smallexample
+
+@item $_exception
+The variable @code{$_exception} is set to the exception object being
+thrown at an exception-related catchpoint.  @xref{Set Catchpoints}.
 
 @item $_probe_argc
 @itemx $_probe_arg0@dots{}$_probe_arg11
@@ -9569,6 +9873,69 @@ have a syntax similar to convenience variables.  A convenience
 function can be used in an expression just like an ordinary function;
 however, a convenience function is implemented internally to
 @value{GDBN}.
+
+These functions do not require @value{GDBN} to be configured with
+@code{Python} support, which means that they are always available.
+
+@table @code
+
+@item $_isvoid (@var{expr})
+@findex $_isvoid@r{, convenience function}
+Return one if the expression @var{expr} is @code{void}.  Otherwise it
+returns zero.
+
+A @code{void} expression is an expression where the type of the result
+is @code{void}.  For example, you can examine a convenience variable
+(see @ref{Convenience Vars,, Convenience Variables}) to check whether
+it is @code{void}:
+
+@smallexample
+(@value{GDBP}) print $_exitcode
+$1 = void
+(@value{GDBP}) print $_isvoid ($_exitcode)
+$2 = 1
+(@value{GDBP}) run
+Starting program: ./a.out
+[Inferior 1 (process 29572) exited normally]
+(@value{GDBP}) print $_exitcode
+$3 = 0
+(@value{GDBP}) print $_isvoid ($_exitcode)
+$4 = 0
+@end smallexample
+
+In the example above, we used @code{$_isvoid} to check whether
+@code{$_exitcode} is @code{void} before and after the execution of the
+program being debugged.  Before the execution there is no exit code to
+be examined, therefore @code{$_exitcode} is @code{void}.  After the
+execution the program being debugged returned zero, therefore
+@code{$_exitcode} is zero, which means that it is not @code{void}
+anymore.
+
+The @code{void} expression can also be a call of a function from the
+program being debugged.  For example, given the following function:
+
+@smallexample
+void
+foo (void)
+@{
+@}
+@end smallexample
+
+The result of calling it inside @value{GDBN} is @code{void}:
+
+@smallexample
+(@value{GDBP}) print foo ()
+$1 = void
+(@value{GDBP}) print $_isvoid (foo ())
+$2 = 1
+(@value{GDBP}) set $v = foo ()
+(@value{GDBP}) print $v
+$3 = void
+(@value{GDBP}) print $_isvoid ($v)
+$4 = 1
+@end smallexample
+
+@end table
 
 These functions require @value{GDBN} to be configured with
 @code{Python} support.
@@ -9738,10 +10105,33 @@ were exited and their saved registers restored.  In order to see the
 true contents of hardware registers, you must select the innermost
 frame (with @samp{frame 0}).
 
-However, @value{GDBN} must deduce where registers are saved, from the machine
-code generated by your compiler.  If some registers are not saved, or if
-@value{GDBN} is unable to locate the saved registers, the selected stack
-frame makes no difference.
+@cindex caller-saved registers
+@cindex call-clobbered registers
+@cindex volatile registers
+@cindex <not saved> values
+Usually ABIs reserve some registers as not needed to be saved by the
+callee (a.k.a.: ``caller-saved'', ``call-clobbered'' or ``volatile''
+registers).  It may therefore not be possible for @value{GDBN} to know
+the value a register had before the call (in other words, in the outer
+frame), if the register value has since been changed by the callee.
+@value{GDBN} tries to deduce where the inner frame saved
+(``callee-saved'') registers, from the debug info, unwind info, or the
+machine code generated by your compiler.  If some register is not
+saved, and @value{GDBN} knows the register is ``caller-saved'' (via
+its own knowledge of the ABI, or because the debug/unwind info
+explicitly says the register's value is undefined), @value{GDBN}
+displays @w{@samp{<not saved>}} as the register's value.  With targets
+that @value{GDBN} has no knowledge of the register saving convention,
+if a register was not saved by the callee, then its value and location
+in the outer frame are assumed to be the same of the inner frame.
+This is usually harmless, because if the register is call-clobbered,
+the caller either does not care what is in the register after the
+call, or has code to restore the value that it does care about.  Note,
+however, that if you change such a register in the outer frame, you
+may also be affecting the inner frame.  Also, the more ``outer'' the
+frame is you're looking at, the more likely a call-clobbered
+register's value is to be wrong, in the sense that it doesn't actually
+represent the value the register had just before the call.
 
 @node Floating Point Hardware
 @section Floating Point Hardware
@@ -13538,6 +13928,7 @@ classes.
 
 @cindex C@t{++} exception handling
 @item catch throw
+@itemx catch rethrow
 @itemx catch catch
 Debug C@t{++} exception handling using these commands.  @xref{Set
 Catchpoints, , Setting Catchpoints}.
@@ -13618,8 +14009,8 @@ specified by the extension to support decimal floating-point arithmetic.
 
 There are two encodings in use, depending on the architecture: BID (Binary
 Integer Decimal) for x86 and x86-64, and DPD (Densely Packed Decimal) for
-PowerPC.  @value{GDBN} will use the appropriate encoding for the configured
-target.
+PowerPC and S/390.  @value{GDBN} will use the appropriate encoding for the
+configured target.
 
 Because of a limitation in @file{libdecnumber}, the library used by @value{GDBN}
 to manipulate decimal floating point numbers, it is not possible to convert
@@ -15642,6 +16033,8 @@ Show whether opaque types are resolved or not.
 @cindex symbol dump
 @kindex maint print psymbols
 @cindex partial symbol dump
+@kindex maint print msymbols
+@cindex minimal symbol dump
 @item maint print symbols @var{filename}
 @itemx maint print psymbols @var{filename}
 @itemx maint print msymbols @var{filename}
@@ -17092,23 +17485,31 @@ standard utilities:
 
 @smallexample
 # Extract the dynamic symbols from the main binary, there is no need
-# to also have these in the normal symbol table
+# to also have these in the normal symbol table.
 nm -D @var{binary} --format=posix --defined-only \
   | awk '@{ print $1 @}' | sort > dynsyms
 
-# Extract all the text (i.e. function) symbols from the debuginfo .
+# Extract all the text (i.e. function) symbols from the debuginfo.
+# (Note that we actually also accept "D" symbols, for the benefit
+# of platforms like PowerPC64 that use function descriptors.)
 nm @var{binary} --format=posix --defined-only \
-  | awk '@{ if ($2 == "T" || $2 == "t") print $1 @}' \
+  | awk '@{ if ($2 == "T" || $2 == "t" || $2 == "D") print $1 @}' \
   | sort > funcsyms
 
 # Keep all the function symbols not already in the dynamic symbol
 # table.
 comm -13 dynsyms funcsyms > keep_symbols
 
+# Separate full debug info into debug binary.
+objcopy --only-keep-debug @var{binary} debug
+
 # Copy the full debuginfo, keeping only a minimal set of symbols and
 # removing some unnecessary sections.
 objcopy -S --remove-section .gdb_index --remove-section .comment \
-  --keep-symbols=keep_symbols @var{binary} mini_debuginfo
+  --keep-symbols=keep_symbols debug mini_debuginfo
+
+# Drop the full debug info from the original binary.
+strip --strip-all -R .comment @var{binary}
 
 # Inject the compressed data into the .gnu_debugdata section of the
 # original binary.
@@ -17471,16 +17872,6 @@ Processors}.
 
 @end table
 
-Some configurations may include these targets as well:
-
-@table @code
-
-@item target nrom @var{dev}
-@cindex NetROM ROM emulator target
-NetROM ROM emulator.  This target only supports downloading.
-
-@end table
-
 Different targets are available on different configurations of @value{GDBN};
 your configuration may have more or fewer targets.
 
@@ -17633,8 +18024,8 @@ target remote /dev/ttyb
 @end smallexample
 
 If you're using a serial line, you may want to give @value{GDBN} the
-@w{@samp{--baud}} option, or use the @code{set remotebaud} command
-(@pxref{Remote Configuration, set remotebaud}) before the
+@samp{--baud} option, or use the @code{set serial baud} command
+(@pxref{Remote Configuration, set serial baud}) before the
 @code{target} command.
 
 @item target remote @code{@var{host}:@var{port}}
@@ -17959,7 +18350,7 @@ completeness, at most one @value{GDBN} can be connected at a time.
 
 @cindex @option{--once}, @code{gdbserver} option
 By default, @code{gdbserver} keeps the listening TCP port open, so that
-additional connections are possible.  However, if you start @code{gdbserver}
+subsequent connections are possible.  However, if you start @code{gdbserver}
 with the @option{--once} option, it will stop listening for any further
 connection attempts after connecting to the first @value{GDBN} session.  This
 means no further connections to @code{gdbserver} will be possible after the
@@ -18176,13 +18567,13 @@ default value is the number of bits in the target's address.
 @item show remoteaddresssize
 Show the current value of remote address size in bits.
 
-@item set remotebaud @var{n}
+@item set serial baud @var{n}
 @cindex baud rate for remote targets
 Set the baud rate for the remote serial I/O to @var{n} baud.  The
 value is used to set the speed of the serial port used for debugging
 remote targets.
 
-@item show remotebaud
+@item show serial baud
 Show the current speed of the remote connection.
 
 @item set remotebreak
@@ -20825,6 +21216,7 @@ all uses of @value{GDBN} with the architecture, both native and cross.
 * HPPA::               HP PA architecture
 * SPU::                Cell Broadband Engine SPU architecture
 * PowerPC::
+* Nios II::
 @end menu
 
 @node AArch64
@@ -21108,6 +21500,24 @@ by joining the even/odd register pairs @code{f0} and @code{f1} for @code{$dl0},
 For POWER7 processors, @value{GDBN} provides a set of pseudo-registers, the 64-bit
 wide Extended Floating Point Registers (@samp{f32} through @samp{f63}).
 
+@node Nios II
+@subsection Nios II
+@cindex Nios II architecture
+
+When @value{GDBN} is debugging the Nios II architecture,
+it provides the following special commands:
+
+@table @code
+
+@item set debug nios2
+@kindex set debug nios2
+This command turns on and off debugging messages for the Nios II
+target code in @value{GDBN}.
+
+@item show debug nios2
+@kindex show debug nios2
+Show the current setting of Nios II debugging messages.
+@end table
 
 @node Controlling GDB
 @chapter Controlling @value{GDBN}
@@ -22108,6 +22518,12 @@ ARM AArch64.
 Turns on or off display of gdbarch debugging info.  The default is off
 @item show debug arch
 Displays the current state of displaying gdbarch debugging info.
+@item set debug aix-solib
+@cindex AIX shared library debugging
+Control display of debugging messages from the AIX shared library
+support module.  The default is off.
+@item show debug aix-thread
+Show the current state of displaying AIX shared library debugging messages.
 @item set debug aix-thread
 @cindex AIX threads
 Display debugging messages about inner workings of the AIX thread
@@ -22254,6 +22670,12 @@ Turns on or off debugging messages for FR-V shared-library code.
 @item show debug solib-frv
 Display the current state of FR-V shared-library code debugging
 messages.
+@item set debug symfile
+@cindex symbol file functions
+Turns on or off display of debugging messages related to symbol file functions.
+The default is off.  @xref{Files}.
+@item show debug symfile
+Show the current state of symbol file debugging messages.
 @item set debug symtab-create
 @cindex symbol table creation
 Turns on or off display of debugging messages related to symbol table creation.
@@ -22977,13 +23399,13 @@ and thus is always available.
 @cindex python api
 @cindex programming in python
 
-@cindex python stdout
-@cindex python pagination
-At startup, @value{GDBN} overrides Python's @code{sys.stdout} and
-@code{sys.stderr} to print using @value{GDBN}'s output-paging streams.
-A Python program which outputs to one of these streams may have its
-output interrupted by the user (@pxref{Screen Size}).  In this
-situation, a Python @code{KeyboardInterrupt} exception is thrown.
+You can get quick online help for @value{GDBN}'s Python API by issuing
+the command @w{@kbd{python help (gdb)}}.
+
+Functions and methods which have two or more optional arguments allow
+them to be specified using keyword syntax.  This allows passing some
+optional arguments while skipping others.  Example:
+@w{@code{gdb.some_function ('foo', bar = 1, baz = 2)}}.
 
 @menu
 * Basic Python::                Basic Python Functions.
@@ -22994,6 +23416,9 @@ situation, a Python @code{KeyboardInterrupt} exception is thrown.
 * Selecting Pretty-Printers::   How GDB chooses a pretty-printer.
 * Writing a Pretty-Printer::    Writing a Pretty-Printer.
 * Type Printing API::		Pretty-printing types.
+* Frame Filter API::            Filtering Frames.
+* Frame Decorator API::         Decorating Frames.
+* Writing a Frame Filter::      Writing a Frame Filter.
 * Inferiors In Python::         Python representation of inferiors (processes)
 * Events In Python::            Listening for events from @value{GDBN}.
 * Threads In Python::           Accessing inferior threads from Python.
@@ -23003,7 +23428,7 @@ situation, a Python @code{KeyboardInterrupt} exception is thrown.
 * Progspaces In Python::        Program spaces.
 * Objfiles In Python::          Object files.
 * Frames In Python::            Accessing inferior stack frames from Python.
-* Blocks In Python::            Accessing frame blocks from Python.
+* Blocks In Python::            Accessing blocks from Python.
 * Symbols In Python::           Python representation of symbols.
 * Symbol Tables In Python::     Python representation of symbol tables.
 * Breakpoints In Python::       Manipulating breakpoints using Python.
@@ -23015,6 +23440,35 @@ situation, a Python @code{KeyboardInterrupt} exception is thrown.
 
 @node Basic Python
 @subsubsection Basic Python
+
+@cindex python stdout
+@cindex python pagination
+At startup, @value{GDBN} overrides Python's @code{sys.stdout} and
+@code{sys.stderr} to print using @value{GDBN}'s output-paging streams.
+A Python program which outputs to one of these streams may have its
+output interrupted by the user (@pxref{Screen Size}).  In this
+situation, a Python @code{KeyboardInterrupt} exception is thrown.
+
+Some care must be taken when writing Python code to run in
+@value{GDBN}.  Two things worth noting in particular:
+
+@itemize @bullet
+@item
+@value{GDBN} install handlers for @code{SIGCHLD} and @code{SIGINT}.
+Python code must not override these, or even change the options using
+@code{sigaction}.  If your program changes the handling of these
+signals, @value{GDBN} will most likely stop working correctly.  Note
+that it is unfortunately common for GUI toolkits to install a
+@code{SIGCHLD} handler.
+
+@item
+@value{GDBN} takes care to mark its internal file descriptors as
+close-on-exec.  However, this cannot be done in a thread-safe way on
+all platforms.  Your Python programs should be aware of this and
+should both create new file descriptors with the close-on-exec flag
+set and arrange to close unneeded file descriptors before starting a
+child process.
+@end itemize
 
 @cindex python functions
 @cindex python module
@@ -24344,6 +24798,636 @@ done then type printers would have to make use of the event system in
 order to avoid holding information that could become stale as the
 inferior changed.
 
+@node Frame Filter API
+@subsubsection Filtering Frames.
+@cindex frame filters api
+
+Frame filters are Python objects that manipulate the visibility of a
+frame or frames when a backtrace (@pxref{Backtrace}) is printed by
+@value{GDBN}.
+
+Only commands that print a backtrace, or, in the case of @sc{gdb/mi}
+commands (@pxref{GDB/MI}), those that return a collection of frames
+are affected.  The commands that work with frame filters are:
+
+@code{backtrace} (@pxref{backtrace-command,, The backtrace command}),
+@code{-stack-list-frames}
+(@pxref{-stack-list-frames,, The -stack-list-frames command}),
+@code{-stack-list-variables} (@pxref{-stack-list-variables,, The
+-stack-list-variables command}), @code{-stack-list-arguments}
+@pxref{-stack-list-arguments,, The -stack-list-arguments command}) and
+@code{-stack-list-locals} (@pxref{-stack-list-locals,, The
+-stack-list-locals command}).
+
+A frame filter works by taking an iterator as an argument, applying
+actions to the contents of that iterator, and returning another
+iterator (or, possibly, the same iterator it was provided in the case
+where the filter does not perform any operations).  Typically, frame
+filters utilize tools such as the Python's @code{itertools} module to
+work with and create new iterators from the source iterator.
+Regardless of how a filter chooses to apply actions, it must not alter
+the underlying @value{GDBN} frame or frames, or attempt to alter the
+call-stack within @value{GDBN}.  This preserves data integrity within
+@value{GDBN}.  Frame filters are executed on a priority basis and care
+should be taken that some frame filters may have been executed before,
+and that some frame filters will be executed after.
+
+An important consideration when designing frame filters, and well
+worth reflecting upon, is that frame filters should avoid unwinding
+the call stack if possible.  Some stacks can run very deep, into the
+tens of thousands in some cases.  To search every frame when a frame
+filter executes may be too expensive at that step.  The frame filter
+cannot know how many frames it has to iterate over, and it may have to
+iterate through them all.  This ends up duplicating effort as
+@value{GDBN} performs this iteration when it prints the frames.  If
+the filter can defer unwinding frames until frame decorators are
+executed, after the last filter has executed, it should.  @xref{Frame
+Decorator API}, for more information on decorators.  Also, there are
+examples for both frame decorators and filters in later chapters.
+@xref{Writing a Frame Filter}, for more information.
+
+The Python dictionary @code{gdb.frame_filters} contains key/object
+pairings that comprise a frame filter.  Frame filters in this
+dictionary are called @code{global} frame filters, and they are
+available when debugging all inferiors.  These frame filters must
+register with the dictionary directly.  In addition to the
+@code{global} dictionary, there are other dictionaries that are loaded
+with different inferiors via auto-loading (@pxref{Python
+Auto-loading}).  The two other areas where frame filter dictionaries
+can be found are: @code{gdb.Progspace} which contains a
+@code{frame_filters} dictionary attribute, and each @code{gdb.Objfile}
+object which also contains a @code{frame_filters} dictionary
+attribute.
+
+When a command is executed from @value{GDBN} that is compatible with
+frame filters, @value{GDBN} combines the @code{global},
+@code{gdb.Progspace} and all @code{gdb.Objfile} dictionaries currently
+loaded.  All of the @code{gdb.Objfile} dictionaries are combined, as
+several frames, and thus several object files, might be in use.
+@value{GDBN} then prunes any frame filter whose @code{enabled}
+attribute is @code{False}.  This pruned list is then sorted according
+to the @code{priority} attribute in each filter.
+
+Once the dictionaries are combined, pruned and sorted, @value{GDBN}
+creates an iterator which wraps each frame in the call stack in a
+@code{FrameDecorator} object, and calls each filter in order.  The
+output from the previous filter will always be the input to the next
+filter, and so on.
+
+Frame filters have a mandatory interface which each frame filter must
+implement, defined here:
+
+@defun FrameFilter.filter (iterator)
+@value{GDBN} will call this method on a frame filter when it has
+reached the order in the priority list for that filter.
+
+For example, if there are four frame filters:
+
+@smallexample
+Name         Priority
+
+Filter1      5
+Filter2      10
+Filter3      100
+Filter4      1
+@end smallexample
+
+The order that the frame filters will be called is:
+
+@smallexample
+Filter3 -> Filter2 -> Filter1 -> Filter4
+@end smallexample
+
+Note that the output from @code{Filter3} is passed to the input of
+@code{Filter2}, and so on.
+
+This @code{filter} method is passed a Python iterator.  This iterator
+contains a sequence of frame decorators that wrap each
+@code{gdb.Frame}, or a frame decorator that wraps another frame
+decorator.  The first filter that is executed in the sequence of frame
+filters will receive an iterator entirely comprised of default
+@code{FrameDecorator} objects.  However, after each frame filter is
+executed, the previous frame filter may have wrapped some or all of
+the frame decorators with their own frame decorator.  As frame
+decorators must also conform to a mandatory interface, these
+decorators can be assumed to act in a uniform manner (@pxref{Frame
+Decorator API}).
+
+This method must return an object conforming to the Python iterator
+protocol.  Each item in the iterator must be an object conforming to
+the frame decorator interface.  If a frame filter does not wish to
+perform any operations on this iterator, it should return that
+iterator untouched.
+
+This method is not optional.  If it does not exist, @value{GDBN} will
+raise and print an error.
+@end defun
+
+@defvar FrameFilter.name
+The @code{name} attribute must be Python string which contains the
+name of the filter displayed by @value{GDBN} (@pxref{Frame Filter
+Management}).  This attribute may contain any combination of letters
+or numbers.  Care should be taken to ensure that it is unique.  This
+attribute is mandatory.
+@end defvar
+
+@defvar FrameFilter.enabled
+The @code{enabled} attribute must be Python boolean.  This attribute
+indicates to @value{GDBN} whether the frame filter is enabled, and
+should be considered when frame filters are executed.  If
+@code{enabled} is @code{True}, then the frame filter will be executed
+when any of the backtrace commands detailed earlier in this chapter
+are executed.  If @code{enabled} is @code{False}, then the frame
+filter will not be executed.  This attribute is mandatory.
+@end defvar
+
+@defvar FrameFilter.priority
+The @code{priority} attribute must be Python integer.  This attribute
+controls the order of execution in relation to other frame filters.
+There are no imposed limits on the range of @code{priority} other than
+it must be a valid integer.  The higher the @code{priority} attribute,
+the sooner the frame filter will be executed in relation to other
+frame filters.  Although @code{priority} can be negative, it is
+recommended practice to assume zero is the lowest priority that a
+frame filter can be assigned.  Frame filters that have the same
+priority are executed in unsorted order in that priority slot.  This
+attribute is mandatory.
+@end defvar
+
+@node Frame Decorator API
+@subsubsection Decorating Frames.
+@cindex frame decorator api
+
+Frame decorators are sister objects to frame filters (@pxref{Frame
+Filter API}).  Frame decorators are applied by a frame filter and can
+only be used in conjunction with frame filters.
+
+The purpose of a frame decorator is to customize the printed content
+of each @code{gdb.Frame} in commands where frame filters are executed.
+This concept is called decorating a frame.  Frame decorators decorate
+a @code{gdb.Frame} with Python code contained within each API call.
+This separates the actual data contained in a @code{gdb.Frame} from
+the decorated data produced by a frame decorator.  This abstraction is
+necessary to maintain integrity of the data contained in each
+@code{gdb.Frame}.
+
+Frame decorators have a mandatory interface, defined below.
+
+@value{GDBN} already contains a frame decorator called
+@code{FrameDecorator}.  This contains substantial amounts of
+boilerplate code to decorate the content of a @code{gdb.Frame}.  It is
+recommended that other frame decorators inherit and extend this
+object, and only to override the methods needed.
+
+@defun FrameDecorator.elided (self)
+
+The @code{elided} method groups frames together in a hierarchical
+system.  An example would be an interpreter, where multiple low-level
+frames make up a single call in the interpreted language.  In this
+example, the frame filter would elide the low-level frames and present
+a single high-level frame, representing the call in the interpreted
+language, to the user.
+
+The @code{elided} function must return an iterable and this iterable
+must contain the frames that are being elided wrapped in a suitable
+frame decorator.  If no frames are being elided this function may
+return an empty iterable, or @code{None}.  Elided frames are indented
+from normal frames in a @code{CLI} backtrace, or in the case of
+@code{GDB/MI}, are placed in the @code{children} field of the eliding
+frame.
+
+It is the frame filter's task to also filter out the elided frames from
+the source iterator.  This will avoid printing the frame twice.
+@end defun
+
+@defun FrameDecorator.function (self)
+
+This method returns the name of the function in the frame that is to
+be printed.
+
+This method must return a Python string describing the function, or
+@code{None}.
+
+If this function returns @code{None}, @value{GDBN} will not print any
+data for this field.
+@end defun
+
+@defun FrameDecorator.address (self)
+
+This method returns the address of the frame that is to be printed.
+
+This method must return a Python numeric integer type of sufficient
+size to describe the address of the frame, or @code{None}.
+
+If this function returns a @code{None}, @value{GDBN} will not print
+any data for this field.
+@end defun
+
+@defun FrameDecorator.filename (self)
+
+This method returns the filename and path associated with this frame.
+
+This method must return a Python string containing the filename and
+the path to the object file backing the frame, or @code{None}.
+
+If this function returns a @code{None}, @value{GDBN} will not print
+any data for this field.
+@end defun
+
+@defun FrameDecorator.line (self):
+
+This method returns the line number associated with the current
+position within the function addressed by this frame.
+
+This method must return a Python integer type, or @code{None}.
+
+If this function returns a @code{None}, @value{GDBN} will not print
+any data for this field.
+@end defun
+
+@defun FrameDecorator.frame_args (self)
+@anchor{frame_args}
+
+This method must return an iterable, or @code{None}.  Returning an
+empty iterable, or @code{None} means frame arguments will not be
+printed for this frame.  This iterable must contain objects that
+implement two methods, described here.
+
+This object must implement a @code{argument} method which takes a
+single @code{self} parameter and must return a @code{gdb.Symbol}
+(@pxref{Symbols In Python}), or a Python string.  The object must also
+implement a @code{value} method which takes a single @code{self}
+parameter and must return a @code{gdb.Value} (@pxref{Values From
+Inferior}), a Python value, or @code{None}.  If the @code{value}
+method returns @code{None}, and the @code{argument} method returns a
+@code{gdb.Symbol}, @value{GDBN} will look-up and print the value of
+the @code{gdb.Symbol} automatically.
+
+A brief example:
+
+@smallexample
+class SymValueWrapper():
+
+    def __init__(self, symbol, value):
+        self.sym = symbol
+        self.val = value
+
+    def value(self):
+        return self.val
+
+    def symbol(self):
+        return self.sym
+
+class SomeFrameDecorator()
+...
+...
+    def frame_args(self):
+        args = []
+        try:
+            block = self.inferior_frame.block()
+        except:
+            return None
+
+        # Iterate over all symbols in a block.  Only add
+        # symbols that are arguments.
+        for sym in block:
+            if not sym.is_argument:
+                continue
+            args.append(SymValueWrapper(sym,None))
+
+        # Add example synthetic argument.
+        args.append(SymValueWrapper(``foo'', 42))
+
+        return args
+@end smallexample
+@end defun
+
+@defun FrameDecorator.frame_locals (self)
+
+This method must return an iterable or @code{None}.  Returning an
+empty iterable, or @code{None} means frame local arguments will not be
+printed for this frame.
+
+The object interface, the description of the various strategies for
+reading frame locals, and the example are largely similar to those
+described in the @code{frame_args} function, (@pxref{frame_args,,The
+frame filter frame_args function}).  Below is a modified example:
+
+@smallexample
+class SomeFrameDecorator()
+...
+...
+    def frame_locals(self):
+        vars = []
+        try:
+            block = self.inferior_frame.block()
+        except:
+            return None
+
+        # Iterate over all symbols in a block.  Add all
+        # symbols, except arguments.
+        for sym in block:
+            if sym.is_argument:
+                continue
+            vars.append(SymValueWrapper(sym,None))
+
+        # Add an example of a synthetic local variable.
+        vars.append(SymValueWrapper(``bar'', 99))
+
+        return vars
+@end smallexample
+@end defun
+
+@defun FrameDecorator.inferior_frame (self):
+
+This method must return the underlying @code{gdb.Frame} that this
+frame decorator is decorating.  @value{GDBN} requires the underlying
+frame for internal frame information to determine how to print certain
+values when printing a frame.
+@end defun
+
+@node Writing a Frame Filter
+@subsubsection Writing a Frame Filter
+@cindex writing a frame filter
+
+There are three basic elements that a frame filter must implement: it
+must correctly implement the documented interface (@pxref{Frame Filter
+API}), it must register itself with @value{GDBN}, and finally, it must
+decide if it is to work on the data provided by @value{GDBN}.  In all
+cases, whether it works on the iterator or not, each frame filter must
+return an iterator.  A bare-bones frame filter follows the pattern in
+the following example.
+
+@smallexample
+import gdb
+
+class FrameFilter():
+
+    def __init__(self):
+        # Frame filter attribute creation.
+        #
+        # 'name' is the name of the filter that GDB will display.
+        #
+        # 'priority' is the priority of the filter relative to other
+        # filters.
+        #
+        # 'enabled' is a boolean that indicates whether this filter is
+        # enabled and should be executed.
+
+        self.name = "Foo"
+        self.priority = 100
+        self.enabled = True
+
+        # Register this frame filter with the global frame_filters
+        # dictionary.
+        gdb.frame_filters[self.name] = self
+
+    def filter(self, frame_iter):
+        # Just return the iterator.
+        return frame_iter
+@end smallexample
+
+The frame filter in the example above implements the three
+requirements for all frame filters.  It implements the API, self
+registers, and makes a decision on the iterator (in this case, it just
+returns the iterator untouched).
+
+The first step is attribute creation and assignment, and as shown in
+the comments the filter assigns the following attributes:  @code{name},
+@code{priority} and whether the filter should be enabled with the
+@code{enabled} attribute.
+
+The second step is registering the frame filter with the dictionary or
+dictionaries that the frame filter has interest in.  As shown in the
+comments, this filter just registers itself with the global dictionary
+@code{gdb.frame_filters}.  As noted earlier, @code{gdb.frame_filters}
+is a dictionary that is initialized in the @code{gdb} module when
+@value{GDBN} starts.  What dictionary a filter registers with is an
+important consideration.  Generally, if a filter is specific to a set
+of code, it should be registered either in the @code{objfile} or
+@code{progspace} dictionaries as they are specific to the program
+currently loaded in @value{GDBN}.  The global dictionary is always
+present in @value{GDBN} and is never unloaded.  Any filters registered
+with the global dictionary will exist until @value{GDBN} exits.  To
+avoid filters that may conflict, it is generally better to register
+frame filters against the dictionaries that more closely align with
+the usage of the filter currently in question.  @xref{Python
+Auto-loading}, for further information on auto-loading Python scripts.
+
+@value{GDBN} takes a hands-off approach to frame filter registration,
+therefore it is the frame filter's responsibility to ensure
+registration has occurred, and that any exceptions are handled
+appropriately.  In particular, you may wish to handle exceptions
+relating to Python dictionary key uniqueness.  It is mandatory that
+the dictionary key is the same as frame filter's @code{name}
+attribute.  When a user manages frame filters (@pxref{Frame Filter
+Management}), the names @value{GDBN} will display are those contained
+in the @code{name} attribute.
+
+The final step of this example is the implementation of the
+@code{filter} method.  As shown in the example comments, we define the
+@code{filter} method and note that the method must take an iterator,
+and also must return an iterator.  In this bare-bones example, the
+frame filter is not very useful as it just returns the iterator
+untouched.  However this is a valid operation for frame filters that
+have the @code{enabled} attribute set, but decide not to operate on
+any frames.
+
+In the next example, the frame filter operates on all frames and
+utilizes a frame decorator to perform some work on the frames.
+@xref{Frame Decorator API}, for further information on the frame
+decorator interface.
+
+This example works on inlined frames.  It highlights frames which are
+inlined by tagging them with an ``[inlined]'' tag.  By applying a
+frame decorator to all frames with the Python @code{itertools imap}
+method, the example defers actions to the frame decorator.  Frame
+decorators are only processed when @value{GDBN} prints the backtrace.
+
+This introduces a new decision making topic: whether to perform
+decision making operations at the filtering step, or at the printing
+step.  In this example's approach, it does not perform any filtering
+decisions at the filtering step beyond mapping a frame decorator to
+each frame.  This allows the actual decision making to be performed
+when each frame is printed.  This is an important consideration, and
+well worth reflecting upon when designing a frame filter.  An issue
+that frame filters should avoid is unwinding the stack if possible.
+Some stacks can run very deep, into the tens of thousands in some
+cases.  To search every frame to determine if it is inlined ahead of
+time may be too expensive at the filtering step.  The frame filter
+cannot know how many frames it has to iterate over, and it would have
+to iterate through them all.  This ends up duplicating effort as
+@value{GDBN} performs this iteration when it prints the frames.
+
+In this example decision making can be deferred to the printing step.
+As each frame is printed, the frame decorator can examine each frame
+in turn when @value{GDBN} iterates.  From a performance viewpoint,
+this is the most appropriate decision to make as it avoids duplicating
+the effort that the printing step would undertake anyway.  Also, if
+there are many frame filters unwinding the stack during filtering, it
+can substantially delay the printing of the backtrace which will
+result in large memory usage, and a poor user experience.
+
+@smallexample
+class InlineFilter():
+
+    def __init__(self):
+        self.name = "InlinedFrameFilter"
+        self.priority = 100
+        self.enabled = True
+        gdb.frame_filters[self.name] = self
+
+    def filter(self, frame_iter):
+        frame_iter = itertools.imap(InlinedFrameDecorator,
+                                    frame_iter)
+        return frame_iter
+@end smallexample
+
+This frame filter is somewhat similar to the earlier example, except
+that the @code{filter} method applies a frame decorator object called
+@code{InlinedFrameDecorator} to each element in the iterator.  The
+@code{imap} Python method is light-weight.  It does not proactively
+iterate over the iterator, but rather creates a new iterator which
+wraps the existing one.
+
+Below is the frame decorator for this example.
+
+@smallexample
+class InlinedFrameDecorator(FrameDecorator):
+
+    def __init__(self, fobj):
+        super(InlinedFrameDecorator, self).__init__(fobj)
+
+    def function(self):
+        frame = fobj.inferior_frame()
+        name = str(frame.name())
+
+        if frame.type() == gdb.INLINE_FRAME:
+            name = name + " [inlined]"
+
+        return name
+@end smallexample
+
+This frame decorator only defines and overrides the @code{function}
+method.  It lets the supplied @code{FrameDecorator}, which is shipped
+with @value{GDBN}, perform the other work associated with printing
+this frame.
+
+The combination of these two objects create this output from a
+backtrace:
+
+@smallexample
+#0  0x004004e0 in bar () at inline.c:11
+#1  0x00400566 in max [inlined] (b=6, a=12) at inline.c:21
+#2  0x00400566 in main () at inline.c:31
+@end smallexample
+
+So in the case of this example, a frame decorator is applied to all
+frames, regardless of whether they may be inlined or not.  As
+@value{GDBN} iterates over the iterator produced by the frame filters,
+@value{GDBN} executes each frame decorator which then makes a decision
+on what to print in the @code{function} callback.  Using a strategy
+like this is a way to defer decisions on the frame content to printing
+time.
+
+@subheading Eliding Frames
+
+It might be that the above example is not desirable for representing
+inlined frames, and a hierarchical approach may be preferred.  If we
+want to hierarchically represent frames, the @code{elided} frame
+decorator interface might be preferable.
+
+This example approaches the issue with the @code{elided} method.  This
+example is quite long, but very simplistic.  It is out-of-scope for
+this section to write a complete example that comprehensively covers
+all approaches of finding and printing inlined frames.  However, this
+example illustrates the approach an author might use.
+
+This example comprises of three sections.
+
+@smallexample
+class InlineFrameFilter():
+
+    def __init__(self):
+        self.name = "InlinedFrameFilter"
+        self.priority = 100
+        self.enabled = True
+        gdb.frame_filters[self.name] = self
+
+    def filter(self, frame_iter):
+        return ElidingInlineIterator(frame_iter)
+@end smallexample
+
+This frame filter is very similar to the other examples.  The only
+difference is this frame filter is wrapping the iterator provided to
+it (@code{frame_iter}) with a custom iterator called
+@code{ElidingInlineIterator}.  This again defers actions to when
+@value{GDBN} prints the backtrace, as the iterator is not traversed
+until printing.
+
+The iterator for this example is as follows.  It is in this section of
+the example where decisions are made on the content of the backtrace.
+
+@smallexample
+class ElidingInlineIterator:
+    def __init__(self, ii):
+        self.input_iterator = ii
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        frame = next(self.input_iterator)
+
+        if frame.inferior_frame().type() != gdb.INLINE_FRAME:
+            return frame
+
+        try:
+            eliding_frame = next(self.input_iterator)
+        except StopIteration:
+            return frame
+        return ElidingFrameDecorator(eliding_frame, [frame])
+@end smallexample
+
+This iterator implements the Python iterator protocol.  When the
+@code{next} function is called (when @value{GDBN} prints each frame),
+the iterator checks if this frame decorator, @code{frame}, is wrapping
+an inlined frame.  If it is not, it returns the existing frame decorator
+untouched.  If it is wrapping an inlined frame, it assumes that the
+inlined frame was contained within the next oldest frame,
+@code{eliding_frame}, which it fetches.  It then creates and returns a
+frame decorator, @code{ElidingFrameDecorator}, which contains both the
+elided frame, and the eliding frame.
+
+@smallexample
+class ElidingInlineDecorator(FrameDecorator):
+
+    def __init__(self, frame, elided_frames):
+        super(ElidingInlineDecorator, self).__init__(frame)
+        self.frame = frame
+        self.elided_frames = elided_frames
+
+    def elided(self):
+        return iter(self.elided_frames)
+@end smallexample
+
+This frame decorator overrides one function and returns the inlined
+frame in the @code{elided} method.  As before it lets
+@code{FrameDecorator} do the rest of the work involved in printing
+this frame.  This produces the following output.
+
+@smallexample
+#0  0x004004e0 in bar () at inline.c:11
+#2  0x00400529 in main () at inline.c:25
+    #1  0x00400529 in max (b=6, a=12) at inline.c:15
+@end smallexample
+
+In that output, @code{max} which has been inlined into @code{main} is
+printed hierarchically.  Another approach would be to combine the
+@code{function} method, and the @code{elided} method to both print a
+marker in the inlined frame, and also show the hierarchical
+relationship.
+
 @node Inferiors In Python
 @subsubsection Inferiors In Python
 @cindex inferiors in Python
@@ -25174,6 +26258,11 @@ The @code{type_printers} attribute is a list of type printer objects.
 @xref{Type Printing API}, for more information.
 @end defvar
 
+@defvar Progspace.frame_filters
+The @code{frame_filters} attribute is a dictionary of frame filter
+objects.  @xref{Frame Filter API}, for more information.
+@end defvar
+
 @node Objfiles In Python
 @subsubsection Objfiles In Python
 
@@ -25222,6 +26311,11 @@ information.
 @defvar Objfile.type_printers
 The @code{type_printers} attribute is a list of type printer objects.
 @xref{Type Printing API}, for more information.
+@end defvar
+
+@defvar Objfile.frame_filters
+The @code{frame_filters} attribute is a dictionary of frame filter
+objects.  @xref{Frame Filter API}, for more information.
 @end defvar
 
 A @code{gdb.Objfile} object has the following methods:
@@ -25413,18 +26507,61 @@ Stack}.
 @end defun
 
 @node Blocks In Python
-@subsubsection Accessing frame blocks from Python.
+@subsubsection Accessing blocks from Python.
 
 @cindex blocks in python
 @tindex gdb.Block
 
-Within each frame, @value{GDBN} maintains information on each block
-stored in that frame.  These blocks are organized hierarchically, and
-are represented individually in Python as a @code{gdb.Block}.
-Please see @ref{Frames In Python}, for a more in-depth discussion on
-frames.  Furthermore, see @ref{Stack, ,Examining the Stack}, for more
-detailed technical information on @value{GDBN}'s book-keeping of the
-stack.
+In @value{GDBN}, symbols are stored in blocks.  A block corresponds
+roughly to a scope in the source code.  Blocks are organized
+hierarchically, and are represented individually in Python as a
+@code{gdb.Block}.  Blocks rely on debugging information being
+available.
+
+A frame has a block.  Please see @ref{Frames In Python}, for a more
+in-depth discussion of frames.
+
+The outermost block is known as the @dfn{global block}.  The global
+block typically holds public global variables and functions.
+
+The block nested just inside the global block is the @dfn{static
+block}.  The static block typically holds file-scoped variables and
+functions.
+
+@value{GDBN} provides a method to get a block's superblock, but there
+is currently no way to examine the sub-blocks of a block, or to
+iterate over all the blocks in a symbol table (@pxref{Symbol Tables In
+Python}).
+
+Here is a short example that should help explain blocks:
+
+@smallexample
+/* This is in the global block.  */
+int global;
+
+/* This is in the static block.  */
+static int file_scope;
+
+/* 'function' is in the global block, and 'argument' is
+   in a block nested inside of 'function'.  */
+int function (int argument)
+@{
+  /* 'local' is in a block inside 'function'.  It may or may
+     not be in the same block as 'argument'.  */
+  int local;
+
+  @{
+     /* 'inner' is in a block whose superblock is the one holding
+        'local'.  */
+     int inner;
+
+     /* If this call is expanded by the compiler, you may see
+        a nested block here whose function is 'inline_function'
+        and whose superblock is the one holding 'inner'.  */
+     inline_function ();
+  @}
+@}
+@end smallexample
 
 A @code{gdb.Block} is iterable.  The iterator returns the symbols
 (@pxref{Symbols In Python}) local to the block.  Python programs
@@ -25438,9 +26575,9 @@ module:
 
 @findex gdb.block_for_pc
 @defun gdb.block_for_pc (pc)
-Return the @code{gdb.Block} containing the given @var{pc} value.  If the
-block cannot be found for the @var{pc} value specified, the function
-will return @code{None}.
+Return the innermost @code{gdb.Block} containing the given @var{pc}
+value.  If the block cannot be found for the @var{pc} value specified,
+the function will return @code{None}.
 @end defun
 
 A @code{gdb.Block} object has the following methods:
@@ -25468,6 +26605,11 @@ The end address of the block.  This attribute is not writable.
 The name of the block represented as a @code{gdb.Symbol}.  If the
 block is not named, then this attribute holds @code{None}.  This
 attribute is not writable.
+
+For ordinary function blocks, the superblock is the static block.
+However, you should note that it is possible for a function block to
+have a superblock that is not the static block -- for instance this
+happens for an inlined function.
 @end defvar
 
 @defvar Block.superblock
@@ -26242,7 +27384,7 @@ No     my-foo-pretty-printers.py
 When reading an auto-loaded file, @value{GDBN} sets the
 @dfn{current objfile}.  This is available via the @code{gdb.current_objfile}
 function (@pxref{Objfiles In Python}).  This can be useful for
-registering objfile-specific pretty-printers.
+registering objfile-specific pretty-printers and frame-filters.
 
 @menu
 * objfile-gdb.py file::          The @file{@var{objfile}-gdb.py} file
@@ -28862,6 +30004,84 @@ times="0"@}]@}
 @c (gdb)
 @end smallexample
 
+@subheading The @code{-dprintf-insert} Command
+@findex -dprintf-insert
+
+@subsubheading Synopsis
+
+@smallexample
+ -dprintf-insert [ -t ] [ -f ] [ -d ]
+    [ -c @var{condition} ] [ -i @var{ignore-count} ]
+    [ -p @var{thread-id} ] [ @var{location} ] [ @var{format} ]
+    [ @var{argument} ]
+@end smallexample
+
+@noindent
+If specified, @var{location}, can be one of:
+
+@itemize @bullet
+@item @var{function}
+@c @item +offset
+@c @item -offset
+@c @item @var{linenum}
+@item @var{filename}:@var{linenum}
+@item @var{filename}:function
+@item *@var{address}
+@end itemize
+
+The possible optional parameters of this command are:
+
+@table @samp
+@item -t
+Insert a temporary breakpoint.
+@item -f
+If @var{location} cannot be parsed (for example, if it
+refers to unknown files or functions), create a pending
+breakpoint.  Without this flag, @value{GDBN} will report
+an error, and won't create a breakpoint, if @var{location}
+cannot be parsed.
+@item -d
+Create a disabled breakpoint.
+@item -c @var{condition}
+Make the breakpoint conditional on @var{condition}.
+@item -i @var{ignore-count}
+Set the ignore count of the breakpoint (@pxref{Conditions, ignore count})
+to @var{ignore-count}.
+@item -p @var{thread-id}
+Restrict the breakpoint to the specified @var{thread-id}.
+@end table
+
+@subsubheading Result
+
+@xref{GDB/MI Breakpoint Information}, for details on the format of the
+resulting breakpoint.
+
+@c An out-of-band breakpoint instead of part of the result?
+
+@subsubheading @value{GDBN} Command
+
+The corresponding @value{GDBN} command is @samp{dprintf}.
+
+@subsubheading Example
+
+@smallexample
+(gdb)
+4-dprintf-insert foo "At foo entry\n"
+4^done,bkpt=@{number="1",type="dprintf",disp="keep",enabled="y",
+addr="0x000000000040061b",func="foo",file="mi-dprintf.c",
+fullname="mi-dprintf.c",line="25",thread-groups=["i1"],
+times="0",script=@{"printf \"At foo entry\\n\"","continue"@},
+original-location="foo"@}
+(gdb)
+5-dprintf-insert 26 "arg=%d, g=%d\n" arg g
+5^done,bkpt=@{number="2",type="dprintf",disp="keep",enabled="y",
+addr="0x000000000040062a",func="foo",file="mi-dprintf.c",
+fullname="mi-dprintf.c",line="26",thread-groups=["i1"],
+times="0",script=@{"printf \"arg=%d, g=%d\\n\", arg, g","continue"@},
+original-location="mi-dprintf.c:26"@}
+(gdb)
+@end smallexample
+
 @subheading The @code{-break-list} Command
 @findex -break-list
 
@@ -29108,6 +30328,14 @@ thread-groups=["i1"],times="1"@}]@}
 This section documents @sc{gdb/mi} commands for manipulating
 catchpoints.
 
+@menu
+* Shared Library GDB/MI Catchpoint Commands::
+* Ada Exception GDB/MI Catchpoint Commands::
+@end menu
+
+@node Shared Library GDB/MI Catchpoint Commands
+@subsection Shared Library @sc{gdb/mi} Catchpoints
+
 @subheading The @code{-catch-load} Command
 @findex -catch-load
 
@@ -29166,6 +30394,97 @@ what="load of library matching bar.so",catch-type="unload",times="0"@}
 (gdb)
 @end smallexample
 
+@node Ada Exception GDB/MI Catchpoint Commands
+@subsection Ada Exception @sc{gdb/mi} Catchpoints
+
+The following @sc{gdb/mi} commands can be used to create catchpoints
+that stop the execution when Ada exceptions are being raised.
+
+@subheading The @code{-catch-assert} Command
+@findex -catch-assert
+
+@subsubheading Synopsis
+
+@smallexample
+ -catch-assert [ -c @var{condition}] [ -d ] [ -t ]
+@end smallexample
+
+Add a catchpoint for failed Ada assertions.
+
+The possible optional parameters for this command are:
+
+@table @samp
+@item -c @var{condition}
+Make the catchpoint conditional on @var{condition}.
+@item -d
+Create a disabled catchpoint.
+@item -t
+Create a temporary catchpoint.
+@end table
+
+@subsubheading @value{GDBN} Command
+
+The corresponding @value{GDBN} command is @samp{catch assert}.
+
+@subsubheading Example
+
+@smallexample
+-catch-assert
+^done,bkptno="5",bkpt=@{number="5",type="breakpoint",disp="keep",
+enabled="y",addr="0x0000000000404888",what="failed Ada assertions",
+thread-groups=["i1"],times="0",
+original-location="__gnat_debug_raise_assert_failure"@}
+(gdb)
+@end smallexample
+
+@subheading The @code{-catch-exception} Command
+@findex -catch-exception
+
+@subsubheading Synopsis
+
+@smallexample
+ -catch-exception [ -c @var{condition}] [ -d ] [ -e @var{exception-name} ]
+    [ -t ] [ -u ]
+@end smallexample
+
+Add a catchpoint stopping when Ada exceptions are raised.
+By default, the command stops the program when any Ada exception
+gets raised.  But it is also possible, by using some of the
+optional parameters described below, to create more selective
+catchpoints.
+
+The possible optional parameters for this command are:
+
+@table @samp
+@item -c @var{condition}
+Make the catchpoint conditional on @var{condition}.
+@item -d
+Create a disabled catchpoint.
+@item -e @var{exception-name}
+Only stop when @var{exception-name} is raised.  This option cannot
+be used combined with @samp{-u}.
+@item -t
+Create a temporary catchpoint.
+@item -u
+Stop only when an unhandled exception gets raised.  This option
+cannot be used combined with @samp{-e}.
+@end table
+
+@subsubheading @value{GDBN} Command
+
+The corresponding @value{GDBN} commands are @samp{catch exception}
+and @samp{catch exception unhandled}.
+
+@subsubheading Example
+
+@smallexample
+-catch-exception -e Program_Error
+^done,bkptno="4",bkpt=@{number="4",type="breakpoint",disp="keep",
+enabled="y",addr="0x0000000000404874",
+what="`Program_Error' Ada exception", thread-groups=["i1"],
+times="0",original-location="__gnat_debug_raise_exception"@}
+(gdb)
+@end smallexample
 
 @c %%%%%%%%%%%%%%%%%%%%%%%%%%%% SECTION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 @node GDB/MI Program Context
@@ -29911,7 +31230,7 @@ fullname="/home/foo/bar/devo/gdb/testsuite/gdb.mi/basics.c",line="18"@}
 @subsubheading Synopsis
 
 @smallexample
- -exec-run [--all | --thread-group N]
+ -exec-run [ --all | --thread-group N ] [ --start ]
 @end smallexample
 
 Starts execution of the inferior from the beginning.  The inferior
@@ -29919,10 +31238,16 @@ executes until either a breakpoint is encountered or the program
 exits.  In the latter case the output will include an exit code, if
 the program has exited exceptionally.
 
-When no option is specified, the current inferior is started.  If the
+When neither the @samp{--all} nor the @samp{--thread-group} option
+is specified, the current inferior is started.  If the
 @samp{--thread-group} option is specified, it should refer to a thread
 group of type @samp{process}, and that thread group will be started.
 If the @samp{--all} option is specified, then all inferiors will be started.
+
+Using the @samp{--start} option instructs the debugger to stop
+the execution at the start of the inferior's main subprogram,
+following the same behavior as the @code{start} command
+(@pxref{Starting}).
 
 @subsubheading @value{GDBN} Command
 
@@ -30113,6 +31438,22 @@ Is this going away????
 @node GDB/MI Stack Manipulation
 @section @sc{gdb/mi} Stack Manipulation Commands
 
+@subheading The @code{-enable-frame-filters} Command
+@findex -enable-frame-filters
+
+@smallexample
+-enable-frame-filters
+@end smallexample
+
+@value{GDBN} allows Python-based frame filters to affect the output of
+the MI commands relating to stack traces.  As there is no way to
+implement this in a fully backward-compatible way, a front end must
+request that this functionality be enabled.
+
+Once enabled, this feature cannot be disabled.
+
+Note that if Python support has not been compiled into @value{GDBN},
+this command will still succeed (and do nothing).
 
 @subheading The @code{-stack-info-frame} Command
 @findex -stack-info-frame
@@ -30180,13 +31521,14 @@ For a stack with frame levels 0 through 11:
 (gdb)
 @end smallexample
 
+@anchor{-stack-list-arguments}
 @subheading The @code{-stack-list-arguments} Command
 @findex -stack-list-arguments
 
 @subsubheading Synopsis
 
 @smallexample
- -stack-list-arguments @var{print-values}
+ -stack-list-arguments [ --no-frame-filters ] [ --skip-unavailable ] @var{print-values}
     [ @var{low-frame} @var{high-frame} ]
 @end smallexample
 
@@ -30203,7 +31545,12 @@ If @var{print-values} is 0 or @code{--no-values}, print only the names of
 the variables; if it is 1 or @code{--all-values}, print also their
 values; and if it is 2 or @code{--simple-values}, print the name,
 type and value for simple data types, and the name and type for arrays,
-structures and unions.
+structures and unions.  If the option @code{--no-frame-filters} is
+supplied, then Python frame filters will not be executed.
+
+If the @code{--skip-unavailable} option is specified, arguments that
+are not available are not listed.  Partially available arguments
+are still displayed, however.
 
 Use of this command to obtain arguments in a single frame is
 deprecated in favor of the @samp{-stack-list-variables} command.
@@ -30274,13 +31621,14 @@ args=[@{name="intarg",value="2"@},
 @c @subheading -stack-list-exception-handlers
 
 
+@anchor{-stack-list-frames}
 @subheading The @code{-stack-list-frames} Command
 @findex -stack-list-frames
 
 @subsubheading Synopsis
 
 @smallexample
- -stack-list-frames [ @var{low-frame} @var{high-frame} ]
+ -stack-list-frames [ --no-frame-filters @var{low-frame} @var{high-frame} ]
 @end smallexample
 
 List the frames currently on the stack.  For each frame it displays the
@@ -30310,7 +31658,9 @@ levels are between the two arguments (inclusive).  If the two arguments
 are equal, it shows the single frame at the corresponding level.  It is
 an error if @var{low-frame} is larger than the actual number of
 frames.  On the other hand, @var{high-frame} may be larger than the
-actual number of frames, in which case only existing frames will be returned.
+actual number of frames, in which case only existing frames will be
+returned.  If the option @code{--no-frame-filters} is supplied, then
+Python frame filters will not be executed.
 
 @subsubheading @value{GDBN} Command
 
@@ -30380,11 +31730,12 @@ Show a single frame:
 
 @subheading The @code{-stack-list-locals} Command
 @findex -stack-list-locals
+@anchor{-stack-list-locals}
 
 @subsubheading Synopsis
 
 @smallexample
- -stack-list-locals @var{print-values}
+ -stack-list-locals [ --no-frame-filters ] [ --skip-unavailable ] @var{print-values}
 @end smallexample
 
 Display the local variable names for the selected frame.  If
@@ -30395,7 +31746,12 @@ type and value for simple data types, and the name and type for arrays,
 structures and unions.  In this last case, a frontend can immediately
 display the value of simple data types and create variable objects for
 other data types when the user wishes to explore their values in
-more detail.
+more detail.  If the option @code{--no-frame-filters} is supplied, then
+Python frame filters will not be executed.
+
+If the @code{--skip-unavailable} option is specified, local variables
+that are not available are not listed.  Partially available local
+variables are still displayed, however.
 
 This command is deprecated in favor of the
 @samp{-stack-list-variables} command.
@@ -30420,13 +31776,14 @@ This command is deprecated in favor of the
 (gdb)
 @end smallexample
 
+@anchor{-stack-list-variables}
 @subheading The @code{-stack-list-variables} Command
 @findex -stack-list-variables
 
 @subsubheading Synopsis
 
 @smallexample
- -stack-list-variables @var{print-values}
+ -stack-list-variables [ --no-frame-filters ] [ --skip-unavailable ] @var{print-values}
 @end smallexample
 
 Display the names of local variables and function arguments for the selected frame.  If
@@ -30434,7 +31791,12 @@ Display the names of local variables and function arguments for the selected fra
 the variables; if it is 1 or @code{--all-values}, print also their
 values; and if it is 2 or @code{--simple-values}, print the name,
 type and value for simple data types, and the name and type for arrays,
-structures and unions.  
+structures and unions.  If the option @code{--no-frame-filters} is
+supplied, then Python frame filters will not be executed.
+
+If the @code{--skip-unavailable} option is specified, local variables
+and arguments that are not available are not listed.  Partially
+available arguments and local variables are still displayed, however.
 
 @subsubheading Example
 
@@ -31661,13 +33023,16 @@ For the PPC MBX board:
 @subsubheading Synopsis
 
 @smallexample
- -data-list-register-values @var{fmt} [ ( @var{regno} )*]
+ -data-list-register-values
+    [ @code{--skip-unavailable} ] @var{fmt} [ ( @var{regno} )*]
 @end smallexample
 
 Display the registers' contents.  @var{fmt} is the format according to
 which the registers' contents are to be returned, followed by an optional
 list of numbers specifying the registers to display.  A missing list of
-numbers indicates that the contents of all the registers must be returned.
+numbers indicates that the contents of all the registers must be
+returned.  The @code{--skip-unavailable} option indicates that only
+the available registers are to be returned.
 
 Allowed formats for @var{fmt} are:
 
@@ -32092,6 +33457,123 @@ with the @samp{$} character.
 @subsubheading @value{GDBN} Command
 
 The corresponding @value{GDBN} command is @samp{tvariable}.
+
+@subheading The @code{-trace-frame-collected} Command
+@findex -trace-frame-collected
+
+@subsubheading Synopsis
+
+@smallexample
+ -trace-frame-collected
+    [--var-print-values @var{var_pval}]
+    [--comp-print-values @var{comp_pval}]
+    [--registers-format @var{regformat}]
+    [--memory-contents]
+@end smallexample
+
+This command returns the set of collected objects, register names,
+trace state variable names, memory ranges and computed expressions
+that have been collected at a particular trace frame.  The optional
+parameters to the command affect the output format in different ways.
+See the output description table below for more details.
+
+The reported names can be used in the normal manner to create
+varobjs and inspect the objects themselves.  The items returned by
+this command are categorized so that it is clear which is a variable,
+which is a register, which is a trace state variable, which is a
+memory range and which is a computed expression.
+
+For instance, if the actions were
+@smallexample
+collect myVar, myArray[myIndex], myObj.field, myPtr->field, myCount + 2
+collect *(int*)0xaf02bef0@@40
+@end smallexample
+
+@noindent
+the object collected in its entirety would be @code{myVar}.  The
+object @code{myArray} would be partially collected, because only the
+element at index @code{myIndex} would be collected.  The remaining
+objects would be computed expressions.
+
+An example output would be:
+
+@smallexample
+(gdb)
+-trace-frame-collected
+^done,
+  explicit-variables=[@{name="myVar",value="1"@}],
+  computed-expressions=[@{name="myArray[myIndex]",value="0"@},
+                        @{name="myObj.field",value="0"@},
+                        @{name="myPtr->field",value="1"@},
+                        @{name="myCount + 2",value="3"@},
+                        @{name="$tvar1 + 1",value="43970027"@}],
+  registers=[@{number="0",value="0x7fe2c6e79ec8"@},
+             @{number="1",value="0x0"@},
+             @{number="2",value="0x4"@},
+             ...
+             @{number="125",value="0x0"@}],
+  tvars=[@{name="$tvar1",current="43970026"@}],
+  memory=[@{address="0x0000000000602264",length="4"@},
+          @{address="0x0000000000615bc0",length="4"@}]
+(gdb)
+@end smallexample
+
+Where:
+
+@table @code
+@item explicit-variables
+The set of objects that have been collected in their entirety (as
+opposed to collecting just a few elements of an array or a few struct
+members).  For each object, its name and value are printed.
+The @code{--var-print-values} option affects how or whether the value
+field is output.  If @var{var_pval} is 0, then print only the names;
+if it is 1, print also their values; and if it is 2, print the name,
+type and value for simple data types, and the name and type for
+arrays, structures and unions.
+
+@item computed-expressions
+The set of computed expressions that have been collected at the
+current trace frame.  The @code{--comp-print-values} option affects
+this set like the @code{--var-print-values} option affects the
+@code{explicit-variables} set.  See above.
+
+@item registers
+The registers that have been collected at the current trace frame.
+For each register collected, the name and current value are returned.
+The value is formatted according to the @code{--registers-format}
+option.  See the @command{-data-list-register-values} command for a
+list of the allowed formats.  The default is @samp{x}.
+
+@item tvars
+The trace state variables that have been collected at the current
+trace frame.  For each trace state variable collected, the name and
+current value are returned.
+
+@item memory
+The set of memory ranges that have been collected at the current trace
+frame.  Its content is a list of tuples.  Each tuple represents a
+collected memory range and has the following fields:
+
+@table @code
+@item address
+The start address of the memory range, as hexadecimal literal.
+
+@item length
+The length of the memory range, as decimal literal.
+
+@item contents
+The contents of the memory block, in hex.  This field is only present
+if the @code{--memory-contents} option is specified.
+
+@end table
+
+@end table
+
+@subsubheading @value{GDBN} Command
+
+There is no corresponding @value{GDBN} command.
+
+@subsubheading Example
 
 @subheading -trace-list-variables
 @findex -trace-list-variables
@@ -33359,7 +34841,7 @@ may change, and the frontend should obtain it again.
 Example output:
 
 @smallexample
-(gdb) -list-features
+(gdb) -list-target-features
 ^done,result=["async"]
 @end smallexample
 
@@ -33579,7 +35061,7 @@ Creates a new inferior (@pxref{Inferiors and Programs}).  The created
 inferior is not associated with any executable.  Such association may
 be established with the @samp{-file-exec-and-symbols} command
 (@pxref{GDB/MI File Commands}).  The command response has a single
-field, @samp{thread-group}, whose value is the identifier of the
+field, @samp{inferior}, whose value is the identifier of the
 thread group corresponding to the new inferior.
 
 @subheading Example
@@ -33587,7 +35069,7 @@ thread group corresponding to the new inferior.
 @smallexample
 @value{GDBP}
 -add-inferior
-^done,thread-group="i3"
+^done,inferior="i3"
 @end smallexample
 
 @subheading The @code{-interpreter-exec} Command
@@ -35301,6 +36783,42 @@ initialization.  If the data-directory is changed after @value{GDBN} has
 started with the @code{set data-directory} command, the file will not be
 reread.
 
+@menu
+* System-wide Configuration Scripts::  Installed System-wide Configuration Scripts
+@end menu
+
+@node System-wide Configuration Scripts
+@subsection Installed System-wide Configuration Scripts
+@cindex system-wide configuration scripts
+
+The @file{system-gdbinit} directory, located inside the data-directory
+(as specified by @option{--with-gdb-datadir} at configure time) contains
+a number of scripts which can be used as system-wide init files.  To
+automatically source those scripts at startup, @value{GDBN} should be
+configured with @option{--with-system-gdbinit}.  Otherwise, any user
+should be able to source them by hand as needed.
+
+The following scripts are currently available:
+@itemize @bullet
+
+@item @file{elinos.py}
+@pindex elinos.py
+@cindex ELinOS system-wide configuration script
+This script is useful when debugging a program on an ELinOS target.
+It takes advantage of the environment variables defined in a standard
+ELinOS environment in order to determine the location of the system
+shared libraries, and then sets the @samp{solib-absolute-prefix}
+and @samp{solib-search-path} variables appropriately.
+
+@item @file{wrs-linux.py}
+@pindex wrs-linux.py
+@cindex Wind River Linux system-wide configuration script
+This script is useful when debugging a program on a target running
+Wind River Linux.  It expects the @env{ENV_PREFIX} to be set to
+the host-side sysroot used by the target system.
+
+@end itemize
+
 @node Maintenance Commands
 @appendix Maintenance Commands
 @cindex maintenance commands
@@ -35403,9 +36921,20 @@ only if non-stop mode is active (@pxref{Non-Stop Mode}) and the target
 architecture supports displaced stepping.
 @end table
 
+@kindex maint check-psymtabs
+@item maint check-psymtabs
+Check the consistency of currently expanded psymtabs versus symtabs.
+Use this to check, for example, whether a symbol is in one but not the other.
+
 @kindex maint check-symtabs
 @item maint check-symtabs
-Check the consistency of psymtabs and symtabs.
+Check the consistency of currently expanded symtabs.
+
+@kindex maint expand-symtabs
+@item maint expand-symtabs [@var{regexp}]
+Expand symbol tables.
+If @var{regexp} is specified, only expand symbol tables for file
+names matching @var{regexp}.
 
 @kindex maint cplus first_component
 @item maint cplus first_component @var{name}
@@ -35549,8 +37078,7 @@ including registers which aren't available on the target nor visible
 to user; the command @code{maint print register-groups} includes the
 groups that each register is a member of; and the command @code{maint
 print remote-registers} includes the remote target's register numbers
-and offsets in the `G' packets.  @xref{Registers,, Registers, gdbint,
-@value{GDBN} Internals}.
+and offsets in the `G' packets.
 
 These commands take an optional parameter, a file name to which to
 write the information.
@@ -35581,10 +37109,11 @@ This command forces @value{GDBN} to flush its internal register cache.
 
 @kindex maint print objfiles
 @cindex info for known object files
-@item maint print objfiles
-Print a dump of all known object files.  For each object file, this
-command prints its name, address in memory, and all of its psymtabs
-and symtabs.
+@item maint print objfiles @r{[}@var{regexp}@r{]}
+Print a dump of all known object files.
+If @var{regexp} is specified, only print object files whose names
+match @var{regexp}.  For each object file, this command prints its name,
+address in memory, and all of its psymtabs and symtabs.
 
 @kindex maint print section-scripts
 @cindex info for known .debug_gdb_scripts-loaded scripts
@@ -36437,6 +37966,22 @@ Step.
 Step with signal @var{sig}.  The signal @var{sig} should be two hex digits.
 @item t
 Stop.
+@item r @var{start},@var{end}
+Step once, and then keep stepping as long as the thread stops at
+addresses between @var{start} (inclusive) and @var{end} (exclusive).
+The remote stub reports a stop reply when either the thread goes out
+of the range or is stopped due to an unrelated reason, such as hitting
+a breakpoint.  @xref{range stepping}.
+
+If the range is empty (@var{start} == @var{end}), then the action
+becomes equivalent to the @samp{s} action.  In other words,
+single-step once, and report the stop (even if the stepped instruction
+jumps to @var{start}).
+
+(A stop reply may be sent at any point even if the PC is still within
+the stepping range; for example, it is valid to implement this packet
+in a degenerate way as a single instruction step operation.)
+
 @end table
 
 The optional argument @var{addr} normally associated with the 
@@ -37468,6 +39013,16 @@ These are the currently defined stub features and their properties:
 @tab @samp{-}
 @tab Yes
 
+@item @samp{qXfer:libraries-svr4:read}
+@tab No
+@tab @samp{-}
+@tab Yes
+
+@item @samp{augmented-libraries-svr4-read}
+@tab No
+@tab @samp{-}
+@tab No
+
 @item @samp{qXfer:memory-map:read}
 @tab No
 @tab @samp{-}
@@ -37642,6 +39197,11 @@ The remote stub understands the @samp{qXfer:libraries:read} packet
 
 @item qXfer:libraries-svr4:read
 The remote stub understands the @samp{qXfer:libraries-svr4:read} packet
+(@pxref{qXfer svr4 library list read}).
+
+@item augmented-libraries-svr4-read
+The remote stub understands the augmented form of the
+@samp{qXfer:libraries-svr4:read} packet
 (@pxref{qXfer svr4 library list read}).
 
 @item qXfer:memory-map:read
@@ -37939,13 +39499,40 @@ by supplying an appropriate @samp{qSupported} response (@pxref{qSupported}).
 @anchor{qXfer svr4 library list read}
 Access the target's list of loaded libraries when the target is an SVR4
 platform.  @xref{Library List Format for SVR4 Targets}.  The annex part
-of the generic @samp{qXfer} packet must be empty (@pxref{qXfer read}).
+of the generic @samp{qXfer} packet must be empty unless the remote
+stub indicated it supports the augmented form of this packet
+by supplying an appropriate @samp{qSupported} response
+(@pxref{qXfer read}, @ref{qSupported}).
 
 This packet is optional for better performance on SVR4 targets.  
 @value{GDBN} uses memory read packets to read the SVR4 library list otherwise.
 
 This packet is not probed by default; the remote stub must request it,
 by supplying an appropriate @samp{qSupported} response (@pxref{qSupported}).
+
+If the remote stub indicates it supports the augmented form of this
+packet then the annex part of the generic @samp{qXfer} packet may
+contain a semicolon-separated list of @samp{@var{name}=@var{value}}
+arguments.  The currently supported arguments are:
+
+@table @code
+@item start=@var{address}
+A hexadecimal number specifying the address of the @samp{struct
+link_map} to start reading the library list from.  If unset or zero
+then the first @samp{struct link_map} in the library list will be
+chosen as the starting point.
+
+@item prev=@var{address}
+A hexadecimal number specifying the address of the @samp{struct
+link_map} immediately preceding the @samp{struct link_map}
+specified by the @samp{start} argument.  If unset or zero then
+the remote stub will expect that no @samp{struct link_map}
+exists prior to the starting point.
+
+@end table
+
+Arguments that are not understood by the remote stub will be silently
+ignored.
 
 @item qXfer:memory-map:read::@var{offset},@var{length}
 @anchor{qXfer memory map read}
@@ -40616,17 +42203,27 @@ A region of collected memory starting at @var{addr} and extending for
 <memory start="@var{addr}" length="@var{length}"/>
 @end smallexample
 
+@item
+A block indicating trace state variable numbered @var{number} has been
+collected:
+
+@smallexample
+<tvar id="@var{number}"/>
+@end smallexample
+
 @end itemize
 
 The formal DTD for the traceframe info format is given below:
 
 @smallexample
-<!ELEMENT traceframe-info  (memory)* >
+<!ELEMENT traceframe-info  (memory | tvar)* >
 <!ATTLIST traceframe-info  version CDATA   #FIXED  "1.0">
 
 <!ELEMENT memory        EMPTY>
 <!ATTLIST memory        start   CDATA   #REQUIRED
                         length  CDATA   #REQUIRED>
+<!ELEMENT tvar>
+<!ATTLIST tvar          id      CDATA   #REQUIRED>
 @end smallexample
 
 @node Branch Trace Format
@@ -41141,7 +42738,9 @@ registers using the capitalization used in the description.
 * i386 Features::
 * MIPS Features::
 * M68K Features::
+* Nios II Features::
 * PowerPC Features::
+* S/390 and System z Features::
 * TIC6x Features::
 @end menu
 
@@ -41290,6 +42889,16 @@ This feature is optional.  If present, it should contain registers
 @samp{fpiaddr}.
 @end table
 
+@node Nios II Features
+@subsection Nios II Features
+@cindex target descriptions, Nios II features
+
+The @samp{org.gnu.gdb.nios2.cpu} feature is required for Nios II
+targets.  It should contain the 32 core registers (@samp{zero},
+@samp{at}, @samp{r2} through @samp{r23}, @samp{et} through @samp{ra}),
+@samp{pc}, and the 16 control registers (@samp{status} through
+@samp{mpuacc}).
+
 @node PowerPC Features
 @subsection PowerPC Features
 @cindex target descriptions, PowerPC features
@@ -41320,6 +42929,39 @@ contain registers @samp{ev0h} through @samp{ev31h}, @samp{acc}, and
 @samp{ev0h} through @samp{ev31h}.  @value{GDBN} will combine
 these to present registers @samp{ev0} through @samp{ev31} to the
 user.
+
+@node S/390 and System z Features
+@subsection S/390 and System z Features
+@cindex target descriptions, S/390 features
+@cindex target descriptions, System z features
+
+The @samp{org.gnu.gdb.s390.core} feature is required for S/390 and
+System z targets.  It should contain the PSW and the 16 general
+registers.  In particular, System z targets should provide the 64-bit
+registers @samp{pswm}, @samp{pswa}, and @samp{r0} through @samp{r15}.
+S/390 targets should provide the 32-bit versions of these registers.
+A System z target that runs in 31-bit addressing mode should provide
+32-bit versions of @samp{pswm} and @samp{pswa}, as well as the general
+register's upper halves @samp{r0h} through @samp{r15h}, and their
+lower halves @samp{r0l} through @samp{r15l}.
+
+The @samp{org.gnu.gdb.s390.fpr} feature is required.  It should
+contain the 64-bit registers @samp{f0} through @samp{f15}, and
+@samp{fpc}.
+
+The @samp{org.gnu.gdb.s390.acr} feature is required.  It should
+contain the 32-bit registers @samp{acr0} through @samp{acr15}.
+
+The @samp{org.gnu.gdb.s390.linux} feature is optional.  It should
+contain the register @samp{orig_r2}, which is 64-bit wide on System z
+targets and 32-bit otherwise.  In addition, the feature may contain
+the @samp{last_break} register, whose width depends on the addressing
+mode, as well as the @samp{system_call} register, which is always
+32-bit wide.
+
+The @samp{org.gnu.gdb.s390.tdb} feature is optional.  It should
+contain the 64-bit registers @samp{tdb0}, @samp{tac}, @samp{tct},
+@samp{atia}, and @samp{tr0} through @samp{tr15}.
 
 @node TIC6x Features
 @subsection TMS320C6x Features

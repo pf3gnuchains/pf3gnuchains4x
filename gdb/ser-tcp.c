@@ -24,6 +24,7 @@
 #include "gdbcmd.h"
 #include "cli/cli-decode.h"
 #include "cli/cli-setshow.h"
+#include "filestuff.h"
 
 #include <sys/types.h>
 
@@ -207,9 +208,9 @@ net_open (struct serial *scb, const char *name)
  retry:
 
   if (use_udp)
-    scb->fd = socket (PF_INET, SOCK_DGRAM, 0);
+    scb->fd = gdb_socket_cloexec (PF_INET, SOCK_DGRAM, 0);
   else
-    scb->fd = socket (PF_INET, SOCK_STREAM, 0);
+    scb->fd = gdb_socket_cloexec (PF_INET, SOCK_STREAM, 0);
 
   if (scb->fd == -1)
     return -1;
@@ -338,7 +339,10 @@ net_close (struct serial *scb)
 int
 net_read_prim (struct serial *scb, size_t count)
 {
-  return recv (scb->fd, scb->buf, count, 0);
+  /* Need to cast to silence -Wpointer-sign on MinGW, as Winsock's
+     'recv' takes 'char *' as second argument, while 'scb->buf' is
+     'unsigned char *'.  */
+  return recv (scb->fd, (void *) scb->buf, count, 0);
 }
 
 int

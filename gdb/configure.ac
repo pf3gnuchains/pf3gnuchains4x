@@ -23,10 +23,8 @@ AC_INIT(main.c)
 AC_CONFIG_HEADER(config.h:config.in)
 AM_MAINTAINER_MODE
 
-# Provide more thorough testing by -lmcheck.
-# Set it to 'true' for development snapshots, 'false' for releases or
-# pre-releases.
-development=true
+# Set the 'development' global.
+. $srcdir/development.sh
 
 AC_PROG_CC
 AC_USE_SYSTEM_EXTENSIONS
@@ -486,8 +484,15 @@ AC_CHECK_TOOL(AR, ar)
 AC_CHECK_TOOL(DLLTOOL, dlltool)
 AC_CHECK_TOOL(WINDRES, windres)
 
-# Needed for GNU/Hurd.
-AC_CHECK_TOOL(MIG, mig)
+case $host_os in
+  gnu*)
+    # Needed for GNU Hurd hosts.
+    AC_CHECK_TOOL(MIG, mig)
+    if test x"$MIG" = x; then
+      AC_MSG_ERROR([MIG not found but required for $host hosts])
+    fi
+    ;;
+esac
 
 # ---------------------- #
 # Checks for libraries.  #
@@ -1045,34 +1050,22 @@ AC_SUBST(PYTHON_CFLAGS)
 AC_SUBST(PYTHON_CPPFLAGS)
 AC_SUBST(PYTHON_LIBS)
 
-# Provide a --enable-libmcheck/--disable-libmcheck set of options
-# allowing a user to enable this option even when building releases,
-# or to disable it when building a snapshot.
-AC_ARG_ENABLE(libmcheck,
-  AS_HELP_STRING([--enable-libmcheck],
-                 [Try building GDB with -lmcheck if available]),
-  [case "${enableval}" in
-     yes | y) ENABLE_LIBMCHECK="yes" ;;
-     no | n)  ENABLE_LIBMCHECK="no" ;;
-     *) AC_MSG_ERROR(bad value ${enableval} for --enable-libmcheck) ;;
-   esac])
-
 # Enable -lmcheck by default (it provides cheap-enough memory mangling),
 # but turn it off if Python is enabled with threads, since -lmcheck is
 # not thread safe (http://sourceware.org/bugzilla/show_bug.cgi?id=9939),
 # and for releases.
-if test -z "${ENABLE_LIBMCHECK}" \
-        -a \( "${have_libpython}" = "no" \
-	     -o "${python_has_threads}" = "no" \) \
-    && $development; then
-  ENABLE_LIBMCHECK=yes
+if test \( "${have_libpython}" = "no" -o "${python_has_threads}" = "no" \) \
+   && $development; then
+  libmcheck_default=yes
+else
+  libmcheck_default=no
 fi
+GDB_AC_LIBMCHECK(${libmcheck_default})
 
-if test "$ENABLE_LIBMCHECK" = "yes" ; then
-  if test "${have_libpython}" != "no" -a "${python_has_threads}" = "yes" ; then
-    AC_MSG_WARN(--enable-libmcheck may lead to spurious crashes if threads are used in python)
-  fi
-  AC_CHECK_LIB(mcheck, main)
+if test "$ENABLE_LIBMCHECK" = "yes" \
+	-a "${have_libpython}" != "no" \
+	-a "${python_has_threads}" = "yes" ; then
+  AC_MSG_WARN(--enable-libmcheck may lead to spurious crashes if threads are used in python)
 fi
 
 # ------------------------- #
@@ -1082,7 +1075,7 @@ fi
 AC_HEADER_DIRENT
 AC_HEADER_STDC
 # elf_hp.h is for HP/UX 64-bit shared library support.
-AC_CHECK_HEADERS([nlist.h machine/reg.h poll.h sys/poll.h proc_service.h \
+AC_CHECK_HEADERS([nlist.h machine/reg.h poll.h sys/poll.h sys/socket.h proc_service.h \
                   thread_db.h signal.h stddef.h \
 		  stdlib.h string.h memory.h strings.h sys/fault.h \
 		  sys/file.h sys/filio.h sys/ioctl.h sys/param.h \
@@ -1090,7 +1083,7 @@ AC_CHECK_HEADERS([nlist.h machine/reg.h poll.h sys/poll.h proc_service.h \
 		  sys/reg.h sys/debugreg.h sys/select.h sys/syscall.h \
 		  sys/types.h sys/wait.h wait.h termios.h termio.h \
 		  sgtty.h unistd.h elf_hp.h locale.h \
-		  dlfcn.h sys/socket.h sys/un.h linux/perf_event.h])
+		  dlfcn.h sys/un.h linux/perf_event.h])
 AC_CHECK_HEADERS(link.h, [], [],
 [#if HAVE_SYS_TYPES_H
 # include <sys/types.h>
@@ -1172,7 +1165,8 @@ AC_CHECK_FUNCS([canonicalize_file_name realpath getrusage getuid getgid \
 		sbrk setpgid setpgrp setsid \
 		sigaction sigprocmask sigsetmask socketpair syscall \
 		ttrace wborder wresize setlocale iconvlist libiconvlist btowc \
-		setrlimit getrlimit posix_madvise waitpid lstat])
+		setrlimit getrlimit posix_madvise waitpid lstat \
+		fdwalk pipe2 ptrace64])
 AM_LANGINFO_CODESET
 
 # Check the return and argument types of ptrace.  No canned test for
@@ -1213,7 +1207,7 @@ AC_CACHE_CHECK([types of arguments for ptrace], gdb_cv_func_ptrace_args, [
 for gdb_arg1 in 'int' 'long'; do
  for gdb_arg2 in 'pid_t' 'int' 'long'; do
   for gdb_arg3 in 'int *' 'caddr_t' 'int' 'long' 'void *'; do
-   for gdb_arg4 in 'int' 'long'; do
+   for gdb_arg4 in 'int' 'long' 'void *'; do
      AC_TRY_COMPILE($gdb_ptrace_headers, [
 extern $gdb_cv_func_ptrace_ret
   ptrace ($gdb_arg1, $gdb_arg2, $gdb_arg3, $gdb_arg4);
@@ -1240,6 +1234,8 @@ IFS=$ac_save_IFS
 shift
 AC_DEFINE_UNQUOTED(PTRACE_TYPE_ARG3, $[3],
   [Define to the type of arg 3 for ptrace.])
+AC_DEFINE_UNQUOTED(PTRACE_TYPE_ARG4, $[4],
+  [Define to the type of arg 4 for ptrace.])
 if test -n "$[5]"; then
   AC_DEFINE_UNQUOTED(PTRACE_TYPE_ARG5, $[5],
     [Define to the type of arg 5 for ptrace.])
@@ -1399,7 +1395,7 @@ fi
 
 if test "${target}" = "${host}"; then
   case "${host}" in
-  *-*-sysv4.2* | *-*-sysv5* | *-*-interix* )
+  *-*-sysv4.2* | *-*-sysv5* )
       AC_DEFINE(NEW_PROC_API, 1,
       [Define if you want to use new multi-fd /proc interface
        (replaces HAVE_MULTIPLE_PROC_FDS as well as other macros).])
@@ -1741,13 +1737,6 @@ if test ${build} = ${host} -a ${host} = ${target} ; then
          [Define if using Solaris thread debugging.])
          CONFIG_OBS="${CONFIG_OBS} sol-thread.o"
          CONFIG_SRCS="${CONFIG_SRCS} sol-thread.c"
-         # On SPARC CPUs, we also need to build sparc-sol-thread.
-         case ${host_cpu} in
-           sparc*)
-             CONFIG_OBS="${CONFIG_OBS} sparc-sol-thread.o"
-             CONFIG_SRCS="${CONFIG_SRCS} sparc-sol-thread.c"
-             ;;
-         esac
          AC_CHECK_LIB(dl, dlopen)
 	 CONFIG_LDFLAGS="${CONFIG_LDFLAGS} $RDYNAMIC"
 	 # Sun randomly tweaked the prototypes in <proc_service.h>
@@ -1880,6 +1869,17 @@ then
 	      [Define if you support the personality syscall.])
 fi
 
+dnl Set the host's .gdbinit filename.
+case $host_os in
+  go32* | *djgpp*)
+    gdbinit=gdb.ini
+    ;;
+  *)
+    gdbinit=.gdbinit
+    ;;
+esac
+AC_DEFINE_UNQUOTED(GDBINIT,"$gdbinit",[The .gdbinit filename.])
+
 dnl Handle optional features that can be enabled.
 
 # Support for --with-sysroot is a copy of GDB_AC_WITH_DIR,
@@ -1919,21 +1919,18 @@ if test "${ERROR_ON_WARNING}" = yes ; then
     WERROR_CFLAGS="-Werror"
 fi
 
-# The entries after -Wno-pointer-sign are disabled warnings which may
-# be enabled in the future, which can not currently be used to build
-# GDB.
-# NOTE: If you change this list, remember to update
-# gdb/doc/gdbint.texinfo.
 build_warnings="-Wall -Wdeclaration-after-statement -Wpointer-arith \
--Wformat-nonliteral -Wno-pointer-sign \
+-Wpointer-sign \
 -Wno-unused -Wunused-value -Wunused-function \
 -Wno-switch -Wno-char-subscripts -Wmissing-prototypes \
--Wdeclaration-after-statement -Wempty-body"
+-Wdeclaration-after-statement -Wempty-body -Wmissing-parameter-type \
+-Wold-style-declaration -Wold-style-definition"
 
 # Enable -Wno-format by default when using gcc on mingw since many
 # GCC versions complain about %I64.
 case "${host}" in
   *-*-mingw32*) build_warnings="$build_warnings -Wno-format" ;;
+  *) build_warnings="$build_warnings -Wformat-nonliteral" ;;
 esac
 
 AC_ARG_ENABLE(build-warnings,
@@ -2034,7 +2031,7 @@ if test $gdb_cv_var_elf = yes; then
 	    [Define if ELF support should be included.])
   # -ldl is provided by bfd/Makfile.am (LIBDL) <PLUGINS>.
   if test "$plugins" = "yes"; then
-    LIBS="-ldl $LIBS"
+    AC_SEARCH_LIBS(dlopen, dl)
   fi
 fi
 

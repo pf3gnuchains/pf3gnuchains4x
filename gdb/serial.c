@@ -398,14 +398,15 @@ serial_readchar (struct serial *scb, int timeout)
 }
 
 int
-serial_write (struct serial *scb, const char *str, int len)
+serial_write (struct serial *scb, const void *buf, size_t count)
 {
   if (serial_logfp != NULL)
     {
-      int count;
+      const char *str = buf;
+      size_t c;
 
-      for (count = 0; count < len; count++)
-	serial_logchar (serial_logfp, 'w', str[count] & 0xff, 0);
+      for (c = 0; c < count; c++)
+	serial_logchar (serial_logfp, 'w', str[c] & 0xff, 0);
 
       /* Make sure that the log file is as up-to-date as possible,
          in case we are getting ready to dump core or something.  */
@@ -413,9 +414,10 @@ serial_write (struct serial *scb, const char *str, int len)
     }
   if (serial_debug_p (scb))
     {
-      int count;
+      const char *str = buf;
+      size_t c;
 
-      for (count = 0; count < len; count++)
+      for (c = 0; c < count; c++)
 	{
 	  fprintf_unfiltered (gdb_stdlog, "[");
 	  serial_logchar (gdb_stdlog, 'w', str[count] & 0xff, 0);
@@ -424,7 +426,7 @@ serial_write (struct serial *scb, const char *str, int len)
       gdb_flush (gdb_stdlog);
     }
 
-  return (scb->ops->write (scb, str, len));
+  return (scb->ops->write (scb, buf, count));
 }
 
 void
@@ -619,6 +621,20 @@ serial_show_cmd (char *args, int from_tty)
   cmd_show_list (serial_show_cmdlist, from_tty, "");
 }
 
+/* Baud rate specified for talking to serial target systems.  Default
+   is left as -1, so targets can choose their own defaults.  */
+/* FIXME: This means that "show serial baud" and gr_files_info can
+   print -1 or (unsigned int)-1.  This is a Bad User Interface.  */
+
+int baud_rate = -1;
+
+static void
+serial_baud_show_cmd (struct ui_file *file, int from_tty,
+		      struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("Baud rate for remote serial I/O is %s.\n"),
+		    value);
+}
 
 void
 _initialize_serial (void)
@@ -640,6 +656,45 @@ Show default serial/parallel port configuration."),
 		  &serial_show_cmdlist, "show serial ",
 		  0/*allow-unknown*/,
 		  &showlist);
+
+  /* If target is open when baud changes, it doesn't take effect until
+     the next open (I think, not sure).  */
+  add_setshow_zinteger_cmd ("baud", no_class, &baud_rate, _("\
+Set baud rate for remote serial I/O."), _("\
+Show baud rate for remote serial I/O."), _("\
+This value is used to set the speed of the serial port when debugging\n\
+using remote targets."),
+			    NULL,
+			    serial_baud_show_cmd,
+			    &serial_set_cmdlist, &serial_show_cmdlist);
+
+  /* The commands "set/show serial baud" used to have a different name.
+     Add aliases to those names to facilitate the transition, and mark
+     them as deprecated, in order to make users aware of the fact that
+     the command names have been changed.  */
+    {
+      const char *cmd_name;
+      struct cmd_list_element *cmd;
+
+      /* FIXME: There is a limitation in the deprecation mechanism,
+	 and the warning ends up not being displayed for prefixed
+	 aliases.  So use a real command instead of an alias.  */
+      add_setshow_zinteger_cmd ("remotebaud", class_alias, &baud_rate, _("\
+Set baud rate for remote serial I/O."), _("\
+Show baud rate for remote serial I/O."), _("\
+This value is used to set the speed of the serial port when debugging\n\
+using remote targets."),
+				NULL,
+				serial_baud_show_cmd,
+				&setlist, &showlist);
+      cmd_name = "remotebaud";
+      cmd = lookup_cmd (&cmd_name, setlist, "", -1, 1);
+      deprecate_cmd (cmd, "set serial baud");
+      cmd_name
+	= "remotebaud"; /* needed because lookup_cmd updates the pointer */
+      cmd = lookup_cmd (&cmd_name, showlist, "", -1, 1);
+      deprecate_cmd (cmd, "show serial baud");
+    }
 
   add_setshow_filename_cmd ("remotelogfile", no_class, &serial_logfile, _("\
 Set filename for remote session recording."), _("\

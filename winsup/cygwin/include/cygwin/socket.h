@@ -1,7 +1,7 @@
 /* cygwin/socket.h
 
-   Copyright 1999, 2000, 2001, 2002, 2003, 2005, 2006, 2007, 2009, 2010, 2012
-   Red Hat, Inc.
+   Copyright 1999, 2000, 2001, 2002, 2003, 2005, 2006, 2007, 2009, 2010, 2012,
+   2013, 2014 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -55,8 +55,8 @@ struct sockaddr_storage {
 
 struct ucred {
   pid_t			pid;
-  __uid32_t		uid;
-  __gid32_t		gid;
+  uid_t			uid;
+  gid_t			gid;
 };
 
 struct linger {
@@ -233,21 +233,22 @@ struct OLD_msghdr
 #define IP_MAX_MEMBERSHIPS              20
 
 /* IP options for use with getsockopt/setsockopt */
-#define IP_OPTIONS			 1
-#define IP_HDRINCL			 2
-#define IP_TOS				 3
-#define IP_TTL				 4
-#define IP_MULTICAST_IF			 9
-#define IP_MULTICAST_TTL		10
-#define IP_MULTICAST_LOOP		11
-#define IP_ADD_MEMBERSHIP		12
-#define IP_DROP_MEMBERSHIP		13
-#define IP_DONTFRAGMENT			14
+#define IP_OPTIONS                       1
+#define IP_HDRINCL                       2
+#define IP_TOS                           3
+#define IP_TTL                           4
+#define IP_MULTICAST_IF                  9
+#define IP_MULTICAST_TTL                10
+#define IP_MULTICAST_LOOP               11
+#define IP_ADD_MEMBERSHIP               12
+#define IP_DROP_MEMBERSHIP              13
+#define IP_DONTFRAGMENT                 14
 #define IP_ADD_SOURCE_MEMBERSHIP        15
 #define IP_DROP_SOURCE_MEMBERSHIP       16
 #define IP_BLOCK_SOURCE                 17
 #define IP_UNBLOCK_SOURCE               18
 #define IP_PKTINFO                      19
+#define IP_UNICAST_IF                   31
 
 /* IPv6 options for use with getsockopt/setsockopt */
 #define IPV6_HOPOPTS                     1
@@ -264,8 +265,11 @@ struct OLD_msghdr
 #define IPV6_HOPLIMIT                   21
 #define IPV6_CHECKSUM                   26
 #define IPV6_V6ONLY                     27
+#define IPV6_UNICAST_IF                 31
 #define IPV6_RTHDR                      32
 #define IPV6_RECVRTHDR                  38
+#define IPV6_TCLASS                     39
+#define IPV6_RECVTCLASS                 40
 
 /* IP agnostic options for use with getsockopt/setsockopt */
 #define MCAST_JOIN_GROUP                41
@@ -301,6 +305,11 @@ struct OLD_msghdr
 #define TCP_NODELAY     0x0001
 #define TCP_MAXSEG	2
 #endif
+
+/* SUS symbolic values for the second parm to shutdown(2) */
+#define SHUT_RD   0		/* == Win32 SD_RECEIVE */
+#define SHUT_WR   1		/* == Win32 SD_SEND    */
+#define SHUT_RDWR 2		/* == Win32 SD_BOTH    */
 
 /* The various priorities. */
 #define SOPRI_INTERACTIVE	0

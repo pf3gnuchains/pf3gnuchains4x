@@ -10,8 +10,6 @@ Cygwin license.  Please consult the file "CYGWIN_LICENSE" for
 details. */
 
 #include "winsup.h"
-#include <wingdi.h>
-#include <winuser.h>
 #include <ctype.h>
 #include "cygerrno.h"
 #include "pinfo.h"
@@ -37,7 +35,7 @@ strace::activate (bool isfork)
   if (!_active && being_debugged ())
     {
       char buf[30];
-      __small_sprintf (buf, "cYg%8x %x %d", _STRACE_INTERFACE_ACTIVATE_ADDR, &_active, isfork);
+      __small_sprintf (buf, "cYg%8x %lx %d", _STRACE_INTERFACE_ACTIVATE_ADDR, &_active, isfork);
       OutputDebugString (buf);
       if (_active)
 	{
@@ -158,11 +156,12 @@ strace::vsprntf (char *buf, const char *func, const char *infmt, va_list ap)
       else if (__progname)
 	sys_mbstowcs(pn = progname, NT_MAX_PATH, __progname);
 
+      WCHAR empty[1] = {};
       PWCHAR p;
       if (!pn)
 	GetModuleFileNameW (NULL, pn = progname, sizeof (progname));
       if (!pn)
-	/* hmm */;
+	p = empty;
       else if ((p = wcsrchr (pn, L'\\')) != NULL)
 	p++;
       else if ((p = wcsrchr (pn, L'/')) != NULL)
@@ -223,7 +222,7 @@ strace::write (unsigned category, const char *buf, int count)
 }
 
 void
-strace::write_childpid (DWORD pid)
+strace::write_childpid (pid_t pid)
 {
   char buf[30];
 

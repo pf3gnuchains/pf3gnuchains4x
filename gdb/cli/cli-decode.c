@@ -22,14 +22,8 @@
 #include "gdb_string.h"
 #include "completer.h"
 #include "ui-out.h"
-
 #include "cli/cli-cmds.h"
 #include "cli/cli-decode.h"
-
-#ifdef TUI
-#include "tui/tui.h"		/* For tui_active et al.  */
-#endif
-
 #include "gdb_assert.h"
 
 /* Prototypes for local functions.  */
@@ -1556,6 +1550,9 @@ lookup_cmd (const char **line, struct cmd_list_element *list, char *cmdtype,
     }
   else
     {
+      if (c->type == set_cmd && **line != '\0' && !isspace (**line))
+        error (_("Argument must be preceded by space."));
+
       /* We've got something.  It may still not be what the caller
          wants (if this command *needs* a subcommand).  */
       while (**line == ' ' || **line == '\t')

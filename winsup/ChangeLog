@@ -1,3 +1,34 @@
+2014-02-18  Christopher Faylor  <me.cygwin2014@cgf.cx>
+
+	* Makefile.in: Ignore errors on doc install.
+
+2013-01-22  Corinna Vinschen  <corinna@vinschen.de>
+
+	* Makefile.common: Don't drop -gFOO switches when filtering CFLAGS
+	and CXXFLAGS.
+
+2013-11-06  Christopher Faylor  <me.cygwin2013@cgf.cx>
+
+	* Makefile.in: Properly cd to directory sans install_ prefix.  Report
+	on errors on doc install.  Only 'all' is special.
+
+2013-11-06  Christopher Faylor  <me.cygwin2013@cgf.cx>
+
+	* configure.ac: Detect windows headers/libs after we've figured out the
+	C compiler.
+	* configure: Regenerate.
+	* aclocal.m4: Regenerate.
+	* configure.cygwin: Default to '.' if can't find a winsup directory.
+
+2013-11-06  Christopher Faylor  <me.cygwin2013@cgf.cx>
+
+	* Makefile.in: Reinstate ignoring of errors for doc target.
+
+2013-06-18  Corinna Vinschen  <corinna@vinschen.de>
+
+	* Makefile.common: Add rule to build assembler code.
+	(.SUFFIXES): Add .S.
+
 2012-11-26  Christopher Faylor  <me.cygwin2012@cgf.cx>
 
 	* Makefile.in (Makefile): Rely on 'configure' not 'configure.in'.

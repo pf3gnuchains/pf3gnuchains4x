@@ -581,7 +581,7 @@ coerce_unspec_val_to_type (struct value *val, struct type *type)
       set_value_bitsize (result, value_bitsize (val));
       set_value_bitpos (result, value_bitpos (val));
       set_value_address (result, value_address (val));
-      set_value_optimized_out (result, value_optimized_out (val));
+      set_value_optimized_out (result, value_optimized_out_const (val));
       return result;
     }
 }
@@ -2325,7 +2325,6 @@ ada_value_primitive_packed_val (struct value *obj, const gdb_byte *valaddr,
       /* Also set the parent value.  This is needed when trying to
 	 assign a new value (in inferior memory).  */
       set_value_parent (v, obj);
-      value_incref (obj);
     }
   else
     set_value_bitsize (v, bit_size);
@@ -2518,7 +2517,7 @@ ada_value_assign (struct value *toval, struct value *fromval)
       int len = (value_bitpos (toval)
 		 + bits + HOST_CHAR_BIT - 1) / HOST_CHAR_BIT;
       int from_size;
-      char *buffer = (char *) alloca (len);
+      gdb_byte *buffer = alloca (len);
       struct value *val;
       CORE_ADDR to_addr = value_address (toval);
 
@@ -4406,17 +4405,21 @@ defns_collected (struct obstack *obstackp, int finish)
     return (struct ada_symbol_info *) obstack_base (obstackp);
 }
 
-/* Return a minimal symbol matching NAME according to Ada decoding
-   rules.  Returns NULL if there is no such minimal symbol.  Names
-   prefixed with "standard__" are handled specially: "standard__" is
-   first stripped off, and only static and global symbols are searched.  */
+/* Return a bound minimal symbol matching NAME according to Ada
+   decoding rules.  Returns an invalid symbol if there is no such
+   minimal symbol.  Names prefixed with "standard__" are handled
+   specially: "standard__" is first stripped off, and only static and
+   global symbols are searched.  */
 
-struct minimal_symbol *
+struct bound_minimal_symbol
 ada_lookup_simple_minsym (const char *name)
 {
+  struct bound_minimal_symbol result;
   struct objfile *objfile;
   struct minimal_symbol *msymbol;
   const int wild_match_p = should_use_wild_match (name);
+
+  memset (&result, 0, sizeof (result));
 
   /* Special case: If the user specifies a symbol name inside package
      Standard, do a non-wild matching of the symbol name without
@@ -4432,10 +4435,14 @@ ada_lookup_simple_minsym (const char *name)
   {
     if (match_name (SYMBOL_LINKAGE_NAME (msymbol), name, wild_match_p)
         && MSYMBOL_TYPE (msymbol) != mst_solib_trampoline)
-      return msymbol;
+      {
+	result.minsym = msymbol;
+	result.objfile = objfile;
+	break;
+      }
   }
 
-  return NULL;
+  return result;
 }
 
 /* For all subprograms that statically enclose the subprogram of the
@@ -4727,17 +4734,20 @@ static int
 old_renaming_is_invisible (const struct symbol *sym, const char *function_name)
 {
   char *scope;
+  struct cleanup *old_chain;
 
   if (SYMBOL_CLASS (sym) != LOC_TYPEDEF)
     return 0;
 
   scope = xget_renaming_scope (SYMBOL_TYPE (sym));
-
-  make_cleanup (xfree, scope);
+  old_chain = make_cleanup (xfree, scope);
 
   /* If the rename has been defined in a package, then it is visible.  */
   if (is_package_name (scope))
-    return 0;
+    {
+      do_cleanups (old_chain);
+      return 0;
+    }
 
   /* Check that the rename is in the current function scope by checking
      that its name starts with SCOPE.  */
@@ -4749,7 +4759,12 @@ old_renaming_is_invisible (const struct symbol *sym, const char *function_name)
   if (strncmp (function_name, "_ada_", 5) == 0)
     function_name += 5;
 
-  return (strncmp (function_name, scope, strlen (scope)) != 0);
+  {
+    int is_invisible = strncmp (function_name, scope, strlen (scope)) != 0;
+
+    do_cleanups (old_chain);
+    return is_invisible;
+  }
 }
 
 /* Remove entries from SYMS that corresponds to a renaming entity that
@@ -4967,23 +4982,37 @@ aux_add_nonlocal_symbols (struct block *block, struct symbol *sym, void *data0)
   return 0;
 }
 
-/* Compare STRING1 to STRING2, with results as for strcmp.
-   Compatible with strcmp_iw in that strcmp_iw (STRING1, STRING2) <= 0
-   implies compare_names (STRING1, STRING2) (they may differ as to
-   what symbols compare equal).  */
+/* Implements compare_names, but only applying the comparision using
+   the given CASING.  */
 
 static int
-compare_names (const char *string1, const char *string2)
+compare_names_with_case (const char *string1, const char *string2,
+			 enum case_sensitivity casing)
 {
   while (*string1 != '\0' && *string2 != '\0')
     {
+      char c1, c2;
+
       if (isspace (*string1) || isspace (*string2))
 	return strcmp_iw_ordered (string1, string2);
-      if (*string1 != *string2)
+
+      if (casing == case_sensitive_off)
+	{
+	  c1 = tolower (*string1);
+	  c2 = tolower (*string2);
+	}
+      else
+	{
+	  c1 = *string1;
+	  c2 = *string2;
+	}
+      if (c1 != c2)
 	break;
+
       string1 += 1;
       string2 += 1;
     }
+
   switch (*string1)
     {
     case '(':
@@ -5001,8 +5030,41 @@ compare_names (const char *string1, const char *string2)
       if (*string2 == '(')
 	return strcmp_iw_ordered (string1, string2);
       else
-	return *string1 - *string2;
+	{
+	  if (casing == case_sensitive_off)
+	    return tolower (*string1) - tolower (*string2);
+	  else
+	    return *string1 - *string2;
+	}
     }
+}
+
+/* Compare STRING1 to STRING2, with results as for strcmp.
+   Compatible with strcmp_iw_ordered in that...
+
+       strcmp_iw_ordered (STRING1, STRING2) <= 0
+
+   ... implies...
+
+       compare_names (STRING1, STRING2) <= 0
+
+   (they may differ as to what symbols compare equal).  */
+
+static int
+compare_names (const char *string1, const char *string2)
+{
+  int result;
+
+  /* Similar to what strcmp_iw_ordered does, we need to perform
+     a case-insensitive comparison first, and only resort to
+     a second, case-sensitive, comparison if the first one was
+     not sufficient to differentiate the two strings.  */
+
+  result = compare_names_with_case (string1, string2, case_sensitive_off);
+  if (result == 0)
+    result = compare_names_with_case (string1, string2, case_sensitive_on);
+
+  return result;
 }
 
 /* Add to OBSTACKP all non-local symbols whose name and domain match
@@ -5025,11 +5087,11 @@ add_nonlocal_symbols (struct obstack *obstackp, const char *name,
       data.objfile = objfile;
 
       if (is_wild_match)
-	objfile->sf->qf->map_matching_symbols (name, domain, objfile, global,
+	objfile->sf->qf->map_matching_symbols (objfile, name, domain, global,
 					       aux_add_nonlocal_symbols, &data,
 					       wild_match, NULL);
       else
-	objfile->sf->qf->map_matching_symbols (name, domain, objfile, global,
+	objfile->sf->qf->map_matching_symbols (objfile, name, domain, global,
 					       aux_add_nonlocal_symbols, &data,
 					       full_match, compare_names);
     }
@@ -5042,8 +5104,8 @@ add_nonlocal_symbols (struct obstack *obstackp, const char *name,
 	  strcpy (name1, "_ada_");
 	  strcpy (name1 + sizeof ("_ada_") - 1, name);
 	  data.objfile = objfile;
-	  objfile->sf->qf->map_matching_symbols (name1, domain,
-						 objfile, global,
+	  objfile->sf->qf->map_matching_symbols (objfile, name1, domain,
+						 global,
 						 aux_add_nonlocal_symbols,
 						 &data,
 						 full_match, compare_names);
@@ -5842,6 +5904,7 @@ ada_make_symbol_completion_list (const char *text0, const char *word,
   struct block *b, *surrounding_static_block = 0;
   int i;
   struct block_iterator iter;
+  struct cleanup *old_chain = make_cleanup (null_cleanup, NULL);
 
   gdb_assert (code == TYPE_CODE_UNDEF);
 
@@ -5942,6 +6005,7 @@ ada_make_symbol_completion_list (const char *text0, const char *word,
     }
   }
 
+  do_cleanups (old_chain);
   return completions;
 }
 
@@ -10917,16 +10981,6 @@ ada_modulus (struct type *type)
    variants of the runtime, we use a sniffer that will determine
    the runtime variant used by the program being debugged.  */
 
-/* The different types of catchpoints that we introduced for catching
-   Ada exceptions.  */
-
-enum exception_catchpoint_kind
-{
-  ex_catch_exception,
-  ex_catch_exception_unhandled,
-  ex_catch_assert
-};
-
 /* Ada's standard exceptions.  */
 
 static char *standard_exc[] = {
@@ -11022,7 +11076,10 @@ ada_has_this_exception_support (const struct exception_support_info *einfo)
 	 the name of the exception being raised (this name is printed in
 	 the catchpoint message, and is also used when trying to catch
 	 a specific exception).  We do not handle this case for now.  */
-      if (lookup_minimal_symbol (einfo->catch_exception_sym, NULL, NULL))
+      struct minimal_symbol *msym
+	= lookup_minimal_symbol (einfo->catch_exception_sym, NULL, NULL);
+
+      if (msym && MSYMBOL_TYPE (msym) != mst_solib_trampoline)
 	error (_("Your Ada runtime appears to be missing some debugging "
 		 "information.\nCannot insert Ada exception catchpoint "
 		 "in this configuration."));
@@ -11104,7 +11161,7 @@ static int
 is_known_support_routine (struct frame_info *frame)
 {
   struct symtab_and_line sal;
-  const char *func_name;
+  char *func_name;
   enum language func_lang;
   int i;
   const char *fullname;
@@ -11137,7 +11194,7 @@ is_known_support_routine (struct frame_info *frame)
       if (re_exec (lbasename (sal.symtab->filename)))
         return 1;
       if (sal.symtab->objfile != NULL
-          && re_exec (sal.symtab->objfile->name))
+          && re_exec (objfile_name (sal.symtab->objfile)))
         return 1;
     }
 
@@ -11151,9 +11208,13 @@ is_known_support_routine (struct frame_info *frame)
     {
       re_comp (known_auxiliary_function_name_patterns[i]);
       if (re_exec (func_name))
-        return 1;
+	{
+	  xfree (func_name);
+	  return 1;
+	}
     }
 
+  xfree (func_name);
   return 0;
 }
 
@@ -11197,6 +11258,7 @@ ada_unhandled_exception_name_addr_from_raise (void)
   int frame_level;
   struct frame_info *fi;
   struct ada_inferior_data *data = get_ada_inferior_data (current_inferior ());
+  struct cleanup *old_chain;
 
   /* To determine the name of this exception, we need to select
      the frame corresponding to RAISE_SYM_NAME.  This frame is
@@ -11207,17 +11269,24 @@ ada_unhandled_exception_name_addr_from_raise (void)
     if (fi != NULL)
       fi = get_prev_frame (fi); 
 
+  old_chain = make_cleanup (null_cleanup, NULL);
   while (fi != NULL)
     {
-      const char *func_name;
+      char *func_name;
       enum language func_lang;
 
       find_frame_funname (fi, &func_name, &func_lang, NULL);
-      if (func_name != NULL
-          && strcmp (func_name, data->exception_info->catch_exception_sym) == 0)
-        break; /* We found the frame we were looking for...  */
-      fi = get_prev_frame (fi);
+      if (func_name != NULL)
+	{
+	  make_cleanup (xfree, func_name);
+
+          if (strcmp (func_name,
+		      data->exception_info->catch_exception_sym) == 0)
+	    break; /* We found the frame we were looking for...  */
+	  fi = get_prev_frame (fi);
+	}
     }
+  do_cleanups (old_chain);
 
   if (fi == NULL)
     return 0;
@@ -11233,22 +11302,22 @@ ada_unhandled_exception_name_addr_from_raise (void)
    Return zero if the address could not be computed, or if not relevant.  */
 
 static CORE_ADDR
-ada_exception_name_addr_1 (enum exception_catchpoint_kind ex,
+ada_exception_name_addr_1 (enum ada_exception_catchpoint_kind ex,
                            struct breakpoint *b)
 {
   struct ada_inferior_data *data = get_ada_inferior_data (current_inferior ());
 
   switch (ex)
     {
-      case ex_catch_exception:
+      case ada_catch_exception:
         return (parse_and_eval_address ("e.full_name"));
         break;
 
-      case ex_catch_exception_unhandled:
+      case ada_catch_exception_unhandled:
         return data->exception_info->unhandled_exception_name_addr ();
         break;
       
-      case ex_catch_assert:
+      case ada_catch_assert:
         return 0;  /* Exception name is not relevant in this case.  */
         break;
 
@@ -11266,7 +11335,7 @@ ada_exception_name_addr_1 (enum exception_catchpoint_kind ex,
    and zero is returned.  */
 
 static CORE_ADDR
-ada_exception_name_addr (enum exception_catchpoint_kind ex,
+ada_exception_name_addr (enum ada_exception_catchpoint_kind ex,
                          struct breakpoint *b)
 {
   volatile struct gdb_exception e;
@@ -11286,9 +11355,6 @@ ada_exception_name_addr (enum exception_catchpoint_kind ex,
   return result;
 }
 
-static struct symtab_and_line ada_exception_sal (enum exception_catchpoint_kind,
-						 char *, char **,
-						 const struct breakpoint_ops **);
 static char *ada_exception_catchpoint_cond_string (const char *excep_string);
 
 /* Ada catchpoints.
@@ -11409,7 +11475,7 @@ create_excep_cond_exprs (struct ada_catchpoint *c)
    exception catchpoint kinds.  */
 
 static void
-dtor_exception (enum exception_catchpoint_kind ex, struct breakpoint *b)
+dtor_exception (enum ada_exception_catchpoint_kind ex, struct breakpoint *b)
 {
   struct ada_catchpoint *c = (struct ada_catchpoint *) b;
 
@@ -11422,7 +11488,7 @@ dtor_exception (enum exception_catchpoint_kind ex, struct breakpoint *b)
    structure for all exception catchpoint kinds.  */
 
 static struct bp_location *
-allocate_location_exception (enum exception_catchpoint_kind ex,
+allocate_location_exception (enum ada_exception_catchpoint_kind ex,
 			     struct breakpoint *self)
 {
   struct ada_catchpoint_location *loc;
@@ -11437,7 +11503,7 @@ allocate_location_exception (enum exception_catchpoint_kind ex,
    exception catchpoint kinds.  */
 
 static void
-re_set_exception (enum exception_catchpoint_kind ex, struct breakpoint *b)
+re_set_exception (enum ada_exception_catchpoint_kind ex, struct breakpoint *b)
 {
   struct ada_catchpoint *c = (struct ada_catchpoint *) b;
 
@@ -11493,7 +11559,7 @@ should_stop_exception (const struct bp_location *bl)
    for all exception catchpoint kinds.  */
 
 static void
-check_status_exception (enum exception_catchpoint_kind ex, bpstat bs)
+check_status_exception (enum ada_exception_catchpoint_kind ex, bpstat bs)
 {
   bs->stop = should_stop_exception (bs->bp_location_at);
 }
@@ -11502,7 +11568,7 @@ check_status_exception (enum exception_catchpoint_kind ex, bpstat bs)
    for all exception catchpoint kinds.  */
 
 static enum print_stop_action
-print_it_exception (enum exception_catchpoint_kind ex, bpstat bs)
+print_it_exception (enum ada_exception_catchpoint_kind ex, bpstat bs)
 {
   struct ui_out *uiout = current_uiout;
   struct breakpoint *b = bs->breakpoint_at;
@@ -11524,15 +11590,16 @@ print_it_exception (enum exception_catchpoint_kind ex, bpstat bs)
 
   switch (ex)
     {
-      case ex_catch_exception:
-      case ex_catch_exception_unhandled:
+      case ada_catch_exception:
+      case ada_catch_exception_unhandled:
 	{
 	  const CORE_ADDR addr = ada_exception_name_addr (ex, b);
 	  char exception_name[256];
 
 	  if (addr != 0)
 	    {
-	      read_memory (addr, exception_name, sizeof (exception_name) - 1);
+	      read_memory (addr, (gdb_byte *) exception_name,
+			   sizeof (exception_name) - 1);
 	      exception_name [sizeof (exception_name) - 1] = '\0';
 	    }
 	  else
@@ -11550,12 +11617,12 @@ print_it_exception (enum exception_catchpoint_kind ex, bpstat bs)
 	     it clearer to the user which kind of catchpoint just got
 	     hit.  We used ui_out_text to make sure that this extra
 	     info does not pollute the exception name in the MI case.  */
-	  if (ex == ex_catch_exception_unhandled)
+	  if (ex == ada_catch_exception_unhandled)
 	    ui_out_text (uiout, "unhandled ");
 	  ui_out_field_string (uiout, "exception-name", exception_name);
 	}
 	break;
-      case ex_catch_assert:
+      case ada_catch_assert:
 	/* In this case, the name of the exception is not really
 	   important.  Just print "failed assertion" to make it clearer
 	   that his program just hit an assertion-failure catchpoint.
@@ -11574,7 +11641,7 @@ print_it_exception (enum exception_catchpoint_kind ex, bpstat bs)
    for all exception catchpoint kinds.  */
 
 static void
-print_one_exception (enum exception_catchpoint_kind ex,
+print_one_exception (enum ada_exception_catchpoint_kind ex,
                      struct breakpoint *b, struct bp_location **last_loc)
 { 
   struct ui_out *uiout = current_uiout;
@@ -11592,7 +11659,7 @@ print_one_exception (enum exception_catchpoint_kind ex,
   *last_loc = b->loc;
   switch (ex)
     {
-      case ex_catch_exception:
+      case ada_catch_exception:
         if (c->excep_string != NULL)
           {
             char *msg = xstrprintf (_("`%s' Ada exception"), c->excep_string);
@@ -11605,11 +11672,11 @@ print_one_exception (enum exception_catchpoint_kind ex,
         
         break;
 
-      case ex_catch_exception_unhandled:
+      case ada_catch_exception_unhandled:
         ui_out_field_string (uiout, "what", "unhandled Ada exceptions");
         break;
       
-      case ex_catch_assert:
+      case ada_catch_assert:
         ui_out_field_string (uiout, "what", "failed Ada assertions");
         break;
 
@@ -11623,7 +11690,7 @@ print_one_exception (enum exception_catchpoint_kind ex,
    for all exception catchpoint kinds.  */
 
 static void
-print_mention_exception (enum exception_catchpoint_kind ex,
+print_mention_exception (enum ada_exception_catchpoint_kind ex,
                          struct breakpoint *b)
 {
   struct ada_catchpoint *c = (struct ada_catchpoint *) b;
@@ -11636,7 +11703,7 @@ print_mention_exception (enum exception_catchpoint_kind ex,
 
   switch (ex)
     {
-      case ex_catch_exception:
+      case ada_catch_exception:
         if (c->excep_string != NULL)
 	  {
 	    char *info = xstrprintf (_("`%s' Ada exception"), c->excep_string);
@@ -11649,11 +11716,11 @@ print_mention_exception (enum exception_catchpoint_kind ex,
           ui_out_text (uiout, _("all Ada exceptions"));
         break;
 
-      case ex_catch_exception_unhandled:
+      case ada_catch_exception_unhandled:
         ui_out_text (uiout, _("unhandled Ada exceptions"));
         break;
       
-      case ex_catch_assert:
+      case ada_catch_assert:
         ui_out_text (uiout, _("failed Ada assertions"));
         break;
 
@@ -11667,24 +11734,24 @@ print_mention_exception (enum exception_catchpoint_kind ex,
    for all exception catchpoint kinds.  */
 
 static void
-print_recreate_exception (enum exception_catchpoint_kind ex,
+print_recreate_exception (enum ada_exception_catchpoint_kind ex,
 			  struct breakpoint *b, struct ui_file *fp)
 {
   struct ada_catchpoint *c = (struct ada_catchpoint *) b;
 
   switch (ex)
     {
-      case ex_catch_exception:
+      case ada_catch_exception:
 	fprintf_filtered (fp, "catch exception");
 	if (c->excep_string != NULL)
 	  fprintf_filtered (fp, " %s", c->excep_string);
 	break;
 
-      case ex_catch_exception_unhandled:
+      case ada_catch_exception_unhandled:
 	fprintf_filtered (fp, "catch exception unhandled");
 	break;
 
-      case ex_catch_assert:
+      case ada_catch_assert:
 	fprintf_filtered (fp, "catch assert");
 	break;
 
@@ -11699,49 +11766,49 @@ print_recreate_exception (enum exception_catchpoint_kind ex,
 static void
 dtor_catch_exception (struct breakpoint *b)
 {
-  dtor_exception (ex_catch_exception, b);
+  dtor_exception (ada_catch_exception, b);
 }
 
 static struct bp_location *
 allocate_location_catch_exception (struct breakpoint *self)
 {
-  return allocate_location_exception (ex_catch_exception, self);
+  return allocate_location_exception (ada_catch_exception, self);
 }
 
 static void
 re_set_catch_exception (struct breakpoint *b)
 {
-  re_set_exception (ex_catch_exception, b);
+  re_set_exception (ada_catch_exception, b);
 }
 
 static void
 check_status_catch_exception (bpstat bs)
 {
-  check_status_exception (ex_catch_exception, bs);
+  check_status_exception (ada_catch_exception, bs);
 }
 
 static enum print_stop_action
 print_it_catch_exception (bpstat bs)
 {
-  return print_it_exception (ex_catch_exception, bs);
+  return print_it_exception (ada_catch_exception, bs);
 }
 
 static void
 print_one_catch_exception (struct breakpoint *b, struct bp_location **last_loc)
 {
-  print_one_exception (ex_catch_exception, b, last_loc);
+  print_one_exception (ada_catch_exception, b, last_loc);
 }
 
 static void
 print_mention_catch_exception (struct breakpoint *b)
 {
-  print_mention_exception (ex_catch_exception, b);
+  print_mention_exception (ada_catch_exception, b);
 }
 
 static void
 print_recreate_catch_exception (struct breakpoint *b, struct ui_file *fp)
 {
-  print_recreate_exception (ex_catch_exception, b, fp);
+  print_recreate_exception (ada_catch_exception, b, fp);
 }
 
 static struct breakpoint_ops catch_exception_breakpoint_ops;
@@ -11751,51 +11818,51 @@ static struct breakpoint_ops catch_exception_breakpoint_ops;
 static void
 dtor_catch_exception_unhandled (struct breakpoint *b)
 {
-  dtor_exception (ex_catch_exception_unhandled, b);
+  dtor_exception (ada_catch_exception_unhandled, b);
 }
 
 static struct bp_location *
 allocate_location_catch_exception_unhandled (struct breakpoint *self)
 {
-  return allocate_location_exception (ex_catch_exception_unhandled, self);
+  return allocate_location_exception (ada_catch_exception_unhandled, self);
 }
 
 static void
 re_set_catch_exception_unhandled (struct breakpoint *b)
 {
-  re_set_exception (ex_catch_exception_unhandled, b);
+  re_set_exception (ada_catch_exception_unhandled, b);
 }
 
 static void
 check_status_catch_exception_unhandled (bpstat bs)
 {
-  check_status_exception (ex_catch_exception_unhandled, bs);
+  check_status_exception (ada_catch_exception_unhandled, bs);
 }
 
 static enum print_stop_action
 print_it_catch_exception_unhandled (bpstat bs)
 {
-  return print_it_exception (ex_catch_exception_unhandled, bs);
+  return print_it_exception (ada_catch_exception_unhandled, bs);
 }
 
 static void
 print_one_catch_exception_unhandled (struct breakpoint *b,
 				     struct bp_location **last_loc)
 {
-  print_one_exception (ex_catch_exception_unhandled, b, last_loc);
+  print_one_exception (ada_catch_exception_unhandled, b, last_loc);
 }
 
 static void
 print_mention_catch_exception_unhandled (struct breakpoint *b)
 {
-  print_mention_exception (ex_catch_exception_unhandled, b);
+  print_mention_exception (ada_catch_exception_unhandled, b);
 }
 
 static void
 print_recreate_catch_exception_unhandled (struct breakpoint *b,
 					  struct ui_file *fp)
 {
-  print_recreate_exception (ex_catch_exception_unhandled, b, fp);
+  print_recreate_exception (ada_catch_exception_unhandled, b, fp);
 }
 
 static struct breakpoint_ops catch_exception_unhandled_breakpoint_ops;
@@ -11805,49 +11872,49 @@ static struct breakpoint_ops catch_exception_unhandled_breakpoint_ops;
 static void
 dtor_catch_assert (struct breakpoint *b)
 {
-  dtor_exception (ex_catch_assert, b);
+  dtor_exception (ada_catch_assert, b);
 }
 
 static struct bp_location *
 allocate_location_catch_assert (struct breakpoint *self)
 {
-  return allocate_location_exception (ex_catch_assert, self);
+  return allocate_location_exception (ada_catch_assert, self);
 }
 
 static void
 re_set_catch_assert (struct breakpoint *b)
 {
-  re_set_exception (ex_catch_assert, b);
+  re_set_exception (ada_catch_assert, b);
 }
 
 static void
 check_status_catch_assert (bpstat bs)
 {
-  check_status_exception (ex_catch_assert, bs);
+  check_status_exception (ada_catch_assert, bs);
 }
 
 static enum print_stop_action
 print_it_catch_assert (bpstat bs)
 {
-  return print_it_exception (ex_catch_assert, bs);
+  return print_it_exception (ada_catch_assert, bs);
 }
 
 static void
 print_one_catch_assert (struct breakpoint *b, struct bp_location **last_loc)
 {
-  print_one_exception (ex_catch_assert, b, last_loc);
+  print_one_exception (ada_catch_assert, b, last_loc);
 }
 
 static void
 print_mention_catch_assert (struct breakpoint *b)
 {
-  print_mention_exception (ex_catch_assert, b);
+  print_mention_exception (ada_catch_assert, b);
 }
 
 static void
 print_recreate_catch_assert (struct breakpoint *b, struct ui_file *fp)
 {
-  print_recreate_exception (ex_catch_assert, b, fp);
+  print_recreate_exception (ada_catch_assert, b, fp);
 }
 
 static struct breakpoint_ops catch_assert_breakpoint_ops;
@@ -11896,7 +11963,7 @@ ada_get_next_arg (char **argsp)
 
 static void
 catch_ada_exception_command_split (char *args,
-                                   enum exception_catchpoint_kind *ex,
+                                   enum ada_exception_catchpoint_kind *ex,
 				   char **excep_string,
 				   char **cond_string)
 {
@@ -11944,19 +12011,19 @@ catch_ada_exception_command_split (char *args,
   if (exception_name == NULL)
     {
       /* Catch all exceptions.  */
-      *ex = ex_catch_exception;
+      *ex = ada_catch_exception;
       *excep_string = NULL;
     }
   else if (strcmp (exception_name, "unhandled") == 0)
     {
       /* Catch unhandled exceptions.  */
-      *ex = ex_catch_exception_unhandled;
+      *ex = ada_catch_exception_unhandled;
       *excep_string = NULL;
     }
   else
     {
       /* Catch a specific exception.  */
-      *ex = ex_catch_exception;
+      *ex = ada_catch_exception;
       *excep_string = exception_name;
     }
   *cond_string = cond;
@@ -11966,7 +12033,7 @@ catch_ada_exception_command_split (char *args,
    implement a catchpoint of the EX kind.  */
 
 static const char *
-ada_exception_sym_name (enum exception_catchpoint_kind ex)
+ada_exception_sym_name (enum ada_exception_catchpoint_kind ex)
 {
   struct ada_inferior_data *data = get_ada_inferior_data (current_inferior ());
 
@@ -11974,13 +12041,13 @@ ada_exception_sym_name (enum exception_catchpoint_kind ex)
 
   switch (ex)
     {
-      case ex_catch_exception:
+      case ada_catch_exception:
         return (data->exception_info->catch_exception_sym);
         break;
-      case ex_catch_exception_unhandled:
+      case ada_catch_exception_unhandled:
         return (data->exception_info->catch_exception_unhandled_sym);
         break;
-      case ex_catch_assert:
+      case ada_catch_assert:
         return (data->exception_info->catch_assert_sym);
         break;
       default:
@@ -11993,17 +12060,17 @@ ada_exception_sym_name (enum exception_catchpoint_kind ex)
    of the EX kind.  */
 
 static const struct breakpoint_ops *
-ada_exception_breakpoint_ops (enum exception_catchpoint_kind ex)
+ada_exception_breakpoint_ops (enum ada_exception_catchpoint_kind ex)
 {
   switch (ex)
     {
-      case ex_catch_exception:
+      case ada_catch_exception:
         return (&catch_exception_breakpoint_ops);
         break;
-      case ex_catch_exception_unhandled:
+      case ada_catch_exception_unhandled:
         return (&catch_exception_unhandled_breakpoint_ops);
         break;
-      case ex_catch_assert:
+      case ada_catch_assert:
         return (&catch_assert_breakpoint_ops);
         break;
       default:
@@ -12066,7 +12133,7 @@ ada_exception_catchpoint_cond_string (const char *excep_string)
    type of catchpoint we need to create.  */
 
 static struct symtab_and_line
-ada_exception_sal (enum exception_catchpoint_kind ex, char *excep_string,
+ada_exception_sal (enum ada_exception_catchpoint_kind ex, char *excep_string,
 		   char **addr_string, const struct breakpoint_ops **ops)
 {
   const char *sym_name;
@@ -12098,47 +12165,39 @@ ada_exception_sal (enum exception_catchpoint_kind ex, char *excep_string,
   return find_function_start_sal (sym, 1);
 }
 
-/* Parse the arguments (ARGS) of the "catch exception" command.
- 
-   If the user asked the catchpoint to catch only a specific
-   exception, then save the exception name in ADDR_STRING.
+/* Create an Ada exception catchpoint.
 
-   If the user provided a condition, then set COND_STRING to
-   that condition expression (the memory must be deallocated
-   after use).  Otherwise, set COND_STRING to NULL.
+   EX_KIND is the kind of exception catchpoint to be created.
 
-   See ada_exception_sal for a description of all the remaining
-   function arguments of this function.  */
+   EXCEPT_STRING, if not NULL, indicates the name of the exception
+   to which this catchpoint applies.  If NULL, this catchpoint is
+   expected to trigger for all exceptions.
 
-static struct symtab_and_line
-ada_decode_exception_location (char *args, char **addr_string,
-                               char **excep_string,
-			       char **cond_string,
-                               const struct breakpoint_ops **ops)
-{
-  enum exception_catchpoint_kind ex;
+   COND_STRING, if not NULL, is the catchpoint condition.
 
-  catch_ada_exception_command_split (args, &ex, excep_string, cond_string);
-  return ada_exception_sal (ex, *excep_string, addr_string, ops);
-}
+   TEMPFLAG, if nonzero, means that the underlying breakpoint
+   should be temporary.
 
-/* Create an Ada exception catchpoint.  */
+   FROM_TTY is the usual argument passed to all commands implementations.  */
 
-static void
+void
 create_ada_exception_catchpoint (struct gdbarch *gdbarch,
-				 struct symtab_and_line sal,
-				 char *addr_string,
+				 enum ada_exception_catchpoint_kind ex_kind,
 				 char *excep_string,
 				 char *cond_string,
-				 const struct breakpoint_ops *ops,
 				 int tempflag,
+				 int disabled,
 				 int from_tty)
 {
   struct ada_catchpoint *c;
+  char *addr_string = NULL;
+  const struct breakpoint_ops *ops = NULL;
+  struct symtab_and_line sal
+    = ada_exception_sal (ex_kind, excep_string, &addr_string, &ops);
 
   c = XNEW (struct ada_catchpoint);
   init_ada_exception_breakpoint (&c->base, gdbarch, sal, addr_string,
-				 ops, tempflag, from_tty);
+				 ops, tempflag, disabled, from_tty);
   c->excep_string = excep_string;
   create_excep_cond_exprs (c);
   if (cond_string != NULL)
@@ -12154,38 +12213,32 @@ catch_ada_exception_command (char *arg, int from_tty,
 {
   struct gdbarch *gdbarch = get_current_arch ();
   int tempflag;
-  struct symtab_and_line sal;
-  char *addr_string = NULL;
+  enum ada_exception_catchpoint_kind ex_kind;
   char *excep_string = NULL;
   char *cond_string = NULL;
-  const struct breakpoint_ops *ops = NULL;
 
   tempflag = get_cmd_context (command) == CATCH_TEMPORARY;
 
   if (!arg)
     arg = "";
-  sal = ada_decode_exception_location (arg, &addr_string, &excep_string,
-				       &cond_string, &ops);
-  create_ada_exception_catchpoint (gdbarch, sal, addr_string,
-				   excep_string, cond_string, ops,
-				   tempflag, from_tty);
+  catch_ada_exception_command_split (arg, &ex_kind, &excep_string,
+				     &cond_string);
+  create_ada_exception_catchpoint (gdbarch, ex_kind,
+				   excep_string, cond_string,
+				   tempflag, 1 /* enabled */,
+				   from_tty);
 }
 
-/* Assuming that ARGS contains the arguments of a "catch assert"
-   command, parse those arguments and return a symtab_and_line object
-   for a failed assertion catchpoint.
+/* Split the arguments specified in a "catch assert" command.
 
-   Set ADDR_STRING to the name of the function where the real
-   breakpoint that implements the catchpoint is set.
+   ARGS contains the command's arguments (or the empty string if
+   no arguments were passed).
 
    If ARGS contains a condition, set COND_STRING to that condition
-   (the memory needs to be deallocated after use).  Otherwise, set
-   COND_STRING to NULL.  */
+   (the memory needs to be deallocated after use).  */
 
-static struct symtab_and_line
-ada_decode_assert_location (char *args, char **addr_string,
-			    char **cond_string,
-                            const struct breakpoint_ops **ops)
+static void
+catch_ada_assert_command_split (char *args, char **cond_string)
 {
   args = skip_spaces (args);
 
@@ -12204,8 +12257,6 @@ ada_decode_assert_location (char *args, char **addr_string,
      the command.  */
   else if (args[0] != '\0')
     error (_("Junk at end of arguments."));
-
-  return ada_exception_sal (ex_catch_assert, NULL, addr_string, ops);
 }
 
 /* Implement the "catch assert" command.  */
@@ -12216,18 +12267,16 @@ catch_assert_command (char *arg, int from_tty,
 {
   struct gdbarch *gdbarch = get_current_arch ();
   int tempflag;
-  struct symtab_and_line sal;
-  char *addr_string = NULL;
   char *cond_string = NULL;
-  const struct breakpoint_ops *ops = NULL;
 
   tempflag = get_cmd_context (command) == CATCH_TEMPORARY;
 
   if (!arg)
     arg = "";
-  sal = ada_decode_assert_location (arg, &addr_string, &cond_string, &ops);
-  create_ada_exception_catchpoint (gdbarch, sal, addr_string,
-				   NULL, cond_string, ops, tempflag,
+  catch_ada_assert_command_split (arg, &cond_string);
+  create_ada_exception_catchpoint (gdbarch, ada_catch_assert,
+				   NULL, cond_string,
+				   tempflag, 1 /* enabled */,
 				   from_tty);
 }
                                 /* Operators */

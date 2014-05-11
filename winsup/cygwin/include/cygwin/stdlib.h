@@ -1,6 +1,6 @@
 /* stdlib.h
 
-   Copyright 2005, 2006, 2007, 2008, 2009, 2011 Red Hat Inc.
+   Copyright 2005, 2006, 2007, 2008, 2009, 2011, 2013 Red Hat Inc.
 
 This file is part of Cygwin.
 
@@ -18,17 +18,28 @@ extern "C"
 {
 #endif
 
+__uint32_t arc4random(void);
+void arc4random_addrandom(unsigned char *, int);
+void arc4random_buf(void *, size_t);
+void arc4random_stir(void);
+__uint32_t arc4random_uniform(__uint32_t);
+
 const char *getprogname (void);
 void	setprogname (const char *);
 
 #ifndef __STRICT_ANSI__
-char *realpath (const char *, char *);
 char *canonicalize_file_name (const char *);
 int unsetenv (const char *);
+#endif /*__STRICT_ANSI__*/
+#if !defined(__STRICT_ANSI__) \
+    || (defined(_XOPEN_SOURCE) \
+	&& ((_XOPEN_SOURCE - 0 >= 500) || defined(_XOPEN_SOURCE_EXTENDED)))
 char *initstate (unsigned seed, char *state, size_t size);
 long random (void);
 char *setstate (const char *state);
 void srandom (unsigned);
+#endif
+#ifndef __STRICT_ANSI__
 char *ptsname (int);
 int ptsname_r(int, char *, size_t);
 int getpt (void);

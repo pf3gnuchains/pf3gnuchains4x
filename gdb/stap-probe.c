@@ -1009,7 +1009,27 @@ stap_get_probe_argument_count (struct probe *probe_generic)
   gdb_assert (probe_generic->pops == &stap_probe_ops);
 
   if (!probe->args_parsed)
-    stap_parse_probe_arguments (probe);
+    {
+      if (probe_generic->pops->can_evaluate_probe_arguments (probe_generic))
+	stap_parse_probe_arguments (probe);
+      else
+	{
+	  static int have_warned_stap_incomplete = 0;
+
+	  if (!have_warned_stap_incomplete)
+	    {
+	      warning (_(
+"The SystemTap SDT probe support is not fully implemented on this target;\n"
+"you will not be able to inspect the arguments of the probes.\n"
+"Please report a bug against GDB requesting a port to this target."));
+	      have_warned_stap_incomplete = 1;
+	    }
+
+	  /* Marking the arguments as "already parsed".  */
+	  probe->args_u.vec = NULL;
+	  probe->args_parsed = 1;
+	}
+    }
 
   gdb_assert (probe->args_parsed);
   return VEC_length (stap_probe_arg_s, probe->args_u.vec);
@@ -1058,6 +1078,20 @@ stap_get_arg (struct stap_probe *probe, unsigned n)
     stap_parse_probe_arguments (probe);
 
   return VEC_index (stap_probe_arg_s, probe->args_u.vec, n);
+}
+
+/* Implement the `can_evaluate_probe_arguments' method of probe_ops.  */
+
+static int
+stap_can_evaluate_probe_arguments (struct probe *probe_generic)
+{
+  struct stap_probe *stap_probe = (struct stap_probe *) probe_generic;
+  struct gdbarch *gdbarch = get_objfile_arch (stap_probe->p.objfile);
+
+  /* For SystemTap probes, we have to guarantee that the method
+     stap_is_single_operand is defined on gdbarch.  If it is not, then it
+     means that argument evaluation is not implemented on this target.  */
+  return gdbarch_stap_is_single_operand_p (gdbarch);
 }
 
 /* Evaluate the probe's argument N (indexed from 0), returning a value
@@ -1321,7 +1355,8 @@ handle_stap_probe (struct objfile *objfile, struct sdt_note *el,
   if (!ret->p.name)
     {
       complaint (&symfile_complaints, _("corrupt probe name when "
-					"reading `%s'"), objfile->name);
+					"reading `%s'"),
+		 objfile_name (objfile));
 
       /* There is no way to use a probe without a name or a provider, so
 	 returning zero here makes sense.  */
@@ -1360,7 +1395,8 @@ handle_stap_probe (struct objfile *objfile, struct sdt_note *el,
 			     != el->data + el->size - 1))
     {
       complaint (&symfile_complaints, _("corrupt probe argument when "
-					"reading `%s'"), objfile->name);
+					"reading `%s'"),
+		 objfile_name (objfile));
       /* If the argument string is NULL, it means some problem happened with
 	 it.  So we return 0.  */
       return;
@@ -1520,6 +1556,7 @@ static const struct probe_ops stap_probe_ops =
   stap_get_probes,
   stap_relocate,
   stap_get_probe_argument_count,
+  stap_can_evaluate_probe_arguments,
   stap_evaluate_probe_argument,
   stap_compile_to_ax,
   stap_set_semaphore,

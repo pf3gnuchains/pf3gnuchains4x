@@ -1,6 +1,6 @@
 /* setlsapwd.cc: Set LSA private data password for current user.
 
-   Copyright 2008, 2009, 2011 Red Hat, Inc.
+   Copyright 2008, 2009, 2011, 2014 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -17,7 +17,6 @@ details. */
 #include "cygheap.h"
 #include "security.h"
 #include "cygserver_setpwd.h"
-#include "pwdgrp.h"
 #include "ntdll.h"
 #include <ntsecapi.h>
 #include <stdlib.h>
@@ -41,7 +40,7 @@ unsigned long
 setlsapwd (const char *passwd, const char *username)
 {
   unsigned long ret = (unsigned long) -1;
-  HANDLE lsa = INVALID_HANDLE_VALUE;
+  HANDLE lsa;
   WCHAR sid[128];
   WCHAR key_name[128 + wcslen (CYGWIN_LSA_KEY_PREFIX)];
   PWCHAR data_buf = NULL;
@@ -51,7 +50,7 @@ setlsapwd (const char *passwd, const char *username)
   if (username)
     {
       cygsid psid;
-      struct passwd *pw = internal_getpwnam (username, false);
+      struct passwd *pw = internal_getpwnam (username);
 
       if (!pw || !psid.getfrompw (pw))
 	{
@@ -71,8 +70,7 @@ setlsapwd (const char *passwd, const char *username)
       if (data_buf)
 	RtlInitUnicodeString (&data, data_buf);
       /* First try it locally.  Works for admin accounts. */
-      if ((lsa = open_local_policy (POLICY_CREATE_SECRET))
-	  != INVALID_HANDLE_VALUE)
+      if ((lsa = lsa_open_policy (NULL, POLICY_CREATE_SECRET)))
 	{
 	  NTSTATUS status = LsaStorePrivateData (lsa, &key,
 						 data.Length ? &data : NULL);
@@ -83,7 +81,7 @@ setlsapwd (const char *passwd, const char *username)
 	    ret = 0;
 	  else
 	    __seterrno_from_nt_status (status);
-	  LsaClose (lsa);
+	  lsa_close_policy (lsa);
 	}
       else if (ret && !username)
 	{
@@ -95,7 +93,7 @@ setlsapwd (const char *passwd, const char *username)
 	}
       if (data_buf)
 	{
-	  memset (data.Buffer, 0, data.Length);
+	  RtlSecureZeroMemory (data.Buffer, data.Length);
 	  free (data_buf);
 	}
     }

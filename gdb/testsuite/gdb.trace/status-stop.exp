@@ -12,7 +12,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-load_lib "trace-support.exp";
+load_lib "trace-support.exp"
 
 standard_testfile
 set executable $testfile
@@ -32,7 +32,7 @@ if ![runto_main] {
 
 if ![gdb_target_supports_trace] {
     unsupported "target does not support trace"
-    return -1 
+    return -1
 }
 
 # Verify that the sequence of commands "tstart tstop tstart" works well.
@@ -79,9 +79,13 @@ proc test_tstart_tstart { } {
 	gdb_test "trace func1" "Tracepoint \[0-9\] at $hex: file.*"
 	gdb_test_no_output "tstart"
 
-	gdb_test "tstart" "" "tstart again" \
-	    "A trace is running already.  Start a new run\\? \\(y or n\\) " \
-	    "y"
+	set test "tstart again"
+	gdb_test_multiple "tstart" $test {
+	    -re "A trace is running already.  Start a new run.*y or n.*" {
+		# Send 'y' and make sure that we don't get any error.
+		gdb_test_no_output "y" $test
+	    }
+	}
     }
 }
 

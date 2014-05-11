@@ -299,7 +299,7 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 
 	  boffset = 0;
 
-	  if (options->pretty)
+	  if (options->prettyformat)
 	    {
 	      fprintf_filtered (stream, "\n");
 	      print_spaces_filtered (2 * (recurse + 1), stream);
@@ -341,7 +341,7 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 	    fprintf_filtered (stream, ", ");
 	  else if (n_baseclasses > 0)
 	    {
-	      if (options->pretty)
+	      if (options->prettyformat)
 		{
 		  fprintf_filtered (stream, "\n");
 		  print_spaces_filtered (2 + 2 * recurse, stream);
@@ -352,7 +352,7 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 	    }
 	  fields_seen = 1;
 
-	  if (options->pretty)
+	  if (options->prettyformat)
 	    {
 	      fprintf_filtered (stream, "\n");
 	      print_spaces_filtered (2 + 2 * recurse, stream);
@@ -395,7 +395,7 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 	      else if (!value_bits_valid (val, TYPE_FIELD_BITPOS (type, i),
 					  TYPE_FIELD_BITSIZE (type, i)))
 		{
-		  val_print_optimized_out (stream);
+		  val_print_optimized_out (val, stream);
 		}
 	      else
 		{
@@ -420,7 +420,7 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 		  struct value *v = value_static_field (type, i);
 
 		  if (v == NULL)
-		    val_print_optimized_out (stream);
+		    val_print_optimized_out (NULL, stream);
 		  else
 		    {
 		      struct value_print_options opts;
@@ -451,7 +451,7 @@ java_print_value_fields (struct type *type, const gdb_byte *valaddr,
 	  annotate_field_end ();
 	}
 
-      if (options->pretty)
+      if (options->prettyformat)
 	{
 	  fprintf_filtered (stream, "\n");
 	  print_spaces_filtered (2 * recurse, stream);

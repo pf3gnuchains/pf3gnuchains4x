@@ -1,6 +1,6 @@
 /* winlean.h - Standard "lean" windows include
 
-   Copyright 2010, 2011, 2012, 2013 Red Hat, Inc.
+   Copyright 2010, 2011, 2012, 2013, 2014 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -12,21 +12,18 @@ details. */
 #define _WINLEAN_H 1
 #define WIN32_LEAN_AND_MEAN 1
 
-/* Mingw32 */
-#define _WINGDI_H
-#define _WINUSER_H
-#define _WINNLS_H
-#define _WINVER_H
-#define _WINNETWK_H
-#define _WINSVC_H
-/* Mingw64 */
-#define _WINNLS_
-#define _WINNETWK_
-#define _WINSVC_
+/* The following macros have to be defined, otherwise the autoload mechanism
+   in autoload.cc leads to "multiple definition" errors.  The macros control
+   the declarations of symbols in the Mingw64 w32api headers.  If they are
+   not defined, a DECLSPEC_IMPORT will be added to the symbol declarations.
+   This leads to a definition of the symbols in the sources using the
+   autoloaded symbols, which in turn clashes with the definition in the
+   w32api library exporting the symbols. */
 #define _ADVAPI32_
 #define _DSGETDCAPI_
 #define _GDI32_
 #define _KERNEL32_
+#define _NORMALIZE_
 #define _OLE32_
 #define _SHELL32_
 #define _SPOOL32_
@@ -34,8 +31,6 @@ details. */
 #define _WINMM_
 #define WINIMPM
 #define WINSOCK_API_LINKAGE
-#define NTDDI_VERSION 0x6020000	/* Probably should just be derived from our
-				   _WIN32_WINNT setting in winsup.h */
 
 /* Windows headers define a couple of annoyingly intrusive macros for the
    sole purpose of inline documentation.  Since they are defined without
@@ -79,16 +74,12 @@ details. */
 #undef CRITICAL
 #endif
 
-#undef _WINGDI_H
-#undef _WINUSER_H
-#undef _WINNLS_H
-#undef _WINVER_H
-#undef _WINNETWK_H
-#undef _WINSVC_H
-
-#undef _WINNLS_
-#undef _WINNETWK_
-#undef _WINSVC_
+/* So-called "Microsoft Account" SIDs have a netbios domain name
+   "MicrosoftAccounts".  The problem is, while DNLEN is 15, that domain
+   name is 16 chars :-P  So we override DNLEN here to be 16, so that calls
+   to LookupAccountSid/Name don't fail if the buffer is based on DNLEN. */
+#undef DNLEN
+#define DNLEN 16
 
 /* When Terminal Services are installed, the GetWindowsDirectory function
    does not return the system installation dir, but a user specific directory

@@ -893,12 +893,10 @@ if test x"$LDEMUL_AFTER_OPEN" != xgld"$EMULATION_NAME"_after_open; then
 fragment <<EOF
 
 static bfd_size_type
-id_note_section_size (bfd *abfd)
+id_note_section_size (bfd *abfd ATTRIBUTE_UNUSED)
 {
   const char *style = emit_note_gnu_build_id;
   bfd_size_type size;
-
-  abfd = abfd;
 
   size = offsetof (Elf_External_Note, name[sizeof "GNU"]);
   size = (size + 3) & -(bfd_size_type) 4;
@@ -1178,13 +1176,16 @@ gld${EMULATION_NAME}_after_open (void)
       int force;
 
       /* If the lib that needs this one was --as-needed and wasn't
-	 found to be needed, then this lib isn't needed either.  Skip
-	 the lib when creating a shared object unless we are copying
-	 DT_NEEDED entres.  */
+	 found to be needed, then this lib isn't needed either.  */
       if (l->by != NULL
-	  && ((bfd_elf_get_dyn_lib_class (l->by) & DYN_AS_NEEDED) != 0
-	      || (!link_info.executable
-		  && bfd_elf_get_dyn_lib_class (l->by) & DYN_NO_ADD_NEEDED) != 0))
+	  && (bfd_elf_get_dyn_lib_class (l->by) & DYN_AS_NEEDED) != 0)
+	continue;
+
+      /* Skip the lib if --no-copy-dt-needed-entries and
+	 --allow-shlib-undefined is in effect.  */
+      if (l->by != NULL
+	  && link_info.unresolved_syms_in_shared_libs == RM_IGNORE
+	  && (bfd_elf_get_dyn_lib_class (l->by) & DYN_NO_ADD_NEEDED) != 0)
 	continue;
 
       /* If we've already seen this file, skip it.  */
@@ -1480,13 +1481,22 @@ gld${EMULATION_NAME}_before_allocation (void)
   asection *sinterp;
   bfd *abfd;
 
-  if (link_info.hash->type == bfd_link_elf_hash_table)
-    _bfd_elf_tls_setup (link_info.output_bfd, &link_info);
+  if (is_elf_hash_table (link_info.hash))
+    {
+      _bfd_elf_tls_setup (link_info.output_bfd, &link_info);
 
-  /* If we are going to make any variable assignments, we need to let
-     the ELF backend know about them in case the variables are
-     referred to by dynamic objects.  */
-  lang_for_each_statement (gld${EMULATION_NAME}_find_statement_assignment);
+      /* Make __ehdr_start hidden if it has been referenced, to
+	 prevent the symbol from being dynamic.  */
+      if (!bfd_elf_record_link_assignment (link_info.output_bfd, &link_info,
+					   "__ehdr_start", TRUE, TRUE))
+	einfo ("%P%F: failed to record assignment to %s: %E\n",
+	       "__ehdr_start");
+
+      /* If we are going to make any variable assignments, we need to
+	 let the ELF backend know about them in case the variables are
+	 referred to by dynamic objects.  */
+      lang_for_each_statement (gld${EMULATION_NAME}_find_statement_assignment);
+    }
 
   /* Let the ELF backend work out the sizes of any sections required
      by dynamic linking.  */

@@ -167,9 +167,11 @@ rl_callback_read_char_wrapper (gdb_client_data client_data)
 }
 
 /* Initialize all the necessary variables, start the event loop,
-   register readline, and stdin, start the loop.  */
+   register readline, and stdin, start the loop.  The DATA is the
+   interpreter data cookie, ignored for now.  */
+
 void
-cli_command_loop (void)
+cli_command_loop (void *data)
 {
   display_gdb_prompt (0);
 
@@ -269,6 +271,7 @@ display_gdb_prompt (char *new_prompt)
 	     rl_callback_handler_remove(), does the job.  */
 
 	  rl_callback_handler_remove ();
+	  do_cleanups (old_chain);
 	  return;
 	}
       else
@@ -954,7 +957,7 @@ gdb_setup_readline (void)
      time.  */
   if (!batch_silent)
     gdb_stdout = stdio_fileopen (stdout);
-  gdb_stderr = stdio_fileopen (stderr);
+  gdb_stderr = stderr_fileopen ();
   gdb_stdlog = gdb_stderr;  /* for moment */
   gdb_stdtarg = gdb_stderr; /* for moment */
   gdb_stdtargerr = gdb_stderr; /* for moment */

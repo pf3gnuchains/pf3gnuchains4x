@@ -73,7 +73,7 @@ OBJCOPY = `if [ -f ${objroot}/../binutils/objcopy ] ; \
 	then echo ${objroot}/../binutils/objcopy ; \
 	else t='$(program_transform_name)'; echo objcopy | sed -e $$t ; fi`
 
-OBJS = syscalls.o libcfunc.o _exit.o _kill.o
+OBJS = ftruncate.o libcfunc.o syscalls.o truncate.o _exit.o _kill.o
 CRT0		= crt0.o
 CRT0_INSTALL	= install-crt0
 
@@ -93,7 +93,7 @@ CFLAGS		= -g
 # build a test program for each target board. Just trying to get
 # it to link is a good test, so we ignore all the errors for now.
 #
-all: ${CRT0} ${RDIMON_CRT0} ${RDIMON_BSP}
+all: ${CRT0} ${RDIMON_CRT0} ${RDIMON_BSP} ${RDIMON_SCRIPTS}
 	@rootpre=`pwd`/; export rootpre; \
 	srcrootpre=`cd $(srcdir); pwd`/; export srcrootpre; \
 	for dir in .. ${SUBDIRS}; do \
@@ -112,30 +112,37 @@ test:
 
 #
 crt0.o: crt0.S
+
 rdimon-crt0.o: crt0.S
-	$(CC) $(CFLAGS_FOR_TARGET) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
+	$(CC) $(CFLAGS_FOR_TARGET) $(CFLAGS) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
 
 #rdimon-trap.o: trap.S
-#	$(CC) $(CFLAGS_FOR_TARGET) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
+#	$(CC) $(CFLAGS_FOR_TARGET) $(CFLAGS) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
 
 rdimon-_exit.o: _exit.c
-	$(CC) $(CFLAGS_FOR_TARGET) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
+	$(CC) $(CFLAGS_FOR_TARGET) $(CFLAGS) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
+
+rdimon-ftruncate.o: ftruncate.c
+	$(CC) $(CFLAGS_FOR_TARGET) $(CFLAGS) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
 
 rdimon-_kill.o: _kill.c
-	$(CC) $(CFLAGS_FOR_TARGET) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
-
-rdimon-syscalls.o: syscalls.c
-	$(CC) $(CFLAGS_FOR_TARGET) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
+	$(CC) $(CFLAGS_FOR_TARGET) $(CFLAGS) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
 
 rdimon-libcfunc.o: libcfunc.c
-	$(CC) $(CFLAGS_FOR_TARGET) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
+	$(CC) $(CFLAGS_FOR_TARGET) $(CFLAGS) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
+
+rdimon-syscalls.o: syscalls.c
+	$(CC) $(CFLAGS_FOR_TARGET) $(CFLAGS) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
+
+rdimon-truncate.o: truncate.c
+	$(CC) $(CFLAGS_FOR_TARGET) $(CFLAGS) $(INCLUDES) -DARM_RDI_MONITOR -o $@ -c $<
 
 $(RDIMON_BSP): $(RDIMON_OBJS)
 	${AR} ${ARFLAGS} $@ $^
 	${RANLIB} $@
 
 clean mostlyclean:
-	rm -f a.out core *.i *.o *-test *.srec *.dis *.x $(SIM_BSP)
+	rm -f a.out core *.i *.o *-test *.srec *.dis *.x $(SIM_BSP) ${RDIMON_SCRIPTS}
 	@rootpre=`pwd`/; export rootpre; \
 	srcrootpre=`cd $(srcdir); pwd`/; export srcrootpre; \
 	for dir in .. ${SUBDIRS}; do \
@@ -168,6 +175,9 @@ install-rdimon:
 	set -e; for x in ${RDIMON_CRT0} ${RDIMON_BSP}; do ${INSTALL_DATA} $$x $(DESTDIR)${tooldir}/lib${MULTISUBDIR}/$$x; done
 	set -e; for x in ${RDIMON_SCRIPTS}; do ${INSTALL_DATA} ${srcdir}/${objtype}$$x $(DESTDIR)${tooldir}/lib${MULTISUBDIR}/$$x; done
 
+# Make copies of the scripts to facilitate in-tree bootstrapping.
+${RDIMON_SCRIPTS}: %: ${objtype}%
+	cp $< $@
 
 doc:
 info:

@@ -37,6 +37,7 @@
 #include "gdb_assert.h"
 #include "hashtab.h"
 #include "exceptions.h"
+#include "cp-support.h"
 
 /* Initialize BADNESS constants.  */
 
@@ -107,8 +108,8 @@ const struct floatformat *floatformats_vax_d[BFD_ENDIAN_UNKNOWN] = {
   &floatformat_vax_d
 };
 const struct floatformat *floatformats_ibm_long_double[BFD_ENDIAN_UNKNOWN] = {
-  &floatformat_ibm_long_double,
-  &floatformat_ibm_long_double
+  &floatformat_ibm_long_double_big,
+  &floatformat_ibm_long_double_little
 };
 
 /* Should opaque types be resolved?  */
@@ -236,6 +237,21 @@ get_type_arch (const struct type *type)
     return get_objfile_arch (TYPE_OWNER (type).objfile);
   else
     return TYPE_OWNER (type).gdbarch;
+}
+
+/* See gdbtypes.h.  */
+
+struct type *
+get_target_type (struct type *type)
+{
+  if (type != NULL)
+    {
+      type = TYPE_TARGET_TYPE (type);
+      if (type != NULL)
+	type = check_typedef (type);
+    }
+
+  return type;
 }
 
 /* Alloc a new type instance structure, fill it with some defaults,
@@ -1186,7 +1202,8 @@ type_name_no_tag_or_error (struct type *type)
   name = type_name_no_tag (saved_type);
   objfile = TYPE_OBJFILE (saved_type);
   error (_("Invalid anonymous type %s [in module %s], GCC PR debug/47510 bug?"),
-	 name ? name : "<anonymous>", objfile ? objfile->name : "<arch>");
+	 name ? name : "<anonymous>",
+	 objfile ? objfile_name (objfile) : "<arch>");
 }
 
 /* Lookup a typedef or primitive type named NAME, visible in lexical
@@ -1351,7 +1368,7 @@ lookup_template_type (char *name, struct type *type,
    If NAME is the name of a baseclass type, return that type.  */
 
 struct type *
-lookup_struct_elt_type (struct type *type, char *name, int noerr)
+lookup_struct_elt_type (struct type *type, const char *name, int noerr)
 {
   int i;
   char *typename;
@@ -1764,8 +1781,8 @@ check_stub_method (struct type *type, int method_id, int signature_id)
   struct gdbarch *gdbarch = get_type_arch (type);
   struct fn_field *f;
   char *mangled_name = gdb_mangle_name (type, method_id, signature_id);
-  char *demangled_name = cplus_demangle (mangled_name,
-					 DMGL_PARAMS | DMGL_ANSI);
+  char *demangled_name = gdb_demangle (mangled_name,
+				       DMGL_PARAMS | DMGL_ANSI);
   char *argtypetext, *p;
   int depth = 0, argcount = 1;
   struct field *argtypes;
@@ -4068,9 +4085,7 @@ objfile_type (struct objfile *objfile)
 		 "<thread local variable, no debug info>", objfile);
 
   /* NOTE: on some targets, addresses and pointers are not necessarily
-     the same --- for example, on the D10V, pointers are 16 bits long,
-     but addresses are 32 bits long.  See doc/gdbint.texinfo,
-     ``Pointers Are Not Always Addresses''.
+     the same.
 
      The upshot is:
      - gdb's `struct type' always describes the target's
@@ -4082,12 +4097,6 @@ objfile_type (struct objfile *objfile)
        since target_read_memory takes a CORE_ADDR as an argument, it
        can access any memory on the target, even if the processor has
        separate code and data address spaces.
-
-     So, for example:
-     - If v is a value holding a D10V code pointer, its contents are
-       in target form: a big-endian address left-shifted two bits.
-     - If p is a D10V pointer type, TYPE_LENGTH (p) == 2, just as
-       sizeof (void *) == 2 on the target.
 
      In this context, objfile_type->builtin_core_addr is a bit odd:
      it's a target type for a value the target will never see.  It's

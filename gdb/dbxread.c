@@ -291,7 +291,8 @@ static void dbx_symfile_read (struct objfile *, int);
 
 static void dbx_symfile_finish (struct objfile *);
 
-static void record_minimal_symbol (char *, CORE_ADDR, int, struct objfile *);
+static void record_minimal_symbol (const char *, CORE_ADDR, int,
+				   struct objfile *);
 
 static void add_new_header_file (char *, int);
 
@@ -435,7 +436,7 @@ explicit_lookup_type (int real_filenum, int index)
 #endif
 
 static void
-record_minimal_symbol (char *name, CORE_ADDR address, int type,
+record_minimal_symbol (const char *name, CORE_ADDR address, int type,
 		       struct objfile *objfile)
 {
   enum minimal_symbol_type ms_type;
@@ -491,7 +492,7 @@ record_minimal_symbol (char *name, CORE_ADDR address, int type,
 
       /* Same with virtual function tables, both global and static.  */
       {
-	char *tempstring = name;
+	const char *tempstring = name;
 
 	if (tempstring[0] == bfd_get_symbol_leading_char (objfile->obfd))
 	  ++tempstring;
@@ -552,7 +553,7 @@ dbx_symfile_read (struct objfile *objfile, int symfile_flags)
 
   val = bfd_seek (sym_bfd, DBX_SYMTAB_OFFSET (objfile), SEEK_SET);
   if (val < 0)
-    perror_with_name (objfile->name);
+    perror_with_name (objfile_name (objfile));
 
   /* Size the symbol table.  */
   if (objfile->global_psymbols.size == 0 && objfile->static_psymbols.size == 0)
@@ -1001,7 +1002,7 @@ read_dbx_dynamic_symtab (struct objfile *objfile)
   long dynrel_count;
   arelent **dynrels;
   CORE_ADDR sym_value;
-  char *name;
+  const char *name;
 
   /* Check that the symbol file has dynamic symbols that we know about.
      bfd_arch_unknown can happen if we are reading a sun3 symbol file
@@ -1067,7 +1068,7 @@ read_dbx_dynamic_symtab (struct objfile *objfile)
 	  if (sym->flags & BSF_GLOBAL)
 	    type |= N_EXT;
 
-	  record_minimal_symbol ((char *) bfd_asymbol_name (sym), sym_value,
+	  record_minimal_symbol (bfd_asymbol_name (sym), sym_value,
 				 type, objfile);
 	}
     }
@@ -1121,7 +1122,7 @@ read_dbx_dynamic_symtab (struct objfile *objfile)
 	  continue;
 	}
 
-      name = (char *) bfd_asymbol_name (*rel->sym_ptr_ptr);
+      name = bfd_asymbol_name (*rel->sym_ptr_ptr);
       prim_record_minimal_symbol (name, address, mst_solib_trampoline,
 				  objfile);
     }
@@ -1349,7 +1350,6 @@ read_dbx_symtab (struct objfile *objfile)
 	  record_it:
 	  namestring = set_namestring (objfile, &nlist);
 
-	bss_ext_symbol:
 	  record_minimal_symbol (namestring, nlist.n_value,
 				 nlist.n_type, objfile);	/* Always */
 	  continue;
@@ -2449,7 +2449,6 @@ static void
 dbx_read_symtab (struct partial_symtab *self, struct objfile *objfile)
 {
   bfd *sym_bfd;
-  struct cleanup *back_to = NULL;
 
   if (self->readin)
     {
@@ -2461,6 +2460,8 @@ dbx_read_symtab (struct partial_symtab *self, struct objfile *objfile)
 
   if (LDSYMLEN (self) || self->number_of_dependencies)
     {
+      struct cleanup *back_to;
+
       /* Print the message now, before reading the string table,
          to avoid disconcerting pauses.  */
       if (info_verbose)
@@ -2473,6 +2474,8 @@ dbx_read_symtab (struct partial_symtab *self, struct objfile *objfile)
 
       next_symbol_text_func = dbx_next_symbol_text;
 
+      back_to = make_cleanup (null_cleanup, NULL);
+
       if (DBX_STAB_SECTION (objfile))
 	{
 	  stabs_data
@@ -2481,14 +2484,12 @@ dbx_read_symtab (struct partial_symtab *self, struct objfile *objfile)
 					      NULL);
 
 	  if (stabs_data)
-	    back_to = make_cleanup (free_current_contents,
-				    (void *) &stabs_data);
+	    make_cleanup (free_current_contents, (void *) &stabs_data);
 	}
 
       dbx_psymtab_to_symtab_1 (objfile, self);
 
-      if (back_to)
-	do_cleanups (back_to);
+      do_cleanups (back_to);
 
       /* Match with global symbols.  This only needs to be done once,
          after all of the symtabs and dependencies have been read in.   */
@@ -2528,7 +2529,6 @@ read_ofile_symtab (struct objfile *objfile, struct partial_symtab *pst)
   section_offsets = pst->section_offsets;
 
   dbxread_objfile = objfile;
-  subfile_stack = NULL;
 
   stringtab_global = DBX_STRINGTAB (objfile);
   set_last_source_file (NULL);
@@ -2717,7 +2717,7 @@ cp_set_block_scope (const struct symbol *symbol,
 
 void
 process_one_symbol (int type, int desc, CORE_ADDR valu, char *name,
-		    struct section_offsets *section_offsets,
+		    const struct section_offsets *section_offsets,
 		    struct objfile *objfile)
 {
   struct gdbarch *gdbarch = get_objfile_arch (objfile);
@@ -3563,7 +3563,6 @@ stabsect_build_psymtabs (struct objfile *objfile, char *stab_name,
 
 static const struct sym_fns aout_sym_fns =
 {
-  bfd_target_aout_flavour,
   dbx_new_init,			/* init anything gbl to entire symtab */
   dbx_symfile_init,		/* read initial info, setup for sym_read() */
   dbx_symfile_read,		/* read a symbol file into symtab */
@@ -3580,7 +3579,7 @@ static const struct sym_fns aout_sym_fns =
 void
 _initialize_dbxread (void)
 {
-  add_symtab_fns (&aout_sym_fns);
+  add_symtab_fns (bfd_target_aout_flavour, &aout_sym_fns);
 
   dbx_objfile_data_key
     = register_objfile_data_with_cleanup (NULL, dbx_free_symfile_info);

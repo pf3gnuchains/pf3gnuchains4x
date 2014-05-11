@@ -1,6 +1,6 @@
 /* fhandler_dev_dsp: code to emulate OSS sound model /dev/dsp
 
-   Copyright 2001, 2002, 2003, 2004, 2008, 2011, 2012 Red Hat, Inc
+   Copyright 2001, 2002, 2003, 2004, 2008, 2011, 2012, 2013 Red Hat, Inc
 
    Written by Andy Younger (andy@snoogie.demon.co.uk)
    Extended by Gerd Spalink (Gerd.Spalink@t-online.de)
@@ -102,8 +102,9 @@ class fhandler_dev_dsp::Audio::queue
   WAVEHDR **storage_;
 };
 
-static void CALLBACK waveOut_callback (HWAVEOUT hWave, UINT msg, DWORD instance,
-				       DWORD param1, DWORD param2);
+static void CALLBACK waveOut_callback (HWAVEOUT hWave, UINT msg,
+				       DWORD_PTR instance, DWORD_PTR param1,
+				       DWORD_PTR param2);
 
 class fhandler_dev_dsp::Audio_out: public Audio
 {
@@ -135,8 +136,9 @@ class fhandler_dev_dsp::Audio_out: public Audio
   int channels_;
 };
 
-static void CALLBACK waveIn_callback (HWAVEIN hWave, UINT msg, DWORD instance,
-				      DWORD param1, DWORD param2);
+static void CALLBACK waveIn_callback (HWAVEIN hWave, UINT msg,
+				      DWORD_PTR instance, DWORD_PTR param1,
+				      DWORD_PTR param2);
 
 class fhandler_dev_dsp::Audio_in: public Audio
 {
@@ -365,7 +367,7 @@ fhandler_dev_dsp::Audio_out::fork_fixup (HANDLE parent)
   /* Null dev_.
      It will be necessary to reset the queue, open the device
      and create a lock when writing */
-  debug_printf ("parent=0x%08x", parent);
+  debug_printf ("parent=%p", parent);
   dev_ = NULL;
 }
 
@@ -378,7 +380,7 @@ fhandler_dev_dsp::Audio_out::query (int rate, int bits, int channels)
 
   fillFormat (&format, rate, bits, channels);
   rc = waveOutOpen (NULL, WAVE_MAPPER, &format, 0L, 0L, WAVE_FORMAT_QUERY);
-  debug_printf ("%d = waveOutOpen(freq=%d bits=%d channels=%d)", rc, rate, bits, channels);
+  debug_printf ("%u = waveOutOpen(freq=%d bits=%d channels=%d)", rc, rate, bits, channels);
   return (rc == MMSYSERR_NOERROR);
 }
 
@@ -400,12 +402,12 @@ fhandler_dev_dsp::Audio_out::start ()
     return false;
 
   fillFormat (&format, freq_, bits_, channels_);
-  rc = waveOutOpen (&dev_, WAVE_MAPPER, &format, (DWORD) waveOut_callback,
-		     (DWORD) this, CALLBACK_FUNCTION);
+  rc = waveOutOpen (&dev_, WAVE_MAPPER, &format, (DWORD_PTR) waveOut_callback,
+		     (DWORD_PTR) this, CALLBACK_FUNCTION);
   if (rc == MMSYSERR_NOERROR)
     init (bSize);
 
-  debug_printf ("%d = waveOutOpen(freq=%d bits=%d channels=%d)", rc, freq_, bits_, channels_);
+  debug_printf ("%u = waveOutOpen(freq=%d bits=%d channels=%d)", rc, freq_, bits_, channels_);
 
   return (rc == MMSYSERR_NOERROR);
 }
@@ -416,7 +418,7 @@ fhandler_dev_dsp::Audio_out::stop (bool immediately)
   MMRESULT rc;
   WAVEHDR *pHdr;
 
-  debug_printf ("dev_=%08x", (int)dev_);
+  debug_printf ("dev_=%p", dev_);
   if (dev_)
     {
       if (!immediately)
@@ -426,15 +428,16 @@ fhandler_dev_dsp::Audio_out::stop (bool immediately)
 	}
 
       rc = waveOutReset (dev_);
-      debug_printf ("%d = waveOutReset()", rc);
+      debug_printf ("%u = waveOutReset()", rc);
       while (Qisr2app_->recv (&pHdr))
 	{
 	  rc = waveOutUnprepareHeader (dev_, pHdr, sizeof (WAVEHDR));
-	  debug_printf ("%d = waveOutUnprepareHeader(0x%08x)", rc, pHdr);
+	  debug_printf ("%u = waveOutUnprepareHeader(%p)", rc, pHdr);
 	}
 
+      no_thread_exit_protect for_now (true);
       rc = waveOutClose (dev_);
-      debug_printf ("%d = waveOutClose()", rc);
+      debug_printf ("%u = waveOutClose()", rc);
 
       Qisr2app_->dellock ();
     }
@@ -564,7 +567,7 @@ fhandler_dev_dsp::Audio_out::waitforspace ()
       /* Errors are ignored here. They will probbaly cause a failure
 	 in the subsequent PrepareHeader */
       rc = waveOutUnprepareHeader (dev_, pHdr, sizeof (WAVEHDR));
-      debug_printf ("%d = waveOutUnprepareHeader(0x%08x)", rc, pHdr);
+      debug_printf ("%u = waveOutUnprepareHeader(%p)", rc, pHdr);
     }
   pHdr_ = pHdr;
   bufferIndex_ = 0;
@@ -587,7 +590,7 @@ fhandler_dev_dsp::Audio_out::sendcurrent ()
 {
   WAVEHDR *pHdr = pHdr_;
   MMRESULT rc;
-  debug_printf ("pHdr=0x%08x bytes=%d", pHdr, bufferIndex_);
+  debug_printf ("pHdr=%p bytes=%d", pHdr, bufferIndex_);
 
   if (pHdr_ == NULL)
     return false;
@@ -599,11 +602,11 @@ fhandler_dev_dsp::Audio_out::sendcurrent ()
   // Send internal buffer out to the soundcard
   pHdr->dwBufferLength = bufferIndex_;
   rc = waveOutPrepareHeader (dev_, pHdr, sizeof (WAVEHDR));
-  debug_printf ("%d = waveOutPrepareHeader(0x%08x)", rc, pHdr);
+  debug_printf ("%u = waveOutPrepareHeader(%p)", rc, pHdr);
   if (rc == MMSYSERR_NOERROR)
     {
       rc = waveOutWrite (dev_, pHdr, sizeof (WAVEHDR));
-      debug_printf ("%d = waveOutWrite(0x%08x)", rc, pHdr);
+      debug_printf ("%u = waveOutWrite(%p)", rc, pHdr);
     }
   if (rc == MMSYSERR_NOERROR)
     return true;
@@ -617,8 +620,8 @@ fhandler_dev_dsp::Audio_out::sendcurrent ()
 //------------------------------------------------------------------------
 // Call back routine
 static void CALLBACK
-waveOut_callback (HWAVEOUT hWave, UINT msg, DWORD instance, DWORD param1,
-		  DWORD param2)
+waveOut_callback (HWAVEOUT hWave, UINT msg, DWORD_PTR instance,
+		  DWORD_PTR param1, DWORD_PTR param2)
 {
   if (msg == WOM_DONE)
     {
@@ -663,7 +666,7 @@ fhandler_dev_dsp::Audio_out::parsewav (const char * &pData, int &nBytes,
   setconvert (bits_ == 8 ? AFMT_U8 : AFMT_S16_LE);
 
   // Check alignment first: A lot of the code below depends on it
-  if (((int)pData & 0x3) != 0)
+  if (((uintptr_t)pData & 0x3) != 0)
     return false;
   if (!(pData[0] == 'R' && pData[1] == 'I'
 	&& pData[2] == 'F' && pData[3] == 'F'))
@@ -740,7 +743,7 @@ fhandler_dev_dsp::Audio_in::fork_fixup (HANDLE parent)
   /* Null dev_.
      It will be necessary to reset the queue, open the device
      and create a lock when reading */
-  debug_printf ("parent=0x%08x", parent);
+  debug_printf ("parent=%p", parent);
   dev_ = NULL;
 }
 
@@ -752,7 +755,7 @@ fhandler_dev_dsp::Audio_in::query (int rate, int bits, int channels)
 
   fillFormat (&format, rate, bits, channels);
   rc = waveInOpen (NULL, WAVE_MAPPER, &format, 0L, 0L, WAVE_FORMAT_QUERY);
-  debug_printf ("%d = waveInOpen(freq=%d bits=%d channels=%d)", rc, rate, bits, channels);
+  debug_printf ("%u = waveInOpen(freq=%d bits=%d channels=%d)", rc, rate, bits, channels);
   return (rc == MMSYSERR_NOERROR);
 }
 
@@ -774,9 +777,9 @@ fhandler_dev_dsp::Audio_in::start (int rate, int bits, int channels)
     return false;
 
   fillFormat (&format, rate, bits, channels);
-  rc = waveInOpen (&dev_, WAVE_MAPPER, &format, (DWORD) waveIn_callback,
-		   (DWORD) this, CALLBACK_FUNCTION);
-  debug_printf ("%d = waveInOpen(rate=%d bits=%d channels=%d)", rc, rate, bits, channels);
+  rc = waveInOpen (&dev_, WAVE_MAPPER, &format, (DWORD_PTR) waveIn_callback,
+		   (DWORD_PTR) this, CALLBACK_FUNCTION);
+  debug_printf ("%u = waveInOpen(rate=%d bits=%d channels=%d)", rc, rate, bits, channels);
 
   if (rc == MMSYSERR_NOERROR)
     {
@@ -792,7 +795,7 @@ fhandler_dev_dsp::Audio_in::stop ()
   MMRESULT rc;
   WAVEHDR *pHdr;
 
-  debug_printf ("dev_=%08x", (int)dev_);
+  debug_printf ("dev_=%p", dev_);
   if (dev_)
     {
       /* Note that waveInReset calls our callback for all incomplete buffers.
@@ -800,16 +803,17 @@ fhandler_dev_dsp::Audio_in::stop ()
 	 we must not call into the wave API from the callback.
 	 Otherwise we end up in a deadlock. */
       rc = waveInReset (dev_);
-      debug_printf ("%d = waveInReset()", rc);
+      debug_printf ("%u = waveInReset()", rc);
 
       while (Qisr2app_->recv (&pHdr))
 	{
 	  rc = waveInUnprepareHeader (dev_, pHdr, sizeof (WAVEHDR));
-	  debug_printf ("%d = waveInUnprepareHeader(0x%08x)", rc, pHdr);
+	  debug_printf ("%u = waveInUnprepareHeader(%p)", rc, pHdr);
 	}
 
+      no_thread_exit_protect for_now (true);
       rc = waveInClose (dev_);
-      debug_printf ("%d = waveInClose()", rc);
+      debug_printf ("%u = waveInClose()", rc);
 
       Qisr2app_->dellock ();
     }
@@ -820,11 +824,11 @@ fhandler_dev_dsp::Audio_in::queueblock (WAVEHDR *pHdr)
 {
   MMRESULT rc;
   rc = waveInPrepareHeader (dev_, pHdr, sizeof (WAVEHDR));
-  debug_printf ("%d = waveInPrepareHeader(0x%08x)", rc, pHdr);
+  debug_printf ("%u = waveInPrepareHeader(%p)", rc, pHdr);
   if (rc == MMSYSERR_NOERROR)
     {
       rc = waveInAddBuffer (dev_, pHdr, sizeof (WAVEHDR));
-      debug_printf ("%d = waveInAddBuffer(0x%08x)", rc, pHdr);
+      debug_printf ("%u = waveInAddBuffer(%p)", rc, pHdr);
     }
   if (rc == MMSYSERR_NOERROR)
     return true;
@@ -854,7 +858,7 @@ fhandler_dev_dsp::Audio_in::init (unsigned blockSize)
     }
   pHdr_ = NULL;
   rc = waveInStart (dev_);
-  debug_printf ("%d = waveInStart(), queued=%d", rc, i);
+  debug_printf ("%u = waveInStart(), queued=%d", rc, i);
   return (rc == MMSYSERR_NOERROR);
 }
 
@@ -863,7 +867,7 @@ fhandler_dev_dsp::Audio_in::read (char *pSampleData, int &nBytes)
 {
   int bytes_to_read = nBytes;
   nBytes = 0;
-  debug_printf ("pSampleData=%08x nBytes=%d", pSampleData, bytes_to_read);
+  debug_printf ("pSampleData=%p nBytes=%d", pSampleData, bytes_to_read);
   while (bytes_to_read != 0)
     { // Block till next sound has been read
       if (!waitfordata ())
@@ -942,7 +946,7 @@ fhandler_dev_dsp::Audio_in::waitfordata ()
       /* Errors are ignored here. They will probbaly cause a failure
 	 in the subsequent PrepareHeader */
       rc = waveInUnprepareHeader (dev_, pHdr, sizeof (WAVEHDR));
-      debug_printf ("%d = waveInUnprepareHeader(0x%08x)", rc, pHdr);
+      debug_printf ("%u = waveInUnprepareHeader(%p)", rc, pHdr);
     }
   pHdr_ = pHdr;
   bufferIndex_ = 0;
@@ -978,8 +982,8 @@ fhandler_dev_dsp::Audio_in::callback_blockfull (WAVEHDR *pHdr)
 }
 
 static void CALLBACK
-waveIn_callback (HWAVEIN hWave, UINT msg, DWORD instance, DWORD param1,
-		 DWORD param2)
+waveIn_callback (HWAVEIN hWave, UINT msg, DWORD_PTR instance, DWORD_PTR param1,
+		 DWORD_PTR param2)
 {
   if (msg == WIM_DATA)
     {
@@ -1001,10 +1005,41 @@ fhandler_dev_dsp::fhandler_dev_dsp ():
   dev ().parse (FH_OSS_DSP);
 }
 
+ssize_t __stdcall
+fhandler_dev_dsp::write (const void *ptr, size_t len)
+{
+  return base ()->_write (ptr, len);
+}
+
+void __reg3
+fhandler_dev_dsp::read (void *ptr, size_t& len)
+{
+  return base ()->_read (ptr, len);
+}
+
+int
+fhandler_dev_dsp::ioctl (unsigned int cmd, void *buf)
+{
+  return base ()->_ioctl (cmd, buf);
+}
+
+void
+fhandler_dev_dsp::fixup_after_fork (HANDLE parent)
+{
+  base ()->_fixup_after_fork (parent);
+}
+
+void
+fhandler_dev_dsp::fixup_after_exec ()
+{
+  base ()->_fixup_after_exec ();
+}
+
+
 int
 fhandler_dev_dsp::open (int flags, mode_t mode)
 {
-  int err = 0;
+  int ret = 0, err = 0;
   UINT num_in = 0, num_out = 0;
   set_flags ((flags & ~O_TEXT) | O_BINARY);
   // Work out initial sample format & frequency, /dev/dsp defaults
@@ -1030,27 +1065,23 @@ fhandler_dev_dsp::open (int flags, mode_t mode)
       err = EINVAL;
     }
 
-  if (!err)
-    {
-      set_open_status ();
-      need_fork_fixup (true);
-      nohandle (true);
-    }
-  else
+  if (err)
     set_errno (err);
+  else
+    ret = fhandler_base::open (flags, mode);
 
-  debug_printf ("ACCMODE=0x%08x audio_in=%d audio_out=%d, err=%d",
-		flags & O_ACCMODE, num_in, num_out, err);
-  return !err;
+  debug_printf ("ACCMODE=%y audio_in=%d audio_out=%d, err=%d, ret=%d",
+		flags & O_ACCMODE, num_in, num_out, err, ret);
+  return ret;
 }
 
 #define IS_WRITE() ((get_flags() & O_ACCMODE) != O_RDONLY)
 #define IS_READ() ((get_flags() & O_ACCMODE) != O_WRONLY)
 
 ssize_t __stdcall
-fhandler_dev_dsp::write (const void *ptr, size_t len)
+fhandler_dev_dsp::_write (const void *ptr, size_t len)
 {
-  debug_printf ("ptr=%08x len=%d", ptr, len);
+  debug_printf ("ptr=%p len=%ld", ptr, len);
   int len_s = len;
   const char *ptr_s = static_cast <const char *> (ptr);
 
@@ -1066,7 +1097,7 @@ fhandler_dev_dsp::write (const void *ptr, size_t len)
 
       if (audio_out_->parsewav (ptr_s, len_s,
 				audiofreq_, audiobits_, audiochannels_))
-	debug_printf ("=> ptr_s=%08x len_s=%d", ptr_s, len_s);
+	debug_printf ("=> ptr_s=%p len_s=%d", ptr_s, len_s);
     }
   else
     {
@@ -1093,10 +1124,10 @@ fhandler_dev_dsp::write (const void *ptr, size_t len)
   return len - len_s + written;
 }
 
-void __stdcall
-fhandler_dev_dsp::read (void *ptr, size_t& len)
+void __reg3
+fhandler_dev_dsp::_read (void *ptr, size_t& len)
 {
-  debug_printf ("ptr=%08x len=%d", ptr, len);
+  debug_printf ("ptr=%p len=%ld", ptr, len);
 
   if (audio_in_)
     /* nothing to do */;
@@ -1129,13 +1160,7 @@ fhandler_dev_dsp::read (void *ptr, size_t& len)
   audio_in_->read ((char *)ptr, (int&)len);
 }
 
-_off64_t
-fhandler_dev_dsp::lseek (_off64_t offset, int whence)
-{
-  return 0;
-}
-
-void
+void __reg1
 fhandler_dev_dsp::close_audio_in ()
 {
   if (audio_in_)
@@ -1146,7 +1171,7 @@ fhandler_dev_dsp::close_audio_in ()
     }
 }
 
-void
+void __reg2
 fhandler_dev_dsp::close_audio_out (bool immediately)
 {
   if (audio_out_)
@@ -1160,18 +1185,16 @@ fhandler_dev_dsp::close_audio_out (bool immediately)
 int
 fhandler_dev_dsp::close ()
 {
-  debug_printf ("audio_in=%08x audio_out=%08x",
-		(int)audio_in_, (int)audio_out_);
+  debug_printf ("audio_in=%p audio_out=%p", audio_in_, audio_out_);
   close_audio_in ();
-  close_audio_out (exit_state != ES_NOT_EXITING);
-  return 0;
+  close_audio_out ();
+  return fhandler_base::close ();
 }
 
 int
-fhandler_dev_dsp::ioctl (unsigned int cmd, void *buf)
+fhandler_dev_dsp::_ioctl (unsigned int cmd, void *buf)
 {
-  debug_printf ("audio_in=%08x audio_out=%08x",
-		(int)audio_in_, (int)audio_out_);
+  debug_printf ("audio_in=%p audio_out=%p", audio_in_, audio_out_);
   int *intbuf = (int *) buf;
   switch (cmd)
     {
@@ -1280,7 +1303,7 @@ fhandler_dev_dsp::ioctl (unsigned int cmd, void *buf)
       CASE (SNDCTL_DSP_STEREO)
       {
 	int nChannels = *intbuf + 1;
-	int res = ioctl (SNDCTL_DSP_CHANNELS, &nChannels);
+	int res = _ioctl (SNDCTL_DSP_CHANNELS, &nChannels);
 	*intbuf = nChannels - 1;
 	return res;
       }
@@ -1372,11 +1395,12 @@ fhandler_dev_dsp::ioctl (unsigned int cmd, void *buf)
 }
 
 void
-fhandler_dev_dsp::fixup_after_fork (HANDLE parent)
+fhandler_dev_dsp::_fixup_after_fork (HANDLE parent)
 { // called from new child process
-  debug_printf ("audio_in=%08x audio_out=%08x",
-		(int)audio_in_, (int)audio_out_);
+  debug_printf ("audio_in=%p audio_out=%p",
+		audio_in_, audio_out_);
 
+  fhandler_base::fixup_after_fork (parent);
   if (audio_in_)
     audio_in_->fork_fixup (parent);
   if (audio_out_)
@@ -1384,10 +1408,10 @@ fhandler_dev_dsp::fixup_after_fork (HANDLE parent)
 }
 
 void
-fhandler_dev_dsp::fixup_after_exec ()
+fhandler_dev_dsp::_fixup_after_exec ()
 {
-  debug_printf ("audio_in=%08x audio_out=%08x, close_on_exec %d",
-		(int) audio_in_, (int) audio_out_, close_on_exec ());
+  debug_printf ("audio_in=%p audio_out=%p, close_on_exec %d",
+		audio_in_, audio_out_, close_on_exec ());
   if (!close_on_exec ())
     {
       audio_in_ = NULL;

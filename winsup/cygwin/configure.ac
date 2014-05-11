@@ -5,9 +5,6 @@ AC_CONFIG_AUX_DIR(..)
 
 . ${srcdir}/../configure.cygwin
 
-AC_WINDOWS_HEADERS
-AC_WINDOWS_LIBS
-
 AC_PROG_INSTALL
 AC_NO_EXECUTABLES
 AC_CANONICAL_SYSTEM
@@ -16,6 +13,10 @@ AC_PROG_CC
 AC_PROG_CXX
 AC_PROG_CPP
 AC_LANG(C)
+
+AC_WINDOWS_HEADERS
+AC_WINDOWS_LIBS
+
 AC_LANG(C++)
 
 AC_CYGWIN_INCLUDES
@@ -55,8 +56,6 @@ no)	 ;;
 esac
 ])
 
-MALLOC_OFILES=malloc.o
-
 dnl The only time we might want to transform the install names
 dnl is for unix x cygwin.  Otherwise we don't.  For now we don't
 dnl transform names.
@@ -73,16 +72,28 @@ dnl   fi
 dnl fi
 
 case "$target_cpu" in
-   i?86) DLL_ENTRY="_dll_entry@12"
+   i?86)
+		DLL_NAME="cygwin1.dll"
+		DLL_ENTRY="_dll_entry@12"
 		DEF_DLL_ENTRY="dll_entry@12"
-		CONFIG_DIR="i386"  ;;
+		DIN_FILE="i686.din"
+		TLSOFFSETS_H="tlsoffsets.h"
+		;;
+   x86_64)
+		DLL_NAME="cygwin1.dll"
+		DLL_ENTRY="dll_entry"
+		DEF_DLL_ENTRY="dll_entry"
+		DIN_FILE="x86_64.din"
+		TLSOFFSETS_H="tlsoffsets64.h"
+		;;
    *)		AC_MSG_ERROR(Invalid target processor \"$target_cpu\") ;;
 esac
 
 AC_CONFIGURE_ARGS
-AC_SUBST(MALLOC_OFILES)
 AC_SUBST(LIBSERVER)
+AC_SUBST(DLL_NAME)
 AC_SUBST(DLL_ENTRY)
 AC_SUBST(DEF_DLL_ENTRY)
-AC_SUBST(CONFIG_DIR)
+AC_SUBST(DIN_FILE)
+AC_SUBST(TLSOFFSETS_H)
 AC_OUTPUT(Makefile)

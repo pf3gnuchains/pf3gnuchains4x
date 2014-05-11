@@ -19,8 +19,6 @@ details. */
 #include <sys/param.h>
 #include "ntdll.h"
 
-#include <wingdi.h>
-#include <winuser.h>
 #define USE_SYS_TYPES_FD_SET
 #include <winsock2.h>
 #include <netdb.h>
@@ -53,7 +51,6 @@ details. */
  * should be >= NOFILE (param.h).
  */
 
-typedef long fd_mask;
 #define UNIX_NFDBITS (sizeof (fd_mask) * NBBY)       /* bits per mask */
 #ifndef unix_howmany
 #define unix_howmany(x,y) (((x)+((y)-1))/(y))
@@ -63,7 +60,7 @@ typedef long fd_mask;
 
 #define NULL_fd_set ((fd_set *) NULL)
 #define sizeof_fd_set(n) \
-  ((unsigned) (NULL_fd_set->fds_bits + unix_howmany ((n), UNIX_NFDBITS)))
+  ((size_t) (NULL_fd_set->fds_bits + unix_howmany ((n), UNIX_NFDBITS)))
 #define UNIX_FD_SET(n, p) \
   ((p)->fds_bits[(n)/UNIX_NFDBITS] |= (1L << ((n) % UNIX_NFDBITS)))
 #define UNIX_FD_CLR(n, p) \
@@ -114,7 +111,7 @@ cygwin_select (int maxfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 	ms = 1;			/* At least 1 ms granularity */
 
       if (to)
-	select_printf ("to->tv_sec %d, to->tv_usec %d, ms %d", to->tv_sec, to->tv_usec, ms);
+	select_printf ("to->tv_sec %ld, to->tv_usec %ld, ms %d", to->tv_sec, to->tv_usec, ms);
       else
 	select_printf ("to NULL, ms %x", ms);
 
@@ -192,8 +189,11 @@ select (int maxfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
 	  copyfd_set (readfds, r, maxfds);
 	  copyfd_set (writefds, w, maxfds);
 	  copyfd_set (exceptfds, e, maxfds);
-	  /* Actually set the bit mask from sel records */
-	  res = (res == select_stuff::select_set_zero) ? 0 : sel.poll (readfds, writefds, exceptfds);
+	  if (res == select_stuff::select_set_zero)
+	    res = 0;
+	  else
+	    /* Set the bit mask from sel records */
+	    res = sel.poll (readfds, writefds, exceptfds) ?: select_stuff::select_loop;
 	}
       /* Always clean up everything here.  If we're looping then build it
 	 all up again.  */
@@ -295,7 +295,7 @@ select_record::dump_select_record ()
 		 read_ready, write_ready, except_ready);
   select_printf ("read_selected %d, write_selected %d, except_selected %d, except_on_write %d",
 		 read_selected, write_selected, except_selected, except_on_write);
-
+                    
   select_printf ("startup %p, peek %p, verify %p cleanup %p, next %p",
 		 startup, peek, verify, cleanup, next);
 }
@@ -392,7 +392,7 @@ next_while:;
     wait_ret = MsgWaitForMultipleObjectsEx (m, w4, ms,
 					    QS_ALLINPUT | QS_ALLPOSTMESSAGE,
 					    MWMO_INPUTAVAILABLE);
-  select_printf ("wait_ret %d.  verifying", wait_ret);
+  select_printf ("wait_ret %d, m = %d.  verifying", wait_ret, m);
 
   wait_states res;
   switch (wait_ret)
@@ -539,7 +539,7 @@ no_verify (select_record *, fd_set *, fd_set *, fd_set *)
 static int
 pipe_data_available (int fd, fhandler_base *fh, HANDLE h, bool writing)
 {
-  IO_STATUS_BLOCK iosb = {0};
+  IO_STATUS_BLOCK iosb = {{0}, 0};
   FILE_PIPE_LOCAL_INFORMATION fpli = {0};
 
   bool res;
@@ -568,7 +568,7 @@ pipe_data_available (int fd, fhandler_base *fh, HANDLE h, bool writing)
        that.  This means that a pipe could still block since you could
        be trying to write more to the pipe than is available in the
        buffer but that is the hazard of select().  */
-    paranoid_printf ("fd %d, %s, write: size %lu, avail %lu", fd,
+    paranoid_printf ("fd %d, %s, write: size %u, avail %u", fd,
 		     fh->get_name (), fpli.OutboundQuota,
 		     fpli.WriteQuotaAvailable);
   else if ((res = (fpli.OutboundQuota < PIPE_BUF &&
@@ -576,7 +576,7 @@ pipe_data_available (int fd, fhandler_base *fh, HANDLE h, bool writing)
     /* If we somehow inherit a tiny pipe (size < PIPE_BUF), then consider
        the pipe writable only if it is completely empty, to minimize the
        probability that a subsequent write will block.  */
-    select_printf ("fd, %s, write tiny pipe: size %lu, avail %lu",
+    select_printf ("fd, %s, write tiny pipe: size %u, avail %u",
 		   fd, fh->get_name (), fpli.OutboundQuota,
 		   fpli.WriteQuotaAvailable);
   return res ?: -!!(fpli.NamedPipeState & FILE_PIPE_CLOSING_STATE);
@@ -1543,6 +1543,8 @@ peek_windows (select_record *me, bool)
   MSG m;
   HANDLE h;
   set_handle_or_return_if_not_open (h, me);
+  /* We need the hWnd value, not the io_handle. */
+  h = ((fhandler_windows *) me->fh)->get_hwnd ();
 
   if (me->read_selected && me->read_ready)
     return 1;
@@ -1577,7 +1579,6 @@ fhandler_windows::select_read (select_stuff *ss)
   s->peek = peek_windows;
   s->read_selected = true;
   s->read_ready = false;
-  s->h = get_handle ();
   s->windows_handle = true;
   return s;
 }
@@ -1592,7 +1593,6 @@ fhandler_windows::select_write (select_stuff *ss)
       s->verify = verify_ok;
     }
   s->peek = peek_windows;
-  s->h = get_handle ();
   s->write_selected = true;
   s->write_ready = true;
   s->windows_handle = true;
@@ -1609,7 +1609,6 @@ fhandler_windows::select_except (select_stuff *ss)
       s->verify = verify_ok;
     }
   s->peek = peek_windows;
-  s->h = get_handle ();
   s->except_selected = true;
   s->except_ready = false;
   s->windows_handle = true;

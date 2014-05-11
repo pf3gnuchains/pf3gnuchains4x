@@ -1,6 +1,6 @@
 // powerpc.cc -- powerpc target support for gold.
 
-// Copyright 2008, 2009, 2010, 2011, 2012 Free Software Foundation, Inc.
+// Copyright 2008, 2009, 2010, 2011, 2012, 2013 Free Software Foundation, Inc.
 // Written by David S. Miller <davem@davemloft.net>
 //        and David Edelsohn <edelsohn@gnu.org>
 
@@ -443,7 +443,7 @@ class Target_powerpc : public Sized_target<size, big_endian>
     : Sized_target<size, big_endian>(&powerpc_info),
       got_(NULL), plt_(NULL), iplt_(NULL), brlt_section_(NULL),
       glink_(NULL), rela_dyn_(NULL), copy_relocs_(elfcpp::R_POWERPC_COPY),
-      dynbss_(NULL), tlsld_got_offset_(-1U),
+      tlsld_got_offset_(-1U),
       stub_tables_(), branch_lookup_table_(), branch_info_(),
       plt_thread_safe_(false)
   {
@@ -735,7 +735,7 @@ class Target_powerpc : public Sized_target<size, big_endian>
 	 p != this->branch_lookup_table_.end();
 	 ++p)
       {
-	elfcpp::Swap<32, big_endian>::writeval(oview + p->second, p->first);
+	elfcpp::Swap<size, big_endian>::writeval(oview + p->second, p->first);
       }
   }
 
@@ -1181,8 +1181,6 @@ class Target_powerpc : public Sized_target<size, big_endian>
   Reloc_section* rela_dyn_;
   // Relocs saved to avoid a COPY reloc.
   Copy_relocs<elfcpp::SHT_RELA, size, big_endian> copy_relocs_;
-  // Space for variables copied with a COPY reloc.
-  Output_data_space* dynbss_;
   // Offset of the GOT entry for local dynamic __tls_get_addr calls.
   unsigned int tlsld_got_offset_;
 
@@ -1219,7 +1217,8 @@ Target::Target_info Target_powerpc<32, true>::powerpc_info =
   0,			// small_common_section_flags
   0,			// large_common_section_flags
   NULL,			// attributes_section
-  NULL			// attributes_vendor
+  NULL,			// attributes_vendor
+  "_start"		// entry_symbol_name
 };
 
 template<>
@@ -1245,7 +1244,8 @@ Target::Target_info Target_powerpc<32, false>::powerpc_info =
   0,			// small_common_section_flags
   0,			// large_common_section_flags
   NULL,			// attributes_section
-  NULL			// attributes_vendor
+  NULL,			// attributes_vendor
+  "_start"		// entry_symbol_name
 };
 
 template<>
@@ -1271,7 +1271,8 @@ Target::Target_info Target_powerpc<64, true>::powerpc_info =
   0,			// small_common_section_flags
   0,			// large_common_section_flags
   NULL,			// attributes_section
-  NULL			// attributes_vendor
+  NULL,			// attributes_vendor
+  "_start"		// entry_symbol_name
 };
 
 template<>
@@ -1297,7 +1298,8 @@ Target::Target_info Target_powerpc<64, false>::powerpc_info =
   0,			// small_common_section_flags
   0,			// large_common_section_flags
   NULL,			// attributes_section
-  NULL			// attributes_vendor
+  NULL,			// attributes_vendor
+  "_start"		// entry_symbol_name
 };
 
 inline bool
@@ -1985,32 +1987,88 @@ public:
       header_index_(size == 32 ? 0x2000 : 0)
   { }
 
-  class Got_entry;
-
-  // Create a new GOT entry and return its offset.
-  unsigned int
-  add_got_entry(Got_entry got_entry)
+  // Override all the Output_data_got methods we use so as to first call
+  // reserve_ent().
+  bool
+  add_global(Symbol* gsym, unsigned int got_type)
   {
     this->reserve_ent();
-    return Output_data_got<size, big_endian>::add_got_entry(got_entry);
+    return Output_data_got<size, big_endian>::add_global(gsym, got_type);
   }
 
-  // Create a pair of new GOT entries and return the offset of the first.
-  unsigned int
-  add_got_entry_pair(Got_entry got_entry_1, Got_entry got_entry_2)
+  bool
+  add_global_plt(Symbol* gsym, unsigned int got_type)
+  {
+    this->reserve_ent();
+    return Output_data_got<size, big_endian>::add_global_plt(gsym, got_type);
+  }
+
+  bool
+  add_global_tls(Symbol* gsym, unsigned int got_type)
+  { return this->add_global_plt(gsym, got_type); }
+
+  void
+  add_global_with_rel(Symbol* gsym, unsigned int got_type,
+		      Output_data_reloc_generic* rel_dyn, unsigned int r_type)
+  {
+    this->reserve_ent();
+    Output_data_got<size, big_endian>::
+      add_global_with_rel(gsym, got_type, rel_dyn, r_type);
+  }
+
+  void
+  add_global_pair_with_rel(Symbol* gsym, unsigned int got_type,
+			   Output_data_reloc_generic* rel_dyn,
+			   unsigned int r_type_1, unsigned int r_type_2)
   {
     this->reserve_ent(2);
-    return Output_data_got<size, big_endian>::add_got_entry_pair(got_entry_1,
-								 got_entry_2);
+    Output_data_got<size, big_endian>::
+      add_global_pair_with_rel(gsym, got_type, rel_dyn, r_type_1, r_type_2);
+  }
+
+  bool
+  add_local(Relobj* object, unsigned int sym_index, unsigned int got_type)
+  {
+    this->reserve_ent();
+    return Output_data_got<size, big_endian>::add_local(object, sym_index,
+							got_type);
+  }
+
+  bool
+  add_local_plt(Relobj* object, unsigned int sym_index, unsigned int got_type)
+  {
+    this->reserve_ent();
+    return Output_data_got<size, big_endian>::add_local_plt(object, sym_index,
+							    got_type);
+  }
+
+  bool
+  add_local_tls(Relobj* object, unsigned int sym_index, unsigned int got_type)
+  { return this->add_local_plt(object, sym_index, got_type); }
+
+  void
+  add_local_tls_pair(Relobj* object, unsigned int sym_index,
+		     unsigned int got_type,
+		     Output_data_reloc_generic* rel_dyn,
+		     unsigned int r_type)
+  {
+    this->reserve_ent(2);
+    Output_data_got<size, big_endian>::
+      add_local_tls_pair(object, sym_index, got_type, rel_dyn, r_type);
+  }
+
+  unsigned int
+  add_constant(Valtype constant)
+  {
+    this->reserve_ent();
+    return Output_data_got<size, big_endian>::add_constant(constant);
   }
 
   unsigned int
   add_constant_pair(Valtype c1, Valtype c2)
   {
     this->reserve_ent(2);
-    unsigned int got_offset = this->add_constant(c1);
-    this->add_constant(c2);
-    return got_offset;
+    return Output_data_got<size, big_endian>::add_constant_pair(c1, c2);
   }
 
   // Offset of _GLOBAL_OFFSET_TABLE_.
@@ -2506,7 +2564,7 @@ Target_powerpc<size, big_endian>::do_relax(int pass,
 	      "GOMP_parallel_loop_dynamic_start",
 	      "GOMP_parallel_loop_guided_start",
 	      "GOMP_parallel_loop_runtime_start",
-	      "GOMP_parallel_sections_start", 
+	      "GOMP_parallel_sections_start",
 	    };
 
 	  if (parameters->options().shared())
@@ -2628,7 +2686,7 @@ Target_powerpc<size, big_endian>::do_relax(int pass,
       && parameters->options().output_is_position_independent())
     {
       // Fill in the BRLT relocs.
-      this->brlt_section_->reset_data_size();
+      this->brlt_section_->reset_brlt_sizes();
       for (typename Branch_lookup_table::const_iterator p
 	     = this->branch_lookup_table_.begin();
 	   p != this->branch_lookup_table_.end();
@@ -2636,7 +2694,7 @@ Target_powerpc<size, big_endian>::do_relax(int pass,
 	{
 	  this->brlt_section_->add_reloc(p->first, p->second);
 	}
-      this->brlt_section_->finalize_data_size();
+      this->brlt_section_->finalize_brlt_sizes();
     }
   return again;
 }
@@ -3012,6 +3070,20 @@ class Output_data_brlt_powerpc : public Output_section_data_build
       rel_(brlt_rel),
       targ_(targ)
   { }
+
+  void
+  reset_brlt_sizes()
+  {
+    this->reset_data_size();
+    this->rel_->reset_data_size();
+  }
+
+  void
+  finalize_brlt_sizes()
+  {
+    this->finalize_data_size();
+    this->rel_->finalize_data_size();
+  }
 
   // Add a reloc for an entry in the BRLT.
   void
@@ -5827,7 +5899,7 @@ Target_powerpc<size, big_endian>::do_gc_add_reference(
 
   Powerpc_relobj<size, big_endian>* ppc_object
     = static_cast<Powerpc_relobj<size, big_endian>*>(dst_obj);
-  if (dst_shndx == ppc_object->opd_shndx())
+  if (dst_shndx != 0 && dst_shndx == ppc_object->opd_shndx())
     {
       if (ppc_object->opd_valid())
 	{
@@ -5859,7 +5931,7 @@ Target_powerpc<size, big_endian>::do_gc_mark_symbol(
 	= static_cast<Powerpc_relobj<size, big_endian>*>(sym->object());
       bool is_ordinary;
       unsigned int shndx = sym->shndx(&is_ordinary);
-      if (is_ordinary && shndx == ppc_object->opd_shndx())
+      if (is_ordinary && shndx != 0 && shndx == ppc_object->opd_shndx())
 	{
 	  Sized_symbol<size>* gsym = symtab->get_sized_symbol<size>(sym);
 	  Address dst_off = gsym->value();
@@ -5882,7 +5954,7 @@ void
 Target_powerpc<size, big_endian>::do_function_location(
     Symbol_location* loc) const
 {
-  if (size == 64)
+  if (size == 64 && loc->shndx != 0)
     {
       if (loc->object->is_dynamic())
 	{
@@ -6183,8 +6255,9 @@ Target_powerpc<size, big_endian>::symval_for_branch(
   if (shndx == 0)
     return value;
   Address opd_addr = symobj->get_output_section_offset(shndx);
-  gold_assert(opd_addr != invalid_address);
-  opd_addr += symobj->output_section(shndx)->address();
+  if (opd_addr == invalid_address)
+    return value;
+  opd_addr += symobj->output_section_address(shndx);
   if (value >= opd_addr && value < opd_addr + symobj->section_size(shndx))
     {
       Address sec_off;
@@ -6221,6 +6294,9 @@ Target_powerpc<size, big_endian>::Relocate::relocate(
     Address address,
     section_size_type view_size)
 {
+  if (view == NULL)
+    return true;
+
   switch (this->maybe_skip_tls_get_addr_call(r_type, gsym))
     {
     case Track_tls::NOT_EXPECTED:
@@ -6328,10 +6404,13 @@ Target_powerpc<size, big_endian>::Relocate::relocate(
 	    }
 	  if (!can_plt_call)
 	    {
-	      // This is not an error in one special case: A self
-	      // call.  It isn't possible to cheaply verify we have
-	      // such a call so just check for a call to the same
-	      // section.
+	      // g++ as of 20130507 emits self-calls without a
+	      // following nop.  This is arguably wrong since we have
+	      // conflicting information.  On the one hand a global
+	      // symbol and on the other a local call sequence, but
+	      // don't error for this special case.
+	      // It isn't possible to cheaply verify we have exactly
+	      // such a call.  Allow all calls to the same section.
 	      bool ok = false;
 	      Address code = value;
 	      if (gsym->source() == Symbol::FROM_OBJECT

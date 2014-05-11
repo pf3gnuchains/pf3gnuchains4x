@@ -39,6 +39,7 @@
 #include "gdb_assert.h"
 #include "charset.h"
 #include "valprint.h"
+#include "cp-support.h"
 
 /* Local functions */
 
@@ -117,8 +118,9 @@ get_dynamics_objfile (struct gdbarch *gdbarch)
 
       /* Mark it as shared so that it is cleared when the inferior is
 	 re-run.  */
-      dynamics_objfile = allocate_objfile (NULL, OBJF_SHARED);
-      dynamics_objfile->gdbarch = gdbarch;
+      dynamics_objfile = allocate_objfile (NULL, NULL,
+					   OBJF_SHARED | OBJF_NOT_FILENAME);
+      dynamics_objfile->per_bfd->gdbarch = gdbarch;
 
       data = XCNEW (struct jv_per_objfile_data);
       set_objfile_data (dynamics_objfile, jv_dynamics_objfile_data_key, data);
@@ -1010,7 +1012,7 @@ nosideret:
 
 static char *java_demangle (const char *mangled, int options)
 {
-  return cplus_demangle (mangled, options | DMGL_JAVA);
+  return gdb_demangle (mangled, options | DMGL_JAVA);
 }
 
 /* Find the member function name of the demangled name NAME.  NAME

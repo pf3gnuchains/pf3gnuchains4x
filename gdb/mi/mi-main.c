@@ -52,6 +52,9 @@
 #include "ctf.h"
 #include "ada-lang.h"
 #include "linespec.h"
+#ifdef HAVE_PYTHON
+#include "python/python-internal.h"
+#endif
 
 #include <ctype.h>
 #include <sys/time.h>
@@ -100,7 +103,8 @@ static void mi_execute_async_cli_command (char *cli_command,
 					  char **argv, int argc);
 static int register_changed_p (int regnum, struct regcache *,
 			       struct regcache *);
-static void get_register (struct frame_info *, int regnum, int format);
+static void output_register (struct frame_info *, int regnum, int format,
+			     int skip_unavailable);
 
 /* Command implementations.  FIXME: Is this libgdb?  No.  This is the MI
    layer that calls libgdb.  Any operation used in the below should be
@@ -190,7 +194,7 @@ mi_cmd_exec_return (char *command, char **argv, int argc)
 
   /* Because we have called return_command with from_tty = 0, we need
      to print the frame here.  */
-  print_stack_frame (get_selected_frame (NULL), 1, LOC_AND_ADDRESS);
+  print_stack_frame (get_selected_frame (NULL), 1, LOC_AND_ADDRESS, 1);
 }
 
 void
@@ -206,7 +210,7 @@ proceed_thread (struct thread_info *thread, int pid)
   if (!is_stopped (thread->ptid))
     return;
 
-  if (pid != 0 && PIDGET (thread->ptid) != pid)
+  if (pid != 0 && ptid_get_pid (thread->ptid) != pid)
     return;
 
   switch_to_thread (thread->ptid);
@@ -316,7 +320,7 @@ interrupt_thread_callback (struct thread_info *thread, void *arg)
   if (!is_running (thread->ptid))
     return 0;
 
-  if (PIDGET (thread->ptid) != pid)
+  if (ptid_get_pid (thread->ptid) != pid)
     return 0;
 
   target_stop (thread->ptid);
@@ -360,9 +364,19 @@ mi_cmd_exec_interrupt (char *command, char **argv, int argc)
     }
 }
 
+/* Callback for iterate_over_inferiors which starts the execution
+   of the given inferior.
+
+   ARG is a pointer to an integer whose value, if non-zero, indicates
+   that the program should be stopped when reaching the main subprogram
+   (similar to what the CLI "start" command does).  */
+
 static int
 run_one_inferior (struct inferior *inf, void *arg)
 {
+  int start_p = *(int *) arg;
+  const char *run_cmd = start_p ? "start" : "run";
+
   if (inf->pid != 0)
     {
       if (inf->pid != ptid_get_pid (inferior_ptid))
@@ -382,7 +396,7 @@ run_one_inferior (struct inferior *inf, void *arg)
       switch_to_thread (null_ptid);
       set_current_program_space (inf->pspace);
     }
-  mi_execute_cli_command ("run", target_can_async_p (),
+  mi_execute_cli_command (run_cmd, target_can_async_p (),
 			  target_can_async_p () ? "&" : NULL);
   return 0;
 }
@@ -390,16 +404,54 @@ run_one_inferior (struct inferior *inf, void *arg)
 void
 mi_cmd_exec_run (char *command, char **argv, int argc)
 {
+  int i;
+  int start_p = 0;
+
+  /* Parse the command options.  */
+  enum opt
+    {
+      START_OPT,
+    };
+  static const struct mi_opt opts[] =
+    {
+	{"-start", START_OPT, 0},
+	{NULL, 0, 0},
+    };
+
+  int oind = 0;
+  char *oarg;
+
+  while (1)
+    {
+      int opt = mi_getopt ("-exec-run", argc, argv, opts, &oind, &oarg);
+
+      if (opt < 0)
+	break;
+      switch ((enum opt) opt)
+	{
+	case START_OPT:
+	  start_p = 1;
+	  break;
+	}
+    }
+
+  /* This command does not accept any argument.  Make sure the user
+     did not provide any.  */
+  if (oind != argc)
+    error (_("Invalid argument: %s"), argv[oind]);
+
   if (current_context->all)
     {
       struct cleanup *back_to = save_current_space_and_thread ();
 
-      iterate_over_inferiors (run_one_inferior, NULL);
+      iterate_over_inferiors (run_one_inferior, &start_p);
       do_cleanups (back_to);
     }
   else
     {
-      mi_execute_cli_command ("run", target_can_async_p (),
+      const char *run_cmd = start_p ? "start" : "run";
+
+      mi_execute_cli_command (run_cmd, target_can_async_p (),
 			      target_can_async_p () ? "&" : NULL);
     }
 }
@@ -410,7 +462,7 @@ find_thread_of_process (struct thread_info *ti, void *p)
 {
   int pid = *(int *)p;
 
-  if (PIDGET (ti->ptid) == pid && !is_exited (ti->ptid))
+  if (ptid_get_pid (ti->ptid) == pid && !is_exited (ti->ptid))
     return 1;
 
   return 0;
@@ -509,8 +561,6 @@ mi_cmd_thread_info (char *command, char **argv, int argc)
   print_thread_info (current_uiout, argv[0], -1);
 }
 
-DEF_VEC_I(int);
-
 struct collect_cores_data
 {
   int pid;
@@ -571,10 +621,10 @@ print_one_inferior (struct inferior *inferior, void *xdata)
       if (inferior->pid != 0)
 	ui_out_field_int (uiout, "pid", inferior->pid);
 
-      if (inferior->pspace->ebfd)
+      if (inferior->pspace->pspace_exec_filename != NULL)
 	{
 	  ui_out_field_string (uiout, "executable",
-			       bfd_get_filename (inferior->pspace->ebfd));
+			       inferior->pspace->pspace_exec_filename);
 	}
 
       data.cores = 0;
@@ -678,6 +728,7 @@ list_available_thread_groups (VEC (int) *ids, int recurse)
   struct osdata_item *item;
   int ix_items;
   struct ui_out *uiout = current_uiout;
+  struct cleanup *cleanup;
 
   /* This keeps a map from integer (pid) to VEC (struct osdata_item *)*
      The vector contains information about all threads for the given pid.
@@ -687,7 +738,7 @@ list_available_thread_groups (VEC (int) *ids, int recurse)
 
   /* get_osdata will throw if it cannot return data.  */
   data = get_osdata ("processes");
-  make_cleanup_osdata_free (data);
+  cleanup = make_cleanup_osdata_free (data);
 
   if (recurse)
     {
@@ -790,6 +841,8 @@ list_available_thread_groups (VEC (int) *ids, int recurse)
 
       do_cleanups (back_to);
     }
+
+  do_cleanups (cleanup);
 }
 
 void
@@ -1066,7 +1119,18 @@ mi_cmd_data_list_register_values (char *command, char **argv, int argc)
   struct gdbarch *gdbarch;
   int regnum, numregs, format;
   int i;
-  struct cleanup *list_cleanup, *tuple_cleanup;
+  struct cleanup *list_cleanup;
+  int skip_unavailable = 0;
+  int oind = 0;
+  enum opt
+  {
+    SKIP_UNAVAILABLE,
+  };
+  static const struct mi_opt opts[] =
+    {
+      {"-skip-unavailable", SKIP_UNAVAILABLE, 0},
+      { 0, 0, 0 }
+    };
 
   /* Note that the test for a valid register must include checking the
      gdbarch_register_name because gdbarch_num_regs may be allocated
@@ -1075,11 +1139,28 @@ mi_cmd_data_list_register_values (char *command, char **argv, int argc)
      will change depending upon the particular processor being
      debugged.  */
 
-  if (argc == 0)
-    error (_("-data-list-register-values: Usage: "
-	     "-data-list-register-values <format> [<regnum1>...<regnumN>]"));
+  while (1)
+    {
+      char *oarg;
+      int opt = mi_getopt ("-data-list-register-values", argc, argv,
+			   opts, &oind, &oarg);
 
-  format = (int) argv[0][0];
+      if (opt < 0)
+	break;
+      switch ((enum opt) opt)
+	{
+	case SKIP_UNAVAILABLE:
+	  skip_unavailable = 1;
+	  break;
+	}
+    }
+
+  if (argc - oind < 1)
+    error (_("-data-list-register-values: Usage: "
+	     "-data-list-register-values [--skip-unavailable] <format>"
+	     " [<regnum1>...<regnumN>]"));
+
+  format = (int) argv[oind][0];
 
   frame = get_selected_frame (NULL);
   gdbarch = get_frame_arch (frame);
@@ -1087,7 +1168,7 @@ mi_cmd_data_list_register_values (char *command, char **argv, int argc)
 
   list_cleanup = make_cleanup_ui_out_list_begin_end (uiout, "register-values");
 
-  if (argc == 1)
+  if (argc - oind == 1)
     {
       /* No args, beside the format: do all the regs.  */
       for (regnum = 0;
@@ -1097,15 +1178,13 @@ mi_cmd_data_list_register_values (char *command, char **argv, int argc)
 	  if (gdbarch_register_name (gdbarch, regnum) == NULL
 	      || *(gdbarch_register_name (gdbarch, regnum)) == '\0')
 	    continue;
-	  tuple_cleanup = make_cleanup_ui_out_tuple_begin_end (uiout, NULL);
-	  ui_out_field_int (uiout, "number", regnum);
-	  get_register (frame, regnum, format);
-	  do_cleanups (tuple_cleanup);
+
+	  output_register (frame, regnum, format, skip_unavailable);
 	}
     }
 
   /* Else, list of register #s, just do listed regs.  */
-  for (i = 1; i < argc; i++)
+  for (i = 1 + oind; i < argc; i++)
     {
       regnum = atoi (argv[i]);
 
@@ -1113,71 +1192,52 @@ mi_cmd_data_list_register_values (char *command, char **argv, int argc)
 	  && regnum < numregs
 	  && gdbarch_register_name (gdbarch, regnum) != NULL
 	  && *gdbarch_register_name (gdbarch, regnum) != '\000')
-	{
-	  tuple_cleanup = make_cleanup_ui_out_tuple_begin_end (uiout, NULL);
-	  ui_out_field_int (uiout, "number", regnum);
-	  get_register (frame, regnum, format);
-	  do_cleanups (tuple_cleanup);
-	}
+	output_register (frame, regnum, format, skip_unavailable);
       else
 	error (_("bad register number"));
     }
   do_cleanups (list_cleanup);
 }
 
-/* Output one register's contents in the desired format.  */
+/* Output one register REGNUM's contents in the desired FORMAT.  If
+   SKIP_UNAVAILABLE is true, skip the register if it is
+   unavailable.  */
 
 static void
-get_register (struct frame_info *frame, int regnum, int format)
+output_register (struct frame_info *frame, int regnum, int format,
+		 int skip_unavailable)
 {
   struct gdbarch *gdbarch = get_frame_arch (frame);
   struct ui_out *uiout = current_uiout;
-  struct value *val;
+  struct value *val = value_of_register (regnum, frame);
+  struct cleanup *tuple_cleanup;
+  struct value_print_options opts;
+  struct ui_file *stb;
+
+  if (skip_unavailable && !value_entirely_available (val))
+    return;
+
+  tuple_cleanup = make_cleanup_ui_out_tuple_begin_end (uiout, NULL);
+  ui_out_field_int (uiout, "number", regnum);
 
   if (format == 'N')
     format = 0;
 
-  val = get_frame_register_value (frame, regnum);
-
-  if (value_optimized_out (val))
-    error (_("Optimized out"));
-
   if (format == 'r')
-    {
-      int j;
-      char *ptr, buf[1024];
-      const gdb_byte *valaddr = value_contents_for_printing (val);
+    format = 'z';
 
-      strcpy (buf, "0x");
-      ptr = buf + 2;
-      for (j = 0; j < register_size (gdbarch, regnum); j++)
-	{
-	  int idx = gdbarch_byte_order (gdbarch) == BFD_ENDIAN_BIG ?
-		    j : register_size (gdbarch, regnum) - 1 - j;
+  stb = mem_fileopen ();
+  make_cleanup_ui_file_delete (stb);
 
-	  sprintf (ptr, "%02x", (unsigned char) valaddr[idx]);
-	  ptr += 2;
-	}
-      ui_out_field_string (uiout, "value", buf);
-    }
-  else
-    {
-      struct value_print_options opts;
-      struct ui_file *stb;
-      struct cleanup *old_chain;
+  get_formatted_print_options (&opts, format);
+  opts.deref_ref = 1;
+  val_print (value_type (val),
+	     value_contents_for_printing (val),
+	     value_embedded_offset (val), 0,
+	     stb, 0, val, &opts, current_language);
+  ui_out_field_stream (uiout, "value", stb);
 
-      stb = mem_fileopen ();
-      old_chain = make_cleanup_ui_file_delete (stb);
-
-      get_formatted_print_options (&opts, format);
-      opts.deref_ref = 1;
-      val_print (value_type (val),
-		 value_contents_for_printing (val),
-		 value_embedded_offset (val), 0,
-		 stb, 0, val, &opts, current_language);
-      ui_out_field_stream (uiout, "value", stb);
-      do_cleanups (old_chain);
-    }
+  do_cleanups (tuple_cleanup);
 }
 
 /* Write given values into registers. The registers and values are
@@ -1757,7 +1817,8 @@ mi_cmd_list_features (char *command, char **argv, int argc)
       ui_out_field_string (uiout, NULL, "ada-task-info");
       
 #if HAVE_PYTHON
-      ui_out_field_string (uiout, NULL, "python");
+      if (gdb_python_initialized)
+	ui_out_field_string (uiout, NULL, "python");
 #endif
       
       do_cleanups (cleanup);
@@ -2471,7 +2532,7 @@ mi_cmd_trace_find (char *command, char **argv, int argc)
     error (_("Invalid mode '%s'"), mode);
 
   if (has_stack_frames () || get_traceframe_number () >= 0)
-    print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC);
+    print_stack_frame (get_selected_frame (NULL), 1, LOC_AND_ADDRESS, 1);
 }
 
 void
@@ -2547,4 +2608,299 @@ mi_cmd_ada_task_info (char *command, char **argv, int argc)
     error (_("Invalid MI command"));
 
   print_ada_task_info (current_uiout, argv[0], current_inferior ());
+}
+
+/* Print EXPRESSION according to VALUES.  */
+
+static void
+print_variable_or_computed (char *expression, enum print_values values)
+{
+  struct expression *expr;
+  struct cleanup *old_chain;
+  struct value *val;
+  struct ui_file *stb;
+  struct value_print_options opts;
+  struct type *type;
+  struct ui_out *uiout = current_uiout;
+
+  stb = mem_fileopen ();
+  old_chain = make_cleanup_ui_file_delete (stb);
+
+  expr = parse_expression (expression);
+
+  make_cleanup (free_current_contents, &expr);
+
+  if (values == PRINT_SIMPLE_VALUES)
+    val = evaluate_type (expr);
+  else
+    val = evaluate_expression (expr);
+
+  if (values != PRINT_NO_VALUES)
+    make_cleanup_ui_out_tuple_begin_end (uiout, NULL);
+  ui_out_field_string (uiout, "name", expression);
+
+  switch (values)
+    {
+    case PRINT_SIMPLE_VALUES:
+      type = check_typedef (value_type (val));
+      type_print (value_type (val), "", stb, -1);
+      ui_out_field_stream (uiout, "type", stb);
+      if (TYPE_CODE (type) != TYPE_CODE_ARRAY
+	  && TYPE_CODE (type) != TYPE_CODE_STRUCT
+	  && TYPE_CODE (type) != TYPE_CODE_UNION)
+	{
+	  struct value_print_options opts;
+
+	  get_no_prettyformat_print_options (&opts);
+	  opts.deref_ref = 1;
+	  common_val_print (val, stb, 0, &opts, current_language);
+	  ui_out_field_stream (uiout, "value", stb);
+	}
+      break;
+    case PRINT_ALL_VALUES:
+      {
+	struct value_print_options opts;
+
+	get_no_prettyformat_print_options (&opts);
+	opts.deref_ref = 1;
+	common_val_print (val, stb, 0, &opts, current_language);
+	ui_out_field_stream (uiout, "value", stb);
+      }
+      break;
+    }
+
+  do_cleanups (old_chain);
+}
+
+/* Implement the "-trace-frame-collected" command.  */
+
+void
+mi_cmd_trace_frame_collected (char *command, char **argv, int argc)
+{
+  struct cleanup *old_chain;
+  struct bp_location *tloc;
+  int stepping_frame;
+  struct collection_list *clist;
+  struct collection_list tracepoint_list, stepping_list;
+  struct traceframe_info *tinfo;
+  int oind = 0;
+  int var_print_values = PRINT_ALL_VALUES;
+  int comp_print_values = PRINT_ALL_VALUES;
+  int registers_format = 'x';
+  int memory_contents = 0;
+  struct ui_out *uiout = current_uiout;
+  enum opt
+  {
+    VAR_PRINT_VALUES,
+    COMP_PRINT_VALUES,
+    REGISTERS_FORMAT,
+    MEMORY_CONTENTS,
+  };
+  static const struct mi_opt opts[] =
+    {
+      {"-var-print-values", VAR_PRINT_VALUES, 1},
+      {"-comp-print-values", COMP_PRINT_VALUES, 1},
+      {"-registers-format", REGISTERS_FORMAT, 1},
+      {"-memory-contents", MEMORY_CONTENTS, 0},
+      { 0, 0, 0 }
+    };
+
+  while (1)
+    {
+      char *oarg;
+      int opt = mi_getopt ("-trace-frame-collected", argc, argv, opts,
+			   &oind, &oarg);
+      if (opt < 0)
+	break;
+      switch ((enum opt) opt)
+	{
+	case VAR_PRINT_VALUES:
+	  var_print_values = mi_parse_print_values (oarg);
+	  break;
+	case COMP_PRINT_VALUES:
+	  comp_print_values = mi_parse_print_values (oarg);
+	  break;
+	case REGISTERS_FORMAT:
+	  registers_format = oarg[0];
+	case MEMORY_CONTENTS:
+	  memory_contents = 1;
+	  break;
+	}
+    }
+
+  if (oind != argc)
+    error (_("Usage: -trace-frame-collected "
+	     "[--var-print-values PRINT_VALUES] "
+	     "[--comp-print-values PRINT_VALUES] "
+	     "[--registers-format FORMAT]"
+	     "[--memory-contents]"));
+
+  /* This throws an error is not inspecting a trace frame.  */
+  tloc = get_traceframe_location (&stepping_frame);
+
+  /* This command only makes sense for the current frame, not the
+     selected frame.  */
+  old_chain = make_cleanup_restore_current_thread ();
+  select_frame (get_current_frame ());
+
+  encode_actions_and_make_cleanup (tloc, &tracepoint_list,
+				   &stepping_list);
+
+  if (stepping_frame)
+    clist = &stepping_list;
+  else
+    clist = &tracepoint_list;
+
+  tinfo = get_traceframe_info ();
+
+  /* Explicitly wholly collected variables.  */
+  {
+    struct cleanup *list_cleanup;
+    char *p;
+    int i;
+
+    list_cleanup = make_cleanup_ui_out_list_begin_end (uiout,
+						       "explicit-variables");
+    for (i = 0; VEC_iterate (char_ptr, clist->wholly_collected, i, p); i++)
+      print_variable_or_computed (p, var_print_values);
+    do_cleanups (list_cleanup);
+  }
+
+  /* Computed expressions.  */
+  {
+    struct cleanup *list_cleanup;
+    char *p;
+    int i;
+
+    list_cleanup
+      = make_cleanup_ui_out_list_begin_end (uiout,
+					    "computed-expressions");
+    for (i = 0; VEC_iterate (char_ptr, clist->computed, i, p); i++)
+      print_variable_or_computed (p, comp_print_values);
+    do_cleanups (list_cleanup);
+  }
+
+  /* Registers.  Given pseudo-registers, and that some architectures
+     (like MIPS) actually hide the raw registers, we don't go through
+     the trace frame info, but instead consult the register cache for
+     register availability.  */
+  {
+    struct cleanup *list_cleanup;
+    struct frame_info *frame;
+    struct gdbarch *gdbarch;
+    int regnum;
+    int numregs;
+
+    list_cleanup = make_cleanup_ui_out_list_begin_end (uiout, "registers");
+
+    frame = get_selected_frame (NULL);
+    gdbarch = get_frame_arch (frame);
+    numregs = gdbarch_num_regs (gdbarch) + gdbarch_num_pseudo_regs (gdbarch);
+
+    for (regnum = 0; regnum < numregs; regnum++)
+      {
+	if (gdbarch_register_name (gdbarch, regnum) == NULL
+	    || *(gdbarch_register_name (gdbarch, regnum)) == '\0')
+	  continue;
+
+	output_register (frame, regnum, registers_format, 1);
+      }
+
+    do_cleanups (list_cleanup);
+  }
+
+  /* Trace state variables.  */
+  {
+    struct cleanup *list_cleanup;
+    int tvar;
+    char *tsvname;
+    int i;
+
+    list_cleanup = make_cleanup_ui_out_list_begin_end (uiout, "tvars");
+
+    tsvname = NULL;
+    make_cleanup (free_current_contents, &tsvname);
+
+    for (i = 0; VEC_iterate (int, tinfo->tvars, i, tvar); i++)
+      {
+	struct cleanup *cleanup_child;
+	struct trace_state_variable *tsv;
+
+	tsv = find_trace_state_variable_by_number (tvar);
+
+	cleanup_child = make_cleanup_ui_out_tuple_begin_end (uiout, NULL);
+
+	if (tsv != NULL)
+	  {
+	    tsvname = xrealloc (tsvname, strlen (tsv->name) + 2);
+	    tsvname[0] = '$';
+	    strcpy (tsvname + 1, tsv->name);
+	    ui_out_field_string (uiout, "name", tsvname);
+
+	    tsv->value_known = target_get_trace_state_variable_value (tsv->number,
+								      &tsv->value);
+	    ui_out_field_int (uiout, "current", tsv->value);
+	  }
+	else
+	  {
+	    ui_out_field_skip (uiout, "name");
+	    ui_out_field_skip (uiout, "current");
+	  }
+
+	do_cleanups (cleanup_child);
+      }
+
+    do_cleanups (list_cleanup);
+  }
+
+  /* Memory.  */
+  {
+    struct cleanup *list_cleanup;
+    VEC(mem_range_s) *available_memory = NULL;
+    struct mem_range *r;
+    int i;
+
+    traceframe_available_memory (&available_memory, 0, ULONGEST_MAX);
+    make_cleanup (VEC_cleanup(mem_range_s), &available_memory);
+
+    list_cleanup = make_cleanup_ui_out_list_begin_end (uiout, "memory");
+
+    for (i = 0; VEC_iterate (mem_range_s, available_memory, i, r); i++)
+      {
+	struct cleanup *cleanup_child;
+	gdb_byte *data;
+	struct gdbarch *gdbarch = target_gdbarch ();
+
+	cleanup_child = make_cleanup_ui_out_tuple_begin_end (uiout, NULL);
+
+	ui_out_field_core_addr (uiout, "address", gdbarch, r->start);
+	ui_out_field_int (uiout, "length", r->length);
+
+	data = xmalloc (r->length);
+	make_cleanup (xfree, data);
+
+	if (memory_contents)
+	  {
+	    if (target_read_memory (r->start, data, r->length) == 0)
+	      {
+		int m;
+		char *data_str, *p;
+
+		data_str = xmalloc (r->length * 2 + 1);
+		make_cleanup (xfree, data_str);
+
+		for (m = 0, p = data_str; m < r->length; ++m, p += 2)
+		  sprintf (p, "%02x", data[m]);
+		ui_out_field_string (uiout, "contents", data_str);
+	      }
+	    else
+	      ui_out_field_skip (uiout, "contents");
+	  }
+	do_cleanups (cleanup_child);
+      }
+
+    do_cleanups (list_cleanup);
+  }
+
+  do_cleanups (old_chain);
 }

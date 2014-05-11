@@ -1,6 +1,6 @@
 /* fhandler_netdrive.cc: fhandler for // and //MACHINE handling
 
-   Copyright 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2013 Red Hat, Inc.
+   Copyright 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -17,7 +17,6 @@ details. */
 #include "dtable.h"
 #include "cygheap.h"
 #include "cygthread.h"
-#include <winnetwk.h>
 
 #include <dirent.h>
 
@@ -175,7 +174,7 @@ fhandler_netdrive::fhandler_netdrive ():
 }
 
 int __reg2
-fhandler_netdrive::fstat (struct __stat64 *buf)
+fhandler_netdrive::fstat (struct stat *buf)
 {
   const char *path = get_name ();
   debug_printf ("fstat (%s)", path);
@@ -246,7 +245,7 @@ fhandler_netdrive::readdir (DIR *dir, dirent *de)
 	  de->d_ino = readdir_get_ino (nro->lpRemoteName, false);
 	  /* We can't trust remote inode numbers of only 32 bit.  That means,
 	     remote NT4 NTFS, as well as shares of Samba version < 3.0. */
-	  if (de->d_ino <= UINT_MAX)
+	  if (de->d_ino <= UINT32_MAX)
 	    de->d_ino = hash_path_name (0, nro->lpRemoteName);
 	}
       de->d_type = DT_DIR;
@@ -295,30 +294,23 @@ fhandler_netdrive::closedir (DIR *dir)
 int
 fhandler_netdrive::open (int flags, mode_t mode)
 {
-  int res = fhandler_virtual::open (flags, mode);
-  if (!res)
-    goto out;
-
-  nohandle (true);
-
   if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL))
     {
       set_errno (EEXIST);
-      res = 0;
-      goto out;
+      return 0;
     }
-  else if (flags & O_WRONLY)
+  if (flags & O_WRONLY)
     {
       set_errno (EISDIR);
-      res = 0;
-      goto out;
+      return 0;
     }
-
-  res = 1;
-  set_flags ((flags & ~O_TEXT) | O_BINARY | O_DIROPEN);
-  set_open_status ();
-out:
-  syscall_printf ("%d = fhandler_netdrive::open(%p, %d)", res, flags, mode);
-  return res;
+  /* Open a fake handle to \\Device\\Null */
+  return open_null (flags);
 }
 
+int
+fhandler_netdrive::close ()
+{
+  /* Skip fhandler_virtual::close, which is a no-op. */
+  return fhandler_base::close ();
+}

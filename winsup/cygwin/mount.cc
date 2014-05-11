@@ -1,7 +1,7 @@
 /* mount.cc: mount handling.
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
-   2007, 2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
+   2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -14,10 +14,6 @@ details. */
 #include <mntent.h>
 #include <ctype.h>
 #include <winioctl.h>
-#include <wingdi.h>
-#include <winuser.h>
-#include <winnetwk.h>
-#include <shlobj.h>
 #include <cygwin/version.h>
 #include "cygerrno.h"
 #include "security.h"
@@ -224,7 +220,7 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 	}
       if (!NT_SUCCESS (status))
 	{
-	  debug_printf ("Cannot access path %S, status %08lx",
+	  debug_printf ("Cannot access path %S, status %y",
 			attr.ObjectName, status);
 	  return false;
 	}
@@ -262,20 +258,20 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 					   FileFsAttributeInformation);
   if (no_media || !NT_SUCCESS (status))
     {
-      debug_printf ("Cannot get volume attributes (%S), %08lx",
+      debug_printf ("Cannot get volume attributes (%S), %y",
 		    attr.ObjectName, status);
       if (!in_vol)
 	NtClose (vol);
       return false;
     }
-   flags (ffai_buf.ffai.FileSystemAttributes);
-   name_len (ffai_buf.ffai.MaximumComponentNameLength);
+  flags (ffai_buf.ffai.FileSystemAttributes);
+  name_len (ffai_buf.ffai.MaximumComponentNameLength);
   RtlInitCountedUnicodeString (&fsname, ffai_buf.ffai.FileSystemName,
 			       ffai_buf.ffai.FileSystemNameLength);
   if (is_remote_drive ())
     {
 /* Should be reevaluated for each new OS.  Right now this mask is valid up
-   to Vista.  The important point here is to test only flags indicating
+   to Windows 8.  The important point here is to test only flags indicating
    capabilities and to ignore flags indicating a specific state of this
    volume.  At present these flags to ignore are FILE_VOLUME_IS_COMPRESSED,
    FILE_READ_ONLY_VOLUME, and FILE_SEQUENTIAL_WRITE_ONCE.  The additional
@@ -306,14 +302,20 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 			     | FILE_CASE_PRESERVED_NAMES \
 			     | FILE_UNICODE_ON_DISK \
 			     | FILE_NAMED_STREAMS)
-/* These are the minimal flags supported by NTFS since NT4.  Every filesystem
-   not supporting these flags is not a native NTFS.  We subsume them under
-   the filesystem type "cifs". */
+/* These are the minimal flags supported by NTFS since Windows 2000.  Every
+   filesystem not supporting these flags is not a native NTFS.  We subsume
+   them under the filesystem type "cifs". */
 #define MINIMAL_WIN_NTFS_FLAGS (FILE_CASE_SENSITIVE_SEARCH \
 				| FILE_CASE_PRESERVED_NAMES \
 				| FILE_UNICODE_ON_DISK \
 				| FILE_PERSISTENT_ACLS \
-				| FILE_FILE_COMPRESSION)
+				| FILE_FILE_COMPRESSION \
+				| FILE_VOLUME_QUOTAS \
+				| FILE_SUPPORTS_SPARSE_FILES \
+				| FILE_SUPPORTS_REPARSE_POINTS \
+				| FILE_SUPPORTS_OBJECT_IDS \
+				| FILE_SUPPORTS_ENCRYPTION \
+				| FILE_NAMED_STREAMS)
 #define FS_IS_WINDOWS_NTFS TEST_GVI(flags () & MINIMAL_WIN_NTFS_FLAGS, \
 				    MINIMAL_WIN_NTFS_FLAGS)
 /* These are the exact flags of a real Windows FAT/FAT32 filesystem.
@@ -365,7 +367,10 @@ fs_info::update (PUNICODE_STRING upath, HANDLE in_vol)
 	  && !is_ncfsd (RtlEqualUnicodeString (&fsname, &ro_u_ncfsd, FALSE))
 	  /* UNIXFS == TotalNet Advanced Server (TAS).  Doesn't support
 	     FileIdBothDirectoryInformation.  See below. */
-	  && !is_unixfs (RtlEqualUnicodeString (&fsname, &ro_u_unixfs, FALSE)))
+	  && !is_unixfs (RtlEqualUnicodeString (&fsname, &ro_u_unixfs, FALSE))
+	  /* AFSRDRFsd == Andrew File System.  Doesn't support DOS attributes.
+	     Only native symlinks are supported. */
+	  && !is_afs (RtlEqualUnicodeString (&fsname, &ro_u_afs, FALSE)))
 	{
 	  /* Known remote file system with buggy open calls.  Further
 	     explanation in fhandler.cc (fhandler_disk_file::open_fs). */
@@ -479,7 +484,7 @@ mount_info::init ()
     {
       char native[PATH_MAX];
       if (root_idx < 0)
-	api_fatal ("root_idx %d, user_shared magic %p, nmounts %d", root_idx, user_shared->version, nmounts);
+	api_fatal ("root_idx %d, user_shared magic %y, nmounts %d", root_idx, user_shared->version, nmounts);
       char *p = stpcpy (native, mount[root_idx].native_path);
       if (!got_usr_bin)
       {
@@ -503,12 +508,12 @@ set_flags (unsigned *flags, unsigned val)
   if (!(*flags & PATH_BINARY))
     {
       *flags |= PATH_TEXT;
-      debug_printf ("flags: text (%p)", *flags & (PATH_TEXT | PATH_BINARY));
+      debug_printf ("flags: text (%y)", *flags & (PATH_TEXT | PATH_BINARY));
     }
   else
     {
       *flags |= PATH_BINARY;
-      debug_printf ("flags: binary (%p)", *flags & (PATH_TEXT | PATH_BINARY));
+      debug_printf ("flags: binary (%y)", *flags & (PATH_TEXT | PATH_BINARY));
     }
 }
 
@@ -717,7 +722,7 @@ mount_info::conv_to_win32_path (const char *src_path, char *dst, device& dev,
     }
 
  out_no_chroot_check:
-  debug_printf ("src_path %s, dst %s, flags %p, rc %d", src_path, dst, *flags, rc);
+  debug_printf ("src_path %s, dst %s, flags %y, rc %d", src_path, dst, *flags, rc);
   return rc;
 }
 
@@ -1172,9 +1177,9 @@ mount_info::from_fstab (bool user, WCHAR fstab[], PWCHAR fstab_end)
 {
   UNICODE_STRING upath;
   OBJECT_ATTRIBUTES attr;
-  IO_STATUS_BLOCK io;
-  NTSTATUS status;
-  HANDLE fh;
+  NT_readline rl;
+  tmp_pathbuf tp;
+  char *buf = tp.c_get ();
 
   if (user)
     {
@@ -1189,81 +1194,10 @@ mount_info::from_fstab (bool user, WCHAR fstab[], PWCHAR fstab_end)
   RtlInitUnicodeString (&upath, fstab);
   InitializeObjectAttributes (&attr, &upath, OBJ_CASE_INSENSITIVE, NULL, NULL);
   debug_printf ("Try to read mounts from %W", fstab);
-  status = NtOpenFile (&fh, SYNCHRONIZE | FILE_READ_DATA, &attr, &io,
-		       FILE_SHARE_VALID_FLAGS,
-		       FILE_SYNCHRONOUS_IO_NONALERT
-		       | FILE_OPEN_FOR_BACKUP_INTENT);
-  if (!NT_SUCCESS (status))
-    {
-      debug_printf ("NtOpenFile(%S) failed, %p", &upath, status);
-      return false;
-    }
-
-  char buf[NT_MAX_PATH];
-  char *got = buf;
-  DWORD len = 0;
-  unsigned line = 1;
-  /* Using buffer size - 2 leaves space to append two \0. */
-  while (NT_SUCCESS (NtReadFile (fh, NULL, NULL, NULL, &io, got,
-				 (sizeof (buf) - 2) - (got - buf), NULL, NULL)))
-    {
-      char *end;
-
-      len = io.Information;
-      /* Set end marker. */
-      got[len] = got[len + 1] = '\0';
-      /* Set len to the absolute len of bytes in buf. */
-      len += got - buf;
-      /* Reset got to start reading at the start of the buffer again. */
-      got = buf;
-retry:
-      bool got_nl = false;
-      while (got < buf + len && (end = strchr (got, '\n')))
-	{
-	  got_nl = true;
-	  end[end[-1] == '\r' ? -1 : 0] = '\0';
-	  if (!from_fstab_line (got, user))
-	    goto done;
-	  got = end + 1;
-	  ++line;
-	}
-      if (len < (sizeof (buf) - 2))
+  if (rl.init (&attr, buf, NT_MAX_PATH))
+    while ((buf = rl.gets ()))
+      if (!from_fstab_line (buf, user))
 	break;
-      /* Check if the buffer contained at least one \n.  If not, the
-	 line length is > 32K.  We don't take such long lines.  Print
-	 a debug message and skip this line entirely. */
-      if (!got_nl)
-	{
-	  system_printf ("%W: Line %d too long, skipping...", fstab, line);
-	  while (NT_SUCCESS (NtReadFile (fh, NULL, NULL, NULL, &io, buf,
-					 (sizeof (buf) - 2), NULL, NULL)))
-	    {
-	      len = io.Information;
-	      buf[len] = buf[len + 1] = '\0';
-	      got = strchr (buf, '\n');
-	      if (got)
-		{
-		  ++got;
-		  ++line;
-		  goto retry;
-		}
-	    }
-	  got = buf;
-	  break;
-	}
-      /* We have to read once more.  Move remaining bytes to the start of
-	 the buffer and reposition got so that it points to the end of
-	 the remaining bytes. */
-      len = buf + len - got;
-      memmove (buf, got, len);
-      got = buf + len;
-      buf[len] = buf[len + 1] = '\0';
-    }
-  /* Catch a last line without trailing \n. */
-  if (got > buf)
-    from_fstab_line (got, user);
-done:
-  NtClose (fh);
   return true;
 }
 
@@ -1444,7 +1378,7 @@ mount_info::add_item (const char *native, const char *posix,
   else
     posixerr = normalize_posix_path (posix, posixtmp, posixtail);
 
-  debug_printf ("%s[%s], %s[%s], %p",
+  debug_printf ("%s[%s], %s[%s], %y",
 		native, nativeerr ? error : nativetmp,
 		posix, posixerr ? error : posixtmp, mountflags);
 
@@ -1592,6 +1526,7 @@ fs_names_t fs_names[] = {
     { "cifs", false },
     { "nwfs", false },
     { "ncfsd", false },
+    { "afs", false },
     { NULL, false }
 };
 
@@ -1808,7 +1743,7 @@ mount (const char *win32_path, const char *posix_path, unsigned flags)
       res = mount_table->add_item (w32_path, posix_path, flags);
     }
 
-  syscall_printf ("%R = mount(%s, %s, %p)", res, win32_path, posix_path, flags);
+  syscall_printf ("%R = mount(%s, %s, %y)", res, win32_path, posix_path, flags);
   return res;
 }
 
@@ -1940,41 +1875,6 @@ endmntent (FILE *)
   return 1;
 }
 
-static bool
-get_volume_path_names_for_volume_name (LPCWSTR vol, LPWSTR mounts)
-{
-  DWORD len;
-  if (GetVolumePathNamesForVolumeNameW (vol, mounts, NT_MAX_PATH, &len))
-    return true;
-
-  /* Windows 2000 doesn't have GetVolumePathNamesForVolumeNameW.
-     Just assume that mount points are not longer than MAX_PATH. */
-  WCHAR drives[MAX_PATH], dvol[MAX_PATH], mp[MAX_PATH + 3];
-  if (!GetLogicalDriveStringsW (MAX_PATH, drives))
-    return false;
-  for (PWCHAR drive = drives; *drive; drive = wcschr (drive, '\0') + 1)
-    {
-      if (!GetVolumeNameForVolumeMountPointW (drive, dvol, MAX_PATH))
-	continue;
-      if (!wcscasecmp (vol, dvol))
-	mounts = wcpcpy (mounts, drive) + 1;
-      wcscpy (mp, drive);
-      HANDLE h = FindFirstVolumeMountPointW (dvol, mp + 3, MAX_PATH);
-      if (h == INVALID_HANDLE_VALUE)
-	continue;
-      do
-	{
-	  if (GetVolumeNameForVolumeMountPointW (mp, dvol, MAX_PATH))
-	    if (!wcscasecmp (vol, dvol))
-	      mounts = wcpcpy (mounts, drive) + 1;
-	}
-      while (FindNextVolumeMountPointW (h, mp, MAX_PATH));
-      FindVolumeMountPointClose (h);
-    }
-  *mounts = L'\0';
-  return true;
-}
-
 dos_drive_mappings::dos_drive_mappings ()
 : mappings(0)
 {
@@ -1993,7 +1893,8 @@ dos_drive_mappings::dos_drive_mappings ()
     do
       {
 	/* Skip drives which are not mounted. */
-	if (!get_volume_path_names_for_volume_name (vol, mounts)
+	DWORD len;
+	if (!GetVolumePathNamesForVolumeNameW (vol, mounts, NT_MAX_PATH, &len)
 	    || mounts[0] == L'\0')
 	  continue;
 	*wcsrchr (vol, L'\\') = L'\0';
@@ -2045,7 +1946,7 @@ dos_drive_mappings::dos_drive_mappings ()
 	  }
 	else
 	  debug_printf ("Unable to determine the native mapping for %ls "
-			"(error %lu)", vol, GetLastError ());
+			"(error %u)", vol, GetLastError ());
       }
     while (FindNextVolumeW (sh, vol, 64));
     FindVolumeClose (sh);

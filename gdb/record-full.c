@@ -251,7 +251,7 @@ static void
 
 static void record_full_goto_insn (struct record_full_entry *entry,
 				   enum exec_direction_kind dir);
-static void record_full_save (char *recfilename);
+static void record_full_save (const char *recfilename);
 
 /* Alloc and free functions for record_full_reg, record_full_mem, and
    record_full_end entries.  */
@@ -1844,7 +1844,7 @@ record_full_can_execute_reverse (void)
 static gdb_byte *
 record_full_get_bookmark (char *args, int from_tty)
 {
-  gdb_byte *ret = NULL;
+  char *ret = NULL;
 
   /* Return stringified form of instruction count.  */
   if (record_full_list && record_full_list->type == record_full_end)
@@ -1859,14 +1859,16 @@ record_full_get_bookmark (char *args, int from_tty)
 	fprintf_unfiltered (gdb_stdlog,
 			    "record_full_get_bookmark returns NULL\n");
     }
-  return ret;
+  return (gdb_byte *) ret;
 }
 
 /* "to_goto_bookmark" method for process record and prec over core.  */
 
 static void
-record_full_goto_bookmark (gdb_byte *bookmark, int from_tty)
+record_full_goto_bookmark (gdb_byte *raw_bookmark, int from_tty)
 {
+  char *bookmark = (char *) raw_bookmark;
+
   if (record_debug)
     fprintf_unfiltered (gdb_stdlog,
 			"record_full_goto_bookmark receives %s\n", bookmark);
@@ -1883,7 +1885,7 @@ record_full_goto_bookmark (gdb_byte *bookmark, int from_tty)
       /* Pass along to cmd_record_full_goto.  */
     }
 
-  cmd_record_goto ((char *) bookmark, from_tty);
+  cmd_record_goto (bookmark, from_tty);
   return;
 }
 
@@ -2002,7 +2004,7 @@ record_full_goto_entry (struct record_full_entry *p)
 
   registers_changed ();
   reinit_frame_cache ();
-  print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC);
+  print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC, 1);
 }
 
 /* The "to_goto_record_begin" target method.  */
@@ -2217,9 +2219,10 @@ record_full_core_xfer_partial (struct target_ops *ops,
 			    xmalloc
 			    (sizeof (struct record_full_core_buf_entry));
 			  entry->p = p;
-			  if (!bfd_malloc_and_get_section (p->bfd,
-							   p->the_bfd_section,
-							   &entry->buf))
+			  if (!bfd_malloc_and_get_section
+			        (p->the_bfd_section->owner,
+				 p->the_bfd_section,
+				 &entry->buf))
 			    {
 			      xfree (entry);
 			      return 0;
@@ -2587,7 +2590,7 @@ record_full_restore (void)
   printf_filtered (_("Restored records from core file %s.\n"),
 		   bfd_get_filename (core_bfd));
 
-  print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC);
+  print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC, 1);
 }
 
 /* bfdcore_write -- write bytes into a core file section.  */
@@ -2630,7 +2633,7 @@ record_full_save_cleanups (void *data)
    format, with an extra section for our data.  */
 
 static void
-record_full_save (char *recfilename)
+record_full_save (const char *recfilename)
 {
   struct record_full_entry *cur_record_full_list;
   uint32_t magic;

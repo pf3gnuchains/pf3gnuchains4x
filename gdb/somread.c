@@ -46,6 +46,7 @@ static void
 som_symtab_read (bfd *abfd, struct objfile *objfile,
 		 struct section_offsets *section_offsets)
 {
+  struct cleanup *cleanup;
   struct gdbarch *gdbarch = get_objfile_arch (objfile);
   unsigned int number_of_symbols;
   int val, dynamic;
@@ -65,7 +66,7 @@ som_symtab_read (bfd *abfd, struct objfile *objfile,
      We avoid using alloca because the memory size could be so large
      that we could hit the stack size limit.  */
   buf = xmalloc (symsize * number_of_symbols);
-  make_cleanup (xfree, buf);
+  cleanup = make_cleanup (xfree, buf);
   bfd_seek (abfd, obj_som_sym_filepos (abfd), SEEK_SET);
   val = bfd_bread (buf, symsize * number_of_symbols, abfd);
   if (val != symsize * number_of_symbols)
@@ -316,6 +317,8 @@ som_symtab_read (bfd *abfd, struct objfile *objfile,
 								  section),
 					   objfile);
     }
+
+  do_cleanups (cleanup);
 }
 
 /* Scan and build partial symbols for a symbol file.
@@ -487,7 +490,8 @@ set_section_index (struct objfile *objfile, flagword invert, flagword flags,
    Plain and simple for now.  */
 
 static void
-som_symfile_offsets (struct objfile *objfile, struct section_addr_info *addrs)
+som_symfile_offsets (struct objfile *objfile,
+		     const struct section_addr_info *addrs)
 {
   int i;
   CORE_ADDR text_addr;
@@ -530,7 +534,6 @@ som_symfile_offsets (struct objfile *objfile, struct section_addr_info *addrs)
 
 static const struct sym_fns som_sym_fns =
 {
-  bfd_target_som_flavour,
   som_new_init,			/* init anything gbl to entire symtab */
   som_symfile_init,		/* read initial info, setup for sym_read() */
   som_symfile_read,		/* read a symbol file into symtab */
@@ -549,5 +552,5 @@ initialize_file_ftype _initialize_somread;
 void
 _initialize_somread (void)
 {
-  add_symtab_fns (&som_sym_fns);
+  add_symtab_fns (bfd_target_som_flavour, &som_sym_fns);
 }

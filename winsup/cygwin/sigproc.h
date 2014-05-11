@@ -68,7 +68,7 @@ void __reg1 sig_clear (int);
 void __reg1 sig_set_pending (int);
 int __stdcall handle_sigsuspend (sigset_t);
 
-int __reg2 proc_subproc (DWORD, DWORD);
+int __reg2 proc_subproc (DWORD, uintptr_t);
 
 class _pinfo;
 void __stdcall proc_terminate ();
@@ -82,6 +82,22 @@ void __stdcall sigalloc ();
 int kill_pgrp (pid_t, siginfo_t&);
 void __reg1 exit_thread (DWORD) __attribute__ ((noreturn));
 void __reg1 setup_signal_exit (int);
+
+class no_thread_exit_protect
+{
+  static bool flag;
+  bool modify;
+public:
+  no_thread_exit_protect (int) {flag = true; modify = true;}
+  ~no_thread_exit_protect ()
+  {
+    if (modify)
+      flag = false;
+  }
+  no_thread_exit_protect () {modify = false;}
+  operator int () {return flag;}
+};
+
 
 extern "C" void sigdelayed ();
 
@@ -133,7 +149,7 @@ public:
 
 class hold_everything
 {
-  bool ischild;
+  bool& ischild;
   /* Note the order of the locks below.  It is important,
      to avoid races, that the lock order be preserved.
 
@@ -150,7 +166,7 @@ class hold_everything
   lock_process process;
 
 public:
-  hold_everything (bool x = false): ischild (x) {}
+  hold_everything (bool& x): ischild (x) {}
   operator int () const {return signals;}
 
   ~hold_everything()

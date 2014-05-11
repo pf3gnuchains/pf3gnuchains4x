@@ -1,7 +1,7 @@
 /* dtable.cc: file descriptor support.
 
    Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
-   2007, 2008, 2009, 2010, 2011, 2012 Red Hat, Inc.
+   2007, 2008, 2009, 2010, 2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -31,8 +31,8 @@ details. */
 #include "ntdll.h"
 #include "shared_info.h"
 
-static const NO_COPY DWORD std_consts[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
-					   STD_ERROR_HANDLE};
+static const DWORD std_consts[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+				   STD_ERROR_HANDLE};
 
 static bool handle_to_fn (HANDLE, char *);
 
@@ -58,7 +58,7 @@ void
 dtable_init ()
 {
   if (!cygheap->fdtab.size)
-    cygheap->fdtab.extend (NOFILE_INCR);
+    cygheap->fdtab.extend (NOFILE_INCR, 0);
 }
 
 void __stdcall
@@ -72,15 +72,16 @@ set_std_handle (int fd)
 }
 
 int
-dtable::extend (int howmuch)
+dtable::extend (size_t howmuch, size_t min)
 {
-  int new_size = size + howmuch;
+  size_t new_size = size + howmuch;
   fhandler_base **newfds;
 
-  if (howmuch <= 0)
-    return 0;
-
-  if (new_size > OPEN_MAX_MAX)
+  if (new_size <= OPEN_MAX_MAX)
+    /* ok */;
+  else if (size < OPEN_MAX_MAX && min < OPEN_MAX_MAX)
+    new_size = OPEN_MAX_MAX;
+  else
     {
       set_errno (EMFILE);
       return 0;
@@ -103,7 +104,7 @@ dtable::extend (int howmuch)
 
   size = new_size;
   fds = newfds;
-  debug_printf ("size %d, fds %p", size, fds);
+  debug_printf ("size %ld, fds %p", size, fds);
   return 1;
 }
 
@@ -115,8 +116,8 @@ dtable::get_debugger_info ()
     {
       char std[3][sizeof ("/dev/ptyNNNN")];
       std[0][0] = std[1][0] = std [2][0] = '\0';
-      char buf[sizeof ("cYgstd %x") + 32];
-      sprintf (buf, "cYgstd %x %x %x", (unsigned) &std, sizeof (std[0]), 3);
+      char buf[sizeof ("cYgstd %x") + 64];
+      sprintf (buf, "cYgstd %p %zx %x", &std, sizeof (std[0]), 3);
       OutputDebugString (buf);
       for (int i = 0; i < 3; i++)
 	if (std[i][0])
@@ -194,7 +195,7 @@ fhandler_base *
 dtable::find_archetype (device& dev)
 {
   for (unsigned i = 0; i < farchetype; i++)
-    if (archetypes[i]->get_device () == (DWORD) dev)
+    if (archetypes[i]->get_device () == (dev_t) dev)
       return archetypes[i];
   return NULL;
 }
@@ -224,17 +225,26 @@ dtable::delete_archetype (fhandler_base *fh)
 }
 
 int
-dtable::find_unused_handle (int start)
+dtable::find_unused_handle (size_t start)
 {
+  /* When extending, try to allocate a NOFILE_INCR chunk
+     following the empty fd.  */
+  size_t extendby = NOFILE_INCR + ((start >= size) ? 1 + start - size : 0);
+
+  /* This do loop should only ever execute twice. */
+  int res = -1;
   do
     {
       for (size_t i = start; i < size; i++)
-	/* See if open -- no need for overhead of not_open */
 	if (fds[i] == NULL)
-	  return i;
+	  {
+	    res = (int) i;
+	    goto out;
+	  }
     }
-  while (extend (NOFILE_INCR));
-  return -1;
+  while (extend (extendby, start));
+out:
+  return res;
 }
 
 void
@@ -252,14 +262,19 @@ extern "C" int
 cygwin_attach_handle_to_fd (char *name, int fd, HANDLE handle, mode_t bin,
 			    DWORD myaccess)
 {
+  cygheap->fdtab.lock ();
   if (fd == -1)
     fd = cygheap->fdtab.find_unused_handle ();
   fhandler_base *fh = build_fh_name (name);
   if (!fh)
-    return -1;
-  cygheap->fdtab[fd] = fh;
-  cygheap->fdtab[fd]->inc_refcnt ();
-  fh->init (handle, myaccess, bin ?: fh->pc_binmode ());
+    fd = -1;
+  else
+    {
+      cygheap->fdtab[fd] = fh;
+      cygheap->fdtab[fd]->inc_refcnt ();
+      fh->init (handle, myaccess, bin ?: fh->pc_binmode ());
+    }
+  cygheap->fdtab.unlock ();
   return fd;
 }
 
@@ -482,7 +497,7 @@ fh_alloc (path_conv& pc)
       fh = cnew (fhandler_console, pc.dev);
       break;
     default:
-      switch ((DWORD) pc.dev)
+      switch ((dev_t) pc.dev)
 	{
 	case FH_CONSOLE:
 	case FH_CONIN:
@@ -527,11 +542,6 @@ fh_alloc (path_conv& pc)
 	case FH_RANDOM:
 	case FH_URANDOM:
 	  fh = cnew (fhandler_dev_random);
-	  break;
-	case FH_MEM:
-	case FH_KMEM:
-	case FH_PORT:
-	  fh = cnew (fhandler_dev_mem);
 	  break;
 	case FH_CLIPBOARD:
 	  fh = cnew (fhandler_dev_clipboard);
@@ -645,7 +655,7 @@ build_fh_pc (path_conv& pc)
   else
     {
       if (!fh->get_name ())
-	fh->set_name (fh->dev ().name);
+	fh->set_name (fh->dev ().native);
       fh->archetype = fh->clone ();
       debug_printf ("created an archetype (%p) for %s(%d/%d)", fh->archetype, fh->get_name (), fh->dev ().get_major (), fh->dev ().get_minor ());
       fh->archetype->archetype = NULL;
@@ -661,7 +671,7 @@ build_fh_pc (path_conv& pc)
     last_tty_dev = fh->dev ();
 
 out:
-  debug_printf ("fh %p, dev %p", fh, fh ? (DWORD) fh->dev () : 0);
+  debug_printf ("fh %p, dev %08x", fh, fh ? (dev_t) fh->dev () : 0);
   return fh;
 }
 
@@ -710,7 +720,7 @@ dtable::dup3 (int oldfd, int newfd, int flags)
   fhandler_base *newfh = NULL;	// = NULL to avoid an incorrect warning
 
   MALLOC_CHECK;
-  debug_printf ("dup3 (%d, %d, %p)", oldfd, newfd, flags);
+  debug_printf ("dup3 (%d, %d, %y)", oldfd, newfd, flags);
   lock ();
   bool do_unlock = true;
   bool unlock_on_return;
@@ -736,7 +746,7 @@ dtable::dup3 (int oldfd, int newfd, int flags)
     }
   if ((flags & ~O_CLOEXEC) != 0)
     {
-      syscall_printf ("invalid flags value %x", flags);
+      syscall_printf ("invalid flags value %y", flags);
       set_errno (EINVAL);
       return -1;
     }
@@ -759,7 +769,7 @@ dtable::dup3 (int oldfd, int newfd, int flags)
 
   if (!not_open (newfd))
     close (newfd);
-  else if ((size_t) newfd > size
+  else if ((size_t) newfd >= size
 	   && find_unused_handle (newfd) < 0)
     /* couldn't extend fdtab */
     {
@@ -778,7 +788,7 @@ done:
   MALLOC_CHECK;
   if (do_unlock)
     unlock ();
-  syscall_printf ("%R = dup3(%d, %d, %p)", res, oldfd, newfd, flags);
+  syscall_printf ("%R = dup3(%d, %d, %y)", res, oldfd, newfd, flags);
 
   return res;
 }
@@ -939,7 +949,7 @@ handle_to_fn (HANDLE h, char *posix_fn)
 
   NTSTATUS status = NtQueryObject (h, ObjectNameInformation, ntfn, 65536, &len);
   if (!NT_SUCCESS (status))
-    debug_printf ("NtQueryObject failed, %p", status);
+    debug_printf ("NtQueryObject failed, %y", status);
   // NT seems to do this on an unopened file
   else if (!ntfn->Name.Buffer)
     debug_printf ("nt->Name.Buffer == NULL");

@@ -39,13 +39,13 @@ struct sigaction *global_sigs;
 const char *__sp_fn ;
 int __sp_ln;
 
+bool no_thread_exit_protect::flag;
+
 char NO_COPY myself_nowait_dummy[1] = {'0'};// Flag to sig_send that signal goes to
 					//  current process but no wait is required
 
 #define Static static NO_COPY
 
-Static HANDLE sig_hold;			// Used to stop signal processing
-Static bool sigheld;			// True if holding signals
 
 Static int nprocs;			// Number of deceased children
 Static char cprocs[(NPROCS + 1) * sizeof (pinfo)];// All my children info
@@ -171,7 +171,7 @@ mychild (int pid)
 /* Handle all subprocess requests
  */
 int __reg2
-proc_subproc (DWORD what, DWORD val)
+proc_subproc (DWORD what, uintptr_t val)
 {
   int rc = 1;
   int potential_match;
@@ -209,7 +209,6 @@ proc_subproc (DWORD what, DWORD val)
     case PROC_DETACHED_CHILD:
       if (vchild != myself)
 	{
-	  vchild->ppid = what == PROC_DETACHED_CHILD ? 1 : myself->pid;
 	  vchild->uid = myself->uid;
 	  vchild->gid = myself->gid;
 	  vchild->pgid = myself->pgid;
@@ -217,6 +216,7 @@ proc_subproc (DWORD what, DWORD val)
 	  vchild->ctty = myself->ctty;
 	  vchild->cygstarted = true;
 	  vchild->process_state |= PID_INITIALIZING;
+	  vchild->ppid = what == PROC_DETACHED_CHILD ? 1 : myself->pid;	/* always set last */
 	}
       if (what == PROC_DETACHED_CHILD)
 	break;
@@ -338,6 +338,8 @@ _cygtls::remove_wq (DWORD wait)
       if (exit_state < ES_FINAL && waitq_head.next && sync_proc_subproc
 	  && sync_proc_subproc.acquire (wait))
 	{
+	  ForceCloseHandle1 (wq.thread_ev, wq_ev);
+	  wq.thread_ev = NULL;
 	  for (waitq *w = &waitq_head; w->next != NULL; w = w->next)
 	    if (w->next == &wq)
 	      {
@@ -346,7 +348,6 @@ _cygtls::remove_wq (DWORD wait)
 	      }
 	  sync_proc_subproc.release ();
 	}
-      ForceCloseHandle1 (wq.thread_ev, wq_ev);
     }
 
 }
@@ -447,14 +448,10 @@ void
 exit_thread (DWORD res)
 {
 # undef ExitThread
+  if (no_thread_exit_protect ())
+    ExitThread (res);
   sigfillset (&_my_tls.sigmask);	/* No signals wanted */
   lock_process for_now;			/* May block indefinitely when exiting. */
-  if (exit_state)
-    {
-      for_now.release ();
-      Sleep (INFINITE);
-    }
-
   HANDLE h;
   if (!DuplicateHandle (GetCurrentProcess (), GetCurrentThread (),
                         GetCurrentProcess (), &h,
@@ -472,30 +469,12 @@ exit_thread (DWORD res)
   siginfo_t si = {__SIGTHREADEXIT, SI_KERNEL};
   si.si_cyg = h;
   sig_send (myself_nowait, si, &_my_tls);
-  ExitThread (0);
+  ExitThread (res);
 }
 
 int __reg3
 sig_send (_pinfo *p, int sig, _cygtls *tid)
 {
-  if (sig == __SIGHOLD)
-    sigheld = true;
-  else if (!sigheld)
-    /* nothing */;
-  else if (sig == __SIGFLUSH || sig == __SIGFLUSHFAST)
-    return 0;
-  else if (sig == __SIGNOHOLD)
-    {
-      SetEvent (sig_hold);
-      sigheld = false;
-    }
-  else if (&_my_tls == _main_tls)
-    {
-#ifdef DEBUGGING
-      system_printf ("signal %d sent to %p while signals are on hold", sig, p);
-#endif
-      return -1;
-    }
   siginfo_t si = {};
   si.si_signo = sig;
   si.si_code = SI_KERNEL;
@@ -579,7 +558,16 @@ sig_send (_pinfo *p, siginfo_t& si, _cygtls *tls)
 	}
       VerifyHandle (sendsig);
       if (!communing)
-	CloseHandle (hp);
+	{
+	  CloseHandle (hp);
+	  DWORD flag = PIPE_NOWAIT;
+	  /* Set PIPE_NOWAIT here to avoid blocking when sending a signal.
+	     (Yes, I know MSDN says not to use this)
+	     We can't ever block here because it causes a deadlock when
+	     debugging with gdb.  */
+	  BOOL res = SetNamedPipeHandleState (sendsig, &flag, NULL, NULL);
+	  sigproc_printf ("%d = SetNamedPipeHandleState (%y, PIPE_NOWAIT, NULL, NULL)", res, sendsig);
+	}
       else
 	{
 	  si._si_commune._si_process_handle = hp;
@@ -656,12 +644,9 @@ sig_send (_pinfo *p, siginfo_t& si, _cygtls *tls)
 	  sigproc_printf ("WriteFile for pipe %p failed, %E", sendsig);
 	  ForceCloseHandle (sendsig);
 	}
-      else
-	{
-	  if (!p->exec_sendsig)
-	    system_printf ("error sending signal %d to pid %d, pipe handle %p, %E",
-			   si.si_signo, p->pid, sendsig);
-	}
+      else if (!p->exec_sendsig && !exit_state)
+	system_printf ("error sending signal %d, pipe handle %p, nb %u, packsize %u, %E",
+		       si.si_signo, p->pid, sendsig, nb, packsize);
       if (GetLastError () == ERROR_BROKEN_PIPE)
 	set_errno (ESRCH);
       else
@@ -991,7 +976,7 @@ child_info::sync (pid_t pid, HANDLE& hProcess, DWORD howlong)
 	      hProcess = NULL;
 	    }
 	}
-      sigproc_printf ("pid %u, WFMO returned %d, exit_code %p, res %d", pid, x,
+      sigproc_printf ("pid %u, WFMO returned %d, exit_code %y, res %d", pid, x,
 		      exit_code, res);
     }
   return res;
@@ -1002,7 +987,7 @@ child_info::proc_retry (HANDLE h)
 {
   if (!exit_code)
     return EXITCODE_OK;
-  sigproc_printf ("exit_code %p", exit_code);
+  sigproc_printf ("exit_code %y", exit_code);
   switch (exit_code)
     {
     case STILL_ACTIVE:	/* shouldn't happen */
@@ -1216,7 +1201,7 @@ pending_signals::add (sigpacket& pack)
   if (se->si.si_signo)
     return;
   *se = pack;
-  se->next = NULL;
+  se->next = start.next;
   start.next = se;
 }
 
@@ -1226,10 +1211,12 @@ static void WINAPI
 wait_sig (VOID *)
 {
   _sig_tls = &_my_tls;
-  sig_hold = CreateEvent (&sec_none_nih, FALSE, FALSE, NULL);
+  bool sig_held = false;
 
   sigproc_printf ("entering ReadFile loop, my_readsig %p, my_sendsig %p",
 		  my_readsig, my_sendsig);
+
+  hntdll = GetModuleHandle ("ntdll.dll");
 
   for (;;)
     {
@@ -1275,33 +1262,7 @@ wait_sig (VOID *)
 	      *pack.mask |= bit;
 	  break;
 	case __SIGHOLD:
-	  goto loop;
-	  break;
-	default:
-	  if (pack.si.si_signo < 0)
-	    sig_clear (-pack.si.si_signo);
-	  else
-	    sigq.add (pack);
-	case __SIGNOHOLD:
-	case __SIGFLUSH:
-	case __SIGFLUSHFAST:
-	  {
-	    sigpacket *qnext;
-	    /* Check the queue for signals.  There will always be at least one
-	       thing on the queue if this was a valid signal.  */
-	    while ((qnext = q->next))
-	      {
-		if (qnext->si.si_signo && qnext->process () <= 0)
-		  q = q->next;
-		else
-		  {
-		    q->next = qnext->next;
-		    qnext->si.si_signo = 0;
-		  }
-	      }
-	    if (pack.si.si_signo == SIGCHLD)
-	      clearwait = true;
-	  }
+	  sig_held = true;
 	  break;
 	case __SIGSETPGRP:
 	  init_console_handler (true);
@@ -1328,16 +1289,41 @@ wait_sig (VOID *)
 	      }
 	  }
 	  break;
+	default:	/* Normal (positive) signal */
+	  if (pack.si.si_signo < 0)
+	    sig_clear (-pack.si.si_signo);
+	  else
+	    sigq.add (pack);
+	case __SIGNOHOLD:
+	  sig_held = false;
+	case __SIGFLUSH:
+	case __SIGFLUSHFAST:
+	  if (!sig_held)
+	    {
+	      sigpacket *qnext;
+	      /* Check the queue for signals.  There will always be at least one
+		 thing on the queue if this was a valid signal.  */
+	      while ((qnext = q->next))
+		{
+		  if (qnext->si.si_signo && qnext->process () <= 0)
+		    q = qnext;
+		  else
+		    {
+		      q->next = qnext->next;
+		      qnext->si.si_signo = 0;
+		    }
+		}
+	      if (pack.si.si_signo == SIGCHLD)
+		clearwait = true;
+	    }
+	  break;
 	}
       if (clearwait && !have_execed)
 	proc_subproc (PROC_CLEARWAIT, 0);
-    loop:
       if (pack.wakeup)
 	{
 	  sigproc_printf ("signalling pack.wakeup %p", pack.wakeup);
 	  SetEvent (pack.wakeup);
 	}
-      if (pack.si.si_signo == __SIGHOLD)
-	WaitForSingleObject (sig_hold, INFINITE);
     }
 }

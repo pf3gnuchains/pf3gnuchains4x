@@ -29,7 +29,6 @@
 
 #include "m68k-tdep.h"
 
-#include <sys/param.h>
 #include <sys/dir.h>
 #include <signal.h>
 #include <sys/ptrace.h>
@@ -113,9 +112,9 @@ fetch_register (struct regcache *regcache, int regno)
   int tid;
 
   /* Overload thread id onto process id.  */
-  tid = TIDGET (inferior_ptid);
+  tid = ptid_get_lwp (inferior_ptid);
   if (tid == 0)
-    tid = PIDGET (inferior_ptid);	/* no thread id, just use
+    tid = ptid_get_pid (inferior_ptid);	/* no thread id, just use
 					   process id.  */
 
   regaddr = 4 * regmap[regno];
@@ -167,9 +166,9 @@ store_register (const struct regcache *regcache, int regno)
   gdb_byte buf[MAX_REGISTER_SIZE];
 
   /* Overload thread id onto process id.  */
-  tid = TIDGET (inferior_ptid);
+  tid = ptid_get_lwp (inferior_ptid);
   if (tid == 0)
-    tid = PIDGET (inferior_ptid);	/* no thread id, just use
+    tid = ptid_get_pid (inferior_ptid);	/* no thread id, just use
 					   process id.  */
 
   regaddr = 4 * regmap[regno];
@@ -421,9 +420,9 @@ m68k_linux_fetch_inferior_registers (struct target_ops *ops,
     }
 
   /* GNU/Linux LWP ID's are process ID's.  */
-  tid = TIDGET (inferior_ptid);
+  tid = ptid_get_lwp (inferior_ptid);
   if (tid == 0)
-    tid = PIDGET (inferior_ptid);	/* Not a threaded program.  */
+    tid = ptid_get_pid (inferior_ptid);	/* Not a threaded program.  */
 
   /* Use the PTRACE_GETFPXREGS request whenever possible, since it
      transfers more registers in one system call, and we'll cache the
@@ -478,9 +477,9 @@ m68k_linux_store_inferior_registers (struct target_ops *ops,
     }
 
   /* GNU/Linux LWP ID's are process ID's.  */
-  tid = TIDGET (inferior_ptid);
+  tid = ptid_get_lwp (inferior_ptid);
   if (tid == 0)
-    tid = PIDGET (inferior_ptid);	/* Not a threaded program.  */
+    tid = ptid_get_pid (inferior_ptid);	/* Not a threaded program.  */
 
   /* Use the PTRACE_SETFPREGS requests whenever possible, since it
      transfers more registers in one system call.  But remember that

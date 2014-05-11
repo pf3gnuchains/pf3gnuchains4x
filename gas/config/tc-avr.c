@@ -131,7 +131,6 @@ static struct mcu_type_s mcu_types[] =
   {"attiny48",   AVR_ISA_AVR25,   bfd_mach_avr25},
   {"attiny88",   AVR_ISA_AVR25,   bfd_mach_avr25},
   {"at86rf401",  AVR_ISA_RF401,   bfd_mach_avr25},
-  {"ata6289",    AVR_ISA_AVR25,   bfd_mach_avr25},
   {"at43usb355", AVR_ISA_AVR3,    bfd_mach_avr3},
   {"at76c711",   AVR_ISA_AVR3,    bfd_mach_avr3},
   {"atmega103",  AVR_ISA_AVR31,   bfd_mach_avr31},
@@ -143,6 +142,7 @@ static struct mcu_type_s mcu_types[] =
   {"atmega16u2", AVR_ISA_AVR35,   bfd_mach_avr35},
   {"atmega32u2", AVR_ISA_AVR35,   bfd_mach_avr35},
   {"atmega8",    AVR_ISA_M8,      bfd_mach_avr4},
+  {"ata6289",    AVR_ISA_AVR4,    bfd_mach_avr4},
   {"atmega48",   AVR_ISA_AVR4,    bfd_mach_avr4},
   {"atmega48a",  AVR_ISA_AVR4,    bfd_mach_avr4},
   {"atmega48p",  AVR_ISA_AVR4,    bfd_mach_avr4},
@@ -268,18 +268,18 @@ static struct mcu_type_s mcu_types[] =
   {"atxmega64a3", AVR_ISA_XMEGA,  bfd_mach_avrxmega4},
   {"atxmega64d3", AVR_ISA_XMEGA,  bfd_mach_avrxmega4},
   {"atxmega64a1", AVR_ISA_XMEGA,  bfd_mach_avrxmega5},
-  {"atxmega64a1u",AVR_ISA_XMEGA,  bfd_mach_avrxmega5},
+  {"atxmega64a1u",AVR_ISA_XMEGAU, bfd_mach_avrxmega5},
   {"atxmega128a3", AVR_ISA_XMEGA, bfd_mach_avrxmega6},
-  {"atxmega128b1", AVR_ISA_XMEGA, bfd_mach_avrxmega6},
+  {"atxmega128b1", AVR_ISA_XMEGAU, bfd_mach_avrxmega6},
   {"atxmega128d3", AVR_ISA_XMEGA, bfd_mach_avrxmega6},
   {"atxmega192a3", AVR_ISA_XMEGA, bfd_mach_avrxmega6},
   {"atxmega192d3", AVR_ISA_XMEGA, bfd_mach_avrxmega6},
   {"atxmega256a3", AVR_ISA_XMEGA, bfd_mach_avrxmega6},
   {"atxmega256a3b",AVR_ISA_XMEGA, bfd_mach_avrxmega6},
-  {"atxmega256a3bu",AVR_ISA_XMEGA,bfd_mach_avrxmega6},
+  {"atxmega256a3bu",AVR_ISA_XMEGAU, bfd_mach_avrxmega6},
   {"atxmega256d3", AVR_ISA_XMEGA, bfd_mach_avrxmega6},
   {"atxmega128a1", AVR_ISA_XMEGA, bfd_mach_avrxmega7},
-  {"atxmega128a1u", AVR_ISA_XMEGA, bfd_mach_avrxmega7},
+  {"atxmega128a1u", AVR_ISA_XMEGAU, bfd_mach_avrxmega7},
   {NULL, 0, 0}
 };
 
@@ -456,6 +456,7 @@ md_show_usage (FILE *stream)
 	"                   avr5  - enhanced AVR core with up to 64K program memory\n"
 	"                   avr51 - enhanced AVR core with up to 128K program memory\n"
 	"                   avr6  - enhanced AVR core with up to 256K program memory\n"
+	"                   avrxmega2 - XMEGA, > 8K, < 64K FLASH, < 64K RAM\n"
 	"                   avrxmega3 - XMEGA, > 8K, <= 64K FLASH, > 64K RAM\n"
 	"                   avrxmega4 - XMEGA, > 64K, <= 128K FLASH, <= 64K RAM\n"
 	"                   avrxmega5 - XMEGA, > 64K, <= 128K FLASH, > 64K RAM\n"

@@ -1,7 +1,6 @@
 /* timer.cc
 
-   Copyright 2004, 2005, 2006, 2008, 2010, 2011
-   Red Hat, Inc.
+   Copyright 2004, 2005, 2006, 2008, 2010, 2011, 2012, 2013 Red Hat, Inc.
 
 This file is part of Cygwin.
 
@@ -125,7 +124,7 @@ timer_thread (VOID *x)
   while (1)
     {
       long long sleep_us;
-      long sleep_ms;
+      LONG sleep_ms;
       /* Account for delays in starting thread
 	and sending the signal */
       now = gtod.usecs ();
@@ -296,7 +295,8 @@ timer_gettime (timer_t timerid, struct itimerspec *ovalue)
 }
 
 extern "C" int
-timer_create (clockid_t clock_id, struct sigevent *evp, timer_t *timerid)
+timer_create (clockid_t clock_id, struct sigevent *__restrict evp,
+	      timer_t *__restrict timerid)
 {
   myfault efault;
   if (efault.faulted (EFAULT))
@@ -319,8 +319,9 @@ timer_create (clockid_t clock_id, struct sigevent *evp, timer_t *timerid)
 }
 
 extern "C" int
-timer_settime (timer_t timerid, int flags, const struct itimerspec *value,
-	       struct itimerspec *ovalue)
+timer_settime (timer_t timerid, int flags,
+	       const struct itimerspec *__restrict value,
+	       struct itimerspec *__restrict ovalue)
 {
   timer_tracker *tt = (timer_tracker *) timerid;
   myfault efault;
@@ -375,7 +376,8 @@ fixup_timers_after_fork ()
 
 
 extern "C" int
-setitimer (int which, const struct itimerval *value, struct itimerval *ovalue)
+setitimer (int which, const struct itimerval *__restrict value,
+	   struct itimerval *__restrict ovalue)
 {
   int ret;
   if (which != ITIMER_REAL)
@@ -449,7 +451,7 @@ alarm (unsigned int seconds)
  newt.it_value.tv_sec = seconds;
  timer_settime ((timer_t) &ttstart, 0, &newt, &oldt);
  int ret = oldt.it_value.tv_sec + (oldt.it_value.tv_nsec > 0);
- syscall_printf ("%d = alarm(%d)", ret, seconds);
+ syscall_printf ("%d = alarm(%u)", ret, seconds);
  return ret;
 }
 
@@ -461,16 +463,16 @@ ualarm (useconds_t value, useconds_t interval)
     Interpret negative arguments as zero */
  if (value > 0)
    {
-     timer.it_value.tv_sec = (unsigned int) value / 1000000;
-     timer.it_value.tv_nsec = ((unsigned int) value % 1000000) * 1000;
+     timer.it_value.tv_sec = value / 1000000;
+     timer.it_value.tv_nsec = (value % 1000000) * 1000;
    }
  if (interval > 0)
    {
-     timer.it_interval.tv_sec = (unsigned int) interval / 1000000;
-     timer.it_interval.tv_nsec = ((unsigned int) interval % 1000000) * 1000;
+     timer.it_interval.tv_sec = interval / 1000000;
+     timer.it_interval.tv_nsec = (interval % 1000000) * 1000;
    }
  timer_settime ((timer_t) &ttstart, 0, &timer, &otimer);
  useconds_t ret = otimer.it_value.tv_sec * 1000000 + (otimer.it_value.tv_nsec + 999) / 1000;
- syscall_printf ("%d = ualarm(%d , %d)", ret, value, interval);
+ syscall_printf ("%d = ualarm(%ld , %ld)", ret, value, interval);
  return ret;
 }

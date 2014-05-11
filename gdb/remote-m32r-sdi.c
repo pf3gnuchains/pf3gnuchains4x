@@ -886,7 +886,7 @@ m32r_detach (struct target_ops *ops, char *args, int from_tty)
   m32r_resume (ops, inferior_ptid, 0, GDB_SIGNAL_0);
 
   /* Calls m32r_close to do the real work.  */
-  pop_target ();
+  unpush_target (ops);
   if (from_tty)
     fprintf_unfiltered (gdb_stdlog, "Ending remote %s debugging\n",
 			target_shortname);
@@ -933,7 +933,7 @@ m32r_fetch_register (struct target_ops *ops,
     }
   else
     {
-      char buffer[MAX_REGISTER_SIZE];
+      gdb_byte buffer[MAX_REGISTER_SIZE];
 
       regid = get_reg_id (regno);
       send_one_arg_cmd (SDI_READ_CPU_REG, regid);

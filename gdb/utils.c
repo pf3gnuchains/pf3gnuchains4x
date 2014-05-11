@@ -66,8 +66,6 @@
 
 #include "inferior.h"		/* for signed_pointer_to_address */
 
-#include <sys/param.h>		/* For MAXPATHLEN */
-
 #include "gdb_curses.h"
 
 #include "readline/readline.h"
@@ -186,14 +184,6 @@ show_sevenbit_strings (struct ui_file *file, int from_tty,
 			    "in strings as \\nnn is %s.\n"),
 		    value);
 }
-
-/* String to be printed before error messages, if any.  */
-
-char *error_pre_print;
-
-/* String to be printed before quit messages, if any.  */
-
-char *quit_pre_print;
 
 /* String to be printed before warning messages, if any.  */
 
@@ -713,6 +703,7 @@ internal_vproblem (struct internal_problem *problem,
   int quit_p;
   int dump_core_p;
   char *reason;
+  struct cleanup *cleanup = make_cleanup (null_cleanup, NULL);
 
   /* Don't allow infinite error/warning recursion.  */
   {
@@ -821,6 +812,7 @@ internal_vproblem (struct internal_problem *problem,
     }
 
   dejavu = 0;
+  do_cleanups (cleanup);
 }
 
 static struct internal_problem internal_error_problem = {
@@ -831,7 +823,7 @@ void
 internal_verror (const char *file, int line, const char *fmt, va_list ap)
 {
   internal_vproblem (&internal_error_problem, file, line, fmt, ap);
-  deprecated_throw_reason (RETURN_ERROR);
+  fatal (_("Command aborted."));
 }
 
 void
@@ -965,6 +957,26 @@ add_internal_problem_command (struct internal_problem *problem)
   xfree (show_doc);
 }
 
+/* Return a newly allocated string, containing the PREFIX followed
+   by the system error message for errno (separated by a colon).
+
+   The result must be deallocated after use.  */
+
+static char *
+perror_string (const char *prefix)
+{
+  char *err;
+  char *combined;
+
+  err = safe_strerror (errno);
+  combined = (char *) xmalloc (strlen (err) + strlen (prefix) + 3);
+  strcpy (combined, prefix);
+  strcat (combined, ": ");
+  strcat (combined, err);
+
+  return combined;
+}
+
 /* Print the system error message for errno, and also mention STRING
    as the file name for which the error was encountered.  Use ERRCODE
    for the thrown exception.  Then return to command level.  */
@@ -972,14 +984,10 @@ add_internal_problem_command (struct internal_problem *problem)
 void
 throw_perror_with_name (enum errors errcode, const char *string)
 {
-  char *err;
   char *combined;
 
-  err = safe_strerror (errno);
-  combined = (char *) alloca (strlen (err) + strlen (string) + 3);
-  strcpy (combined, string);
-  strcat (combined, ": ");
-  strcat (combined, err);
+  combined = perror_string (string);
+  make_cleanup (xfree, combined);
 
   /* I understand setting these is a matter of taste.  Still, some people
      may clear errno but not know about bfd_error.  Doing this here is not
@@ -996,6 +1004,19 @@ void
 perror_with_name (const char *string)
 {
   throw_perror_with_name (GENERIC_ERROR, string);
+}
+
+/* Same as perror_with_name except that it prints a warning instead
+   of throwing an error.  */
+
+void
+perror_warning_with_name (const char *string)
+{
+  char *combined;
+
+  combined = perror_string (string);
+  warning (_("%s"), combined);
+  xfree (combined);
 }
 
 /* Print the system error message for ERRCODE, and also mention STRING
@@ -1122,6 +1143,29 @@ get_regcomp_error (int code, regex_t *rx)
 
   regerror (code, rx, result, length);
   return result;
+}
+
+/* Compile a regexp and throw an exception on error.  This returns a
+   cleanup to free the resulting pattern on success.  RX must not be
+   NULL.  */
+
+struct cleanup *
+compile_rx_or_error (regex_t *pattern, const char *rx, const char *message)
+{
+  int code;
+
+  gdb_assert (rx != NULL);
+
+  code = regcomp (pattern, rx, REG_NOSUB);
+  if (code != 0)
+    {
+      char *err = get_regcomp_error (code, pattern);
+
+      make_cleanup (xfree, err);
+      error (("%s: %s"), message, err);
+    }
+
+  return make_regfree_cleanup (pattern);
 }
 
 
@@ -1397,7 +1441,7 @@ host_char_to_target (struct gdbarch *gdbarch, int c, int *target_c)
    after the zeros.  A value of 0 does not mean end of string.  */
 
 int
-parse_escape (struct gdbarch *gdbarch, char **string_ptr)
+parse_escape (struct gdbarch *gdbarch, const char **string_ptr)
 {
   int target_char = -2;	/* Initialize to avoid GCC warnings.  */
   int c = *(*string_ptr)++;
@@ -1645,12 +1689,16 @@ init_page_info (void)
       lines_per_page = rows;
       chars_per_line = cols;
 
-      /* Readline should have fetched the termcap entry for us.  */
-      if (tgetnum ("li") < 0 || getenv ("EMACS"))
+      /* Readline should have fetched the termcap entry for us.
+         Only try to use tgetnum function if rl_get_screen_size
+         did not return a useful value. */
+      if (((rows <= 0) && (tgetnum ("li") < 0))
+	/* Also disable paging if inside EMACS.  */
+	  || getenv ("EMACS"))
 	{
-	  /* The number of lines per page is not mentioned in the
-	     terminal description.  This probably means that paging is
-	     not useful (e.g. emacs shell window), so disable paging.  */
+	  /* The number of lines per page is not mentioned in the terminal
+	     description or EMACS evironment variable is set.  This probably
+	     means that paging is not useful, so disable paging.  */
 	  lines_per_page = UINT_MAX;
 	}
 
@@ -3105,22 +3153,14 @@ gdb_realpath (const char *filename)
      path.  Use that and realpath() to canonicalize the name.  This is
      the most common case.  Note that, if there isn't a compile time
      upper bound, you want to avoid realpath() at all costs.  */
-#if defined(HAVE_REALPATH)
+#if defined (HAVE_REALPATH) && defined (PATH_MAX)
   {
-# if defined (PATH_MAX)
     char buf[PATH_MAX];
-#  define USE_REALPATH
-# elif defined (MAXPATHLEN)
-    char buf[MAXPATHLEN];
-#  define USE_REALPATH
-# endif
-# if defined (USE_REALPATH)
     const char *rp = realpath (filename, buf);
 
     if (rp == NULL)
       rp = filename;
     return xstrdup (rp);
-# endif
   }
 #endif /* HAVE_REALPATH */
 
@@ -3154,7 +3194,7 @@ gdb_realpath (const char *filename)
      pathconf()) making it impossible to pass a correctly sized buffer
      to realpath() (it could always overflow).  On those systems, we
      skip this.  */
-#if defined (HAVE_REALPATH) && defined (HAVE_UNISTD_H) && defined(HAVE_ALLOCA)
+#if defined (HAVE_REALPATH) && defined (_PC_PATH_MAX) && defined(HAVE_ALLOCA)
   {
     /* Find out the max path size.  */
     long path_max = pathconf ("/", _PC_PATH_MAX);
@@ -3193,6 +3233,52 @@ gdb_realpath (const char *filename)
   return xstrdup (filename);
 }
 
+/* Return a copy of FILENAME, with its directory prefix canonicalized
+   by gdb_realpath.  */
+
+char *
+gdb_realpath_keepfile (const char *filename)
+{
+  const char *base_name = lbasename (filename);
+  char *dir_name;
+  char *real_path;
+  char *result;
+
+  /* Extract the basename of filename, and return immediately 
+     a copy of filename if it does not contain any directory prefix.  */
+  if (base_name == filename)
+    return xstrdup (filename);
+
+  dir_name = alloca ((size_t) (base_name - filename + 2));
+  /* Allocate enough space to store the dir_name + plus one extra
+     character sometimes needed under Windows (see below), and
+     then the closing \000 character.  */
+  strncpy (dir_name, filename, base_name - filename);
+  dir_name[base_name - filename] = '\000';
+
+#ifdef HAVE_DOS_BASED_FILE_SYSTEM
+  /* We need to be careful when filename is of the form 'd:foo', which
+     is equivalent of d:./foo, which is totally different from d:/foo.  */
+  if (strlen (dir_name) == 2 && isalpha (dir_name[0]) && dir_name[1] == ':')
+    {
+      dir_name[2] = '.';
+      dir_name[3] = '\000';
+    }
+#endif
+
+  /* Canonicalize the directory prefix, and build the resulting
+     filename.  If the dirname realpath already contains an ending
+     directory separator, avoid doubling it.  */
+  real_path = gdb_realpath (dir_name);
+  if (IS_DIR_SEPARATOR (real_path[strlen (real_path) - 1]))
+    result = concat (real_path, base_name, (char *) NULL);
+  else
+    result = concat (real_path, SLASH_STRING, base_name, (char *) NULL);
+
+  xfree (real_path);
+  return result;
+}
+
 ULONGEST
 align_up (ULONGEST v, int n)
 {
@@ -3207,6 +3293,23 @@ align_down (ULONGEST v, int n)
   /* Check that N is really a power of two.  */
   gdb_assert (n && (n & (n-1)) == 0);
   return (v & -n);
+}
+
+/* See utils.h.  */
+
+LONGEST
+gdb_sign_extend (LONGEST value, int bit)
+{
+  gdb_assert (bit >= 1 && bit <= 8 * sizeof (LONGEST));
+
+  if (((value >> (bit - 1)) & 1) != 0)
+    {
+      LONGEST signbit = ((LONGEST) 1) << (bit - 1);
+
+      value = (value ^ signbit) - signbit;
+    }
+
+  return value;
 }
 
 /* Allocation function for the libiberty hash table which uses an

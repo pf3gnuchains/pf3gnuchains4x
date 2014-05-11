@@ -11,6 +11,15 @@ details. */
 #define  __INSIDE_CYGWIN_NET__
 #define USE_SYS_TYPES_FD_SET
 #include "winsup.h"
+#ifdef __x86_64__
+/* 2014-04-24: Current Mingw headers define sockaddr_in6 using u_long (8 byte)
+   because a redefinition for LP64 systems is missing.  This leads to a wrong
+   definition and size of sockaddr_in6 when building with winsock headers. */
+#undef u_long
+#define u_long __ms_u_long
+#endif
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
 #include "cygerrno.h"
 #include "security.h"
 #include "path.h"
@@ -18,8 +27,6 @@ details. */
 #include "fhandler_virtual.h"
 #include "dtable.h"
 #include "cygheap.h"
-#include <ws2tcpip.h>
-#include <iphlpapi.h>
 #include <asm/byteorder.h>
 
 #define _COMPILING_NEWLIB
@@ -31,7 +38,7 @@ extern "C" int ip_addr_prefix (PIP_ADAPTER_UNICAST_ADDRESS pua,
 			       PIP_ADAPTER_PREFIX pap);
 bool get_adapters_addresses (PIP_ADAPTER_ADDRESSES *pa0, ULONG family);
 
-static _off64_t format_procnet_ifinet6 (void *, char *&);
+static off_t format_procnet_ifinet6 (void *, char *&);
 
 static const virt_tab_t procnet_tab[] =
 {
@@ -63,12 +70,8 @@ fhandler_procnet::exists ()
 				       PROCNET_LINK_COUNT);
   if (entry)
     {
-      if (entry->type == virt_file)
-	{
-	  if (!wincap.has_gaa_prefixes ()
-	      || !get_adapters_addresses (NULL, AF_INET6))
-	    return virt_none;
-	}
+      if (entry->type == virt_file && !get_adapters_addresses (NULL, AF_INET6))
+	return virt_none;
       fileid = entry - procnet_tab;
       return entry->type;
     }
@@ -81,7 +84,7 @@ fhandler_procnet::fhandler_procnet ():
 }
 
 int __reg2
-fhandler_procnet::fstat (struct __stat64 *buf)
+fhandler_procnet::fstat (struct stat *buf)
 {
   fhandler_base::fstat (buf);
   buf->st_mode &= ~_IFMT & NO_W;
@@ -109,12 +112,9 @@ fhandler_procnet::readdir (DIR *dir, dirent *de)
   int res = ENMFILE;
   if (dir->__d_position >= PROCNET_LINK_COUNT)
     goto out;
-  if (procnet_tab[dir->__d_position].type == virt_file)
-    {
-      if (!wincap.has_gaa_prefixes ()
-	  || !get_adapters_addresses (NULL, AF_INET6))
-	goto out;
-    }
+  if (procnet_tab[dir->__d_position].type == virt_file
+      && !get_adapters_addresses (NULL, AF_INET6))
+    goto out;
   strcpy (de->d_name, procnet_tab[dir->__d_position++].name);
   dir->__flags |= dirent_saw_dot | dirent_saw_dot_dot;
   res = 0;
@@ -190,7 +190,7 @@ success:
   set_flags ((flags & ~O_TEXT) | O_BINARY);
   set_open_status ();
 out:
-  syscall_printf ("%d = fhandler_proc::open(%p, %d)", res, flags, mode);
+  syscall_printf ("%d = fhandler_proc::open(%y, 0%o)", res, flags, mode);
   return res;
 }
 
@@ -230,16 +230,14 @@ static unsigned int dad_to_flags[] =
   0x80		/* Preferred -> PERMANENT */
 };
 
-static _off64_t
+static off_t
 format_procnet_ifinet6 (void *, char *&filebuf)
 {
   PIP_ADAPTER_ADDRESSES pa0 = NULL, pap;
   PIP_ADAPTER_UNICAST_ADDRESS pua;
   ULONG alloclen;
+  off_t filesize = 0;
 
-  if (!wincap.has_gaa_prefixes ())
-    return 0;
-  _off64_t filesize = 0;
   if (!get_adapters_addresses (&pa0, AF_INET6))
     goto out;
   alloclen = 0;
@@ -263,7 +261,7 @@ format_procnet_ifinet6 (void *, char *&filebuf)
 	filebuf[filesize++] = ' ';
 	filesize += sprintf (filebuf + filesize,
 			     "%02lx %02x %02x %02x %s\n",
-			     pap->Ipv6IfIndex,
+			     (long) pap->Ipv6IfIndex,
 			     ip_addr_prefix (pua, pap->FirstPrefix),
 			     get_scope (&((struct sockaddr_in6 *)
 					pua->Address.lpSockaddr)->sin6_addr),

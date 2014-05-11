@@ -1,7 +1,5 @@
 /* opncls.c -- open and close a BFD.
-   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 2000,
-   2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2012, 2013
-   Free Software Foundation, Inc.
+   Copyright 1990-2013 Free Software Foundation, Inc.
 
    Written by Cygnus Support.
 
@@ -255,12 +253,13 @@ bfd_fopen (const char *filename, const char *target, const char *mode, int fd)
       return NULL;
     }
   nbfd->opened_once = TRUE;
+
   /* If we opened the file by name, mark it cacheable; we can close it
      and reopen it later.  However, if a file descriptor was provided,
      then it may have been opened with special flags that make it
      unsafe to close and reopen the file.  */
   if (fd == -1)
-    bfd_set_cacheable (nbfd, TRUE);
+    (void) bfd_set_cacheable (nbfd, TRUE);
 
   return nbfd;
 }
@@ -1049,10 +1048,11 @@ bfd_release (bfd *abfd, void *block)
 
    This facilitates "optional" provision of debugging information, without
    having to provide two complete copies of every binary object (with and
-   without debug symbols).
-*/
+   without debug symbols).  */
 
-#define GNU_DEBUGLINK	".gnu_debuglink"
+#define GNU_DEBUGLINK		".gnu_debuglink"
+#define GNU_DEBUGALTLINK	".gnu_debugaltlink"
+
 /*
 FUNCTION
 	bfd_calc_gnu_debuglink_crc32
@@ -1190,6 +1190,60 @@ bfd_get_debug_link_info (bfd *abfd, unsigned long *crc32_out)
 }
 
 /*
+FUNCTION
+	bfd_get_alt_debug_link_info
+
+SYNOPSIS
+	char *bfd_get_alt_debug_link_info (bfd * abfd,
+					   bfd_size_type *buildid_len,
+			                   bfd_byte **buildid_out);
+
+DESCRIPTION
+	Fetch the filename and BuildID value for any alternate debuginfo
+	associated with @var{abfd}.  Return NULL if no such info found,
+	otherwise return filename and update @var{buildid_len} and
+	@var{buildid_out}.  The returned filename and build_id are
+	allocated with @code{malloc}; freeing them is the
+	responsibility of the caller.
+*/
+
+char *
+bfd_get_alt_debug_link_info (bfd * abfd, bfd_size_type *buildid_len,
+			     bfd_byte **buildid_out)
+{
+  asection *sect;
+  bfd_byte *contents;
+  int buildid_offset;
+  char *name;
+
+  BFD_ASSERT (abfd);
+  BFD_ASSERT (buildid_len);
+  BFD_ASSERT (buildid_out);
+
+  sect = bfd_get_section_by_name (abfd, GNU_DEBUGALTLINK);
+
+  if (sect == NULL)
+    return NULL;
+
+  if (!bfd_malloc_and_get_section (abfd, sect, & contents))
+    {
+      if (contents != NULL)
+	free (contents);
+      return NULL;
+    }
+
+  /* BuildID value is stored after the filename.  */
+  name = (char *) contents;
+  buildid_offset = strlen (name) + 1;
+
+  *buildid_len = bfd_get_section_size (sect) - buildid_offset;
+  *buildid_out = bfd_malloc (*buildid_len);
+  memcpy (*buildid_out, contents + buildid_offset, *buildid_len);
+
+  return name;
+}
+
+/*
 INTERNAL_FUNCTION
 	separate_debug_file_exists
 
@@ -1224,6 +1278,37 @@ separate_debug_file_exists (const char *name, const unsigned long crc)
   return crc == file_crc;
 }
 
+/*
+INTERNAL_FUNCTION
+	separate_alt_debug_file_exists
+
+SYNOPSIS
+	bfd_boolean separate_alt_debug_file_exists
+	  (char *name, unsigned long crc32);
+
+DESCRIPTION
+	Checks to see if @var{name} is a file and if its BuildID
+	matches @var{buildid}.
+*/
+
+static bfd_boolean
+separate_alt_debug_file_exists (const char *name,
+				const unsigned long buildid ATTRIBUTE_UNUSED)
+{
+  FILE *f;
+
+  BFD_ASSERT (name);
+
+  f = real_fopen (name, FOPEN_RB);
+  if (f == NULL)
+    return FALSE;
+
+  /* FIXME: Add code to check buildid.  */
+
+  fclose (f);
+
+  return TRUE;
+}
 
 /*
 INTERNAL_FUNCTION
@@ -1233,16 +1318,24 @@ SYNOPSIS
 	char *find_separate_debug_file (bfd *abfd);
 
 DESCRIPTION
-	Searches @var{abfd} for a reference to separate debugging
-	information, scans various locations in the filesystem, including
-	the file tree rooted at @var{debug_file_directory}, and returns a
-	filename of such debugging information if the file is found and has
-	matching CRC32.  Returns NULL if no reference to debugging file
-	exists, or file cannot be found.
+	Searches @var{abfd} for a section called @var{section_name} which
+	is expected to contain a reference to a file containing separate
+	debugging information.  The function scans various locations in
+	the filesystem, including the file tree rooted at
+	@var{debug_file_directory}, and returns the first matching
+	filename that it finds.  If @var{check_crc} is TRUE then the
+	contents of the file must also match the CRC value contained in
+	@var{section_name}.  Returns NULL if no valid file could be found.
 */
 
+typedef char *      (* get_func_type) (bfd *, unsigned long *);
+typedef bfd_boolean (* check_func_type) (const char *, const unsigned long);
+
 static char *
-find_separate_debug_file (bfd *abfd, const char *debug_file_directory)
+find_separate_debug_file (bfd *           abfd,
+			  const char *    debug_file_directory,
+			  get_func_type   get_func,
+			  check_func_type check_func)
 {
   char *base;
   char *dir;
@@ -1263,7 +1356,8 @@ find_separate_debug_file (bfd *abfd, const char *debug_file_directory)
       return NULL;
     }
 
-  base = bfd_get_debug_link_info (abfd, & crc32);
+  base = get_func (abfd, & crc32);
+    
   if (base == NULL)
     return NULL;
 
@@ -1302,37 +1396,22 @@ find_separate_debug_file (bfd *abfd, const char *debug_file_directory)
                   + strlen (base)
                   + 1);
   if (debugfile == NULL)
-    {
-      free (base);
-      free (dir);
-      free (canon_dir);
-      return NULL;
-    }
+    goto found; /* Actually this returns NULL.  */
 
   /* First try in the same directory as the original file:  */
   strcpy (debugfile, dir);
   strcat (debugfile, base);
 
-  if (separate_debug_file_exists (debugfile, crc32))
-    {
-      free (base);
-      free (dir);
-      free (canon_dir);
-      return debugfile;
-    }
+  if (check_func (debugfile, crc32))
+    goto found;
 
   /* Then try in a subdirectory called .debug.  */
   strcpy (debugfile, dir);
   strcat (debugfile, ".debug/");
   strcat (debugfile, base);
 
-  if (separate_debug_file_exists (debugfile, crc32))
-    {
-      free (base);
-      free (dir);
-      free (canon_dir);
-      return debugfile;
-    }
+  if (check_func (debugfile, crc32))
+    goto found;
 
   /* Then try in the global debugfile directory.  */
   strcpy (debugfile, debug_file_directory);
@@ -1344,19 +1423,18 @@ find_separate_debug_file (bfd *abfd, const char *debug_file_directory)
   strcat (debugfile, canon_dir);
   strcat (debugfile, base);
 
-  if (separate_debug_file_exists (debugfile, crc32))
-    {
-      free (base);
-      free (dir);
-      free (canon_dir);
-      return debugfile;
-    }
+  if (check_func (debugfile, crc32))
+    goto found;
 
+  /* Failed to find the file.  */
   free (debugfile);
+  debugfile = NULL;
+
+ found:
   free (base);
   free (dir);
   free (canon_dir);
-  return NULL;
+  return debugfile;
 }
 
 
@@ -1389,7 +1467,61 @@ RETURNS
 char *
 bfd_follow_gnu_debuglink (bfd *abfd, const char *dir)
 {
-  return find_separate_debug_file (abfd, dir);
+  return find_separate_debug_file (abfd, dir,
+				   bfd_get_debug_link_info,
+				   separate_debug_file_exists);
+}
+
+/* Helper for bfd_follow_gnu_debugaltlink.  It just pretends to return
+   a CRC.  .gnu_debugaltlink supplies a build-id, which is different,
+   but this is ok because separate_alt_debug_file_exists ignores the
+   CRC anyway.  */
+
+static char *
+get_alt_debug_link_info_shim (bfd * abfd, unsigned long *crc32_out)
+{
+  bfd_size_type len;
+  bfd_byte *buildid = NULL;
+  char *result = bfd_get_alt_debug_link_info (abfd, &len, &buildid);
+
+  *crc32_out = 0;
+  free (buildid);
+
+  return result;
+}
+
+/*
+FUNCTION
+	bfd_follow_gnu_debugaltlink
+
+SYNOPSIS
+	char *bfd_follow_gnu_debugaltlink (bfd *abfd, const char *dir);
+
+DESCRIPTION
+
+	Takes a BFD and searches it for a .gnu_debugaltlink section.  If this
+	section is found, it examines the section for the name of a file
+	containing auxiliary debugging information.  It	then searches the
+	filesystem for this file in a set of standard locations, including
+	the directory tree rooted at @var{dir}, and if found returns the
+	full filename.
+
+	If @var{dir} is NULL, it will search a default path configured into
+	libbfd at build time.  [FIXME: This feature is not currently
+	implemented].
+
+RETURNS
+	<<NULL>> on any errors or failure to locate the debug file,
+	otherwise a pointer to a heap-allocated string containing the
+	filename.  The caller is responsible for freeing this string.
+*/
+
+char *
+bfd_follow_gnu_debugaltlink (bfd *abfd, const char *dir)
+{
+  return find_separate_debug_file (abfd, dir,
+				   get_alt_debug_link_info_shim,
+				   separate_alt_debug_file_exists);
 }
 
 /*

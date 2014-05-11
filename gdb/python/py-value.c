@@ -334,18 +334,11 @@ valpy_get_dynamic_type (PyObject *self, void *closure)
   GDB_PY_HANDLE_EXCEPTION (except);
 
   if (type == NULL)
-    {
-      /* Ensure that the TYPE field is ready.  */
-      if (!valpy_get_type (self, NULL))
-	return NULL;
-      /* We don't need to incref here, because valpy_get_type already
-	 did it for us.  */
-      obj->dynamic_type = obj->type;
-    }
+    obj->dynamic_type = valpy_get_type (self, NULL);
   else
     obj->dynamic_type = type_to_type_object (type);
 
-  Py_INCREF (obj->dynamic_type);
+  Py_XINCREF (obj->dynamic_type);
   return obj->dynamic_type;
 }
 
@@ -421,7 +414,8 @@ valpy_string (PyObject *self, PyObject *args, PyObject *kw)
   GDB_PY_HANDLE_EXCEPTION (except);
 
   encoding = (user_encoding && *user_encoding) ? user_encoding : la_encoding;
-  unicode = PyUnicode_Decode (buffer, length * TYPE_LENGTH (char_type),
+  unicode = PyUnicode_Decode ((const char *) buffer,
+			      length * TYPE_LENGTH (char_type),
 			      encoding, errors);
   xfree (buffer);
 
@@ -775,11 +769,17 @@ valpy_binop (enum valpy_opcode opcode, PyObject *self, PyObject *other)
 	 a gdb.Value object and need to convert it from python as well.  */
       arg1 = convert_value_from_python (self);
       if (arg1 == NULL)
-	break;
+	{
+	  do_cleanups (cleanup);
+	  break;
+	}
 
       arg2 = convert_value_from_python (other);
       if (arg2 == NULL)
-	break;
+	{
+	  do_cleanups (cleanup);
+	  break;
+	}
 
       switch (opcode)
 	{
@@ -1265,13 +1265,13 @@ convert_value_from_python (PyObject *obj)
 	  if (cmp >= 0)
 	    value = value_from_longest (builtin_type_pybool, cmp);
 	}
-      else if (PyInt_Check (obj))
-	{
-	  long l = PyInt_AsLong (obj);
-
-	  if (! PyErr_Occurred ())
-	    value = value_from_longest (builtin_type_pyint, l);
-	}
+      /* Make a long logic check first.  In Python 3.x, internally,
+	 all integers are represented as longs.  In Python 2.x, there
+	 is still a differentiation internally between a PyInt and a
+	 PyLong.  Explicitly do this long check conversion first. In
+	 GDB, for Python 3.x, we #ifdef PyInt = PyLong.  This check has
+	 to be done first to ensure we do not lose information in the
+	 conversion process.  */
       else if (PyLong_Check (obj))
 	{
 	  LONGEST l = PyLong_AsLongLong (obj);
@@ -1305,6 +1305,13 @@ convert_value_from_python (PyObject *obj)
 	    }
 	  else
 	    value = value_from_longest (builtin_type_pylong, l);
+	}
+      else if (PyInt_Check (obj))
+	{
+	  long l = PyInt_AsLong (obj);
+
+	  if (! PyErr_Occurred ())
+	    value = value_from_longest (builtin_type_pyint, l);
 	}
       else if (PyFloat_Check (obj))
 	{
@@ -1385,16 +1392,14 @@ gdbpy_is_value_object (PyObject *obj)
   return PyObject_TypeCheck (obj, &value_object_type);
 }
 
-void
+int
 gdbpy_initialize_values (void)
 {
   if (PyType_Ready (&value_object_type) < 0)
-    return;
+    return -1;
 
-  Py_INCREF (&value_object_type);
-  PyModule_AddObject (gdb_module, "Value", (PyObject *) &value_object_type);
-
-  values_in_python = NULL;
+  return gdb_pymodule_addobject (gdb_module, "Value",
+				 (PyObject *) &value_object_type);
 }
 
 

@@ -13,8 +13,6 @@ details. */
 
 #include "winsup.h"
 #include <wchar.h>
-#include <wingdi.h>
-#include <winuser.h>
 #include "cygerrno.h"
 #include "path.h"
 #include "fhandler.h"
@@ -29,9 +27,7 @@ details. */
  * changed? How does /dev/clipboard operate under (say) linux?
  */
 
-static const NO_COPY WCHAR *CYGWIN_NATIVE = L"CYGWIN_NATIVE_CLIPBOARD";
-/* this is MT safe because windows format id's are atomic */
-static UINT cygnativeformat;
+static const WCHAR *CYGWIN_NATIVE = L"CYGWIN_NATIVE_CLIPBOARD";
 
 typedef struct
 {
@@ -55,32 +51,16 @@ fhandler_dev_clipboard::fhandler_dev_clipboard ()
  */
 
 int
-fhandler_dev_clipboard::dup (fhandler_base * child, int)
+fhandler_dev_clipboard::dup (fhandler_base * child, int flags)
 {
   fhandler_dev_clipboard *fhc = (fhandler_dev_clipboard *) child;
-
-  if (!fhc->open (get_flags (), 0))
-    system_printf ("error opening clipboard, %E");
-  return 0;
+  fhc->pos = fhc->msize = 0;
+  fhc->membuffer = NULL;
+  return fhandler_base::dup (child, flags);
 }
 
 int
-fhandler_dev_clipboard::open (int flags, mode_t)
-{
-  set_flags (flags | O_TEXT);
-  pos = 0;
-  if (membuffer)
-    free (membuffer);
-  membuffer = NULL;
-  if (!cygnativeformat)
-    cygnativeformat = RegisterClipboardFormatW (CYGWIN_NATIVE);
-  nohandle (true);
-  set_open_status ();
-  return 1;
-}
-
-static int
-set_clipboard (const void *buf, size_t len)
+fhandler_dev_clipboard::set_clipboard (const void *buf, size_t len)
 {
   HGLOBAL hmem;
   /* Native CYGWIN format */
@@ -103,8 +83,6 @@ set_clipboard (const void *buf, size_t len)
 
       GlobalUnlock (hmem);
       EmptyClipboard ();
-      if (!cygnativeformat)
-	cygnativeformat = RegisterClipboardFormatW (CYGWIN_NATIVE);
       HANDLE ret = SetClipboardData (cygnativeformat, hmem);
       CloseClipboard ();
       /* According to MSDN, hmem must not be free'd after transferring the
@@ -181,7 +159,7 @@ fhandler_dev_clipboard::write (const void *buf, size_t len)
 }
 
 int __reg2
-fhandler_dev_clipboard::fstat (struct __stat64 *buf)
+fhandler_dev_clipboard::fstat (struct stat *buf)
 {
   buf->st_mode = S_IFCHR | STD_RBITS | STD_WBITS | S_IWGRP | S_IWOTH;
   buf->st_uid = geteuid32 ();
@@ -243,7 +221,7 @@ fhandler_dev_clipboard::read (void *ptr, size_t& len)
     {
       cygcb_t *clipbuf = (cygcb_t *) cb_data;
 
-      if (pos < clipbuf->len)
+      if (pos < (off_t) clipbuf->len)
 	{
 	  ret = ((len > (clipbuf->len - pos)) ? (clipbuf->len - pos) : len);
 	  memcpy (ptr, clipbuf->data + pos , ret);
@@ -267,7 +245,7 @@ fhandler_dev_clipboard::read (void *ptr, size_t& len)
       wchar_t *buf = (wchar_t *) cb_data;
 
       size_t glen = GlobalSize (hglb) / sizeof (WCHAR) - 1;
-      if (pos < glen)
+      if (pos < (off_t) glen)
 	{
 	  /* If caller's buffer is too small to hold at least one
 	     max-size character, redirect algorithm to local
@@ -295,7 +273,8 @@ fhandler_dev_clipboard::read (void *ptr, size_t& len)
 		  != (size_t) -1
 		 && (ret > conv_len
 			/* Skip separated high surrogate: */
-		     || ((buf [pos + glen - 1] & 0xFC00) == 0xD800 && glen - pos > 1)))
+		     || ((buf [glen - 1] & 0xFC00) == 0xD800
+			 && glen - pos > 1)))
 	     --glen;
 	  if (ret == (size_t) -1)
 	    ret = 0;
@@ -325,8 +304,8 @@ fhandler_dev_clipboard::read (void *ptr, size_t& len)
   len = ret;
 }
 
-_off64_t
-fhandler_dev_clipboard::lseek (_off64_t offset, int whence)
+off_t
+fhandler_dev_clipboard::lseek (off_t offset, int whence)
 {
   /* On reads we check this at read time, not seek time.
    * On writes we use this to decide how to write - empty and write, or open, copy, empty
@@ -335,7 +314,10 @@ fhandler_dev_clipboard::lseek (_off64_t offset, int whence)
   pos = offset;
   /* treat seek like rewind */
   if (membuffer)
-    free (membuffer);
+    {
+      free (membuffer);
+      membuffer = NULL;
+    }
   msize = 0;
   return 0;
 }
@@ -345,15 +327,14 @@ fhandler_dev_clipboard::close ()
 {
   if (!have_execed)
     {
-      pos = 0;
+      pos = msize = 0;
       if (membuffer)
 	{
 	  free (membuffer);
 	  membuffer = NULL;
 	}
-      msize = 0;
     }
-  return 0;
+  return fhandler_base::close ();
 }
 
 void
